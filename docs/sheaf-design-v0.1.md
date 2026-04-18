@@ -245,7 +245,7 @@ no autosave. every editing session is implicitly a branch.
   - *propose*: open rendered-md diff vs. main; single button to accept
 - **agent experiments** → identical. `fork(doc, n)` creates n draft branches, each with its own DO + ydoc seeded from main. agents work in parallel. user reviews n diffs, keeps zero/some/all.
 
-user-facing vocabulary: **drafts**, **versions**, **takes**. never "branch." never "merge." the word on the button is **accept**.
+user-facing vocabulary: **drafts**, **versions**. never "branch." never "merge." the word on the button is **accept**.
 
 cross-cutting: a draft branch can span workspaces. the diff view shows all files touched, grouped by workspace, with per-file rendered-md diffs. one accept button commits the whole set.
 
@@ -309,7 +309,7 @@ all three talk to the same branch+merge substrate. no separate codepaths, no sep
 
 - **commit cadence on drafts**: idle-timeout feels right but wants user testing. probably adaptive — frequent during active typing, sparse otherwise. what are good defaults?
 - **artifact-fs cold-mount latency** for agent sandboxes at p95 — benchmark before betting the agent ux on it. fallback is `git clone --depth=1` which is likely fine for <100mb repos.
-- **merge-render edge cases** (case 3's "delete + concurrent edit"): needs a ui design for "this section was deleted in one take and edited in another — keep, drop, or restore both?" afaict this is more common than it sounds.
+- **merge-render edge cases** (case 3's "delete + concurrent edit"): needs a ui design for "this section was deleted in one draft and edited in another — keep, drop, or restore both?" afaict this is more common than it sounds.
 - **state-vector bloat** on long-lived docs: when to snapshot? how to coordinate snapshots across live drafts (a snapshot rewrites op ids, invalidating every draft's rel_pos anchors)?
 - **multi-agent collaboration on one draft** — crdt says yes, ux says idk. probably each agent gets its own fork by default; explicit opt-in for shared drafts.
 - **offline editing** — the DO is the canonical multiplayer surface, so pure-offline is out of scope for v0. clients can buffer ops and replay on reconnect. "really offline" is a v2 conversation.
