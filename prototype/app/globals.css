@@ -1,0 +1,370 @@
+@import "tailwindcss";
+
+/* ------------------------------------------------------------------ */
+/* tufte-inspired typography for the manuscript surface                */
+/* ------------------------------------------------------------------ */
+
+:root {
+  --paper: #fffff8;
+  --ink: #111110;
+  --muted: #6b6a63;
+  --rule: #d9d7cb;
+  --redline: #b91c1c;
+  --redline-bg: rgba(185, 28, 28, 0.06);
+  --insertion: #0f5132;
+  --insertion-bg: rgba(15, 81, 50, 0.06);
+  --accent: #7a5c00;
+  --card: #fcfbf2;
+}
+
+html,
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: "iowan old style", "Palatino Linotype", Palatino, Georgia,
+    "Times New Roman", serif;
+}
+
+body {
+  font-size: 16px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ------------------------------------------------------------------ */
+/* manuscript column                                                   */
+/* ------------------------------------------------------------------ */
+
+.manuscript {
+  color: var(--ink);
+  font-size: 1.125rem;
+  line-height: 1.7;
+}
+
+.manuscript .ProseMirror {
+  outline: none;
+}
+
+.manuscript .ProseMirror:focus {
+  outline: none;
+}
+
+.manuscript h1 {
+  font-weight: 400;
+  font-style: italic;
+  font-size: 2.4rem;
+  line-height: 1.1;
+  margin: 0 0 0.4rem;
+  letter-spacing: -0.01em;
+}
+
+.manuscript p.subtitle {
+  font-style: italic;
+  color: var(--muted);
+  font-size: 1.1rem;
+  margin: 0 0 2.5rem;
+}
+
+.manuscript h2 {
+  font-weight: 400;
+  font-style: italic;
+  font-size: 1.5rem;
+  margin: 2.2rem 0 0.6rem;
+  letter-spacing: -0.005em;
+}
+
+.manuscript p {
+  margin: 0 0 1.05rem;
+  text-indent: 0;
+  hyphens: auto;
+  text-align: left;
+}
+
+.manuscript p + p {
+  text-indent: 1.5rem;
+  margin-top: -0.4rem;
+}
+
+.manuscript .newthought {
+  font-variant: small-caps;
+  letter-spacing: 0.04em;
+  font-size: 1.08em;
+}
+
+.manuscript section > p:first-of-type::first-letter {
+  font-size: 3.2rem;
+  float: left;
+  line-height: 0.9;
+  padding: 0.3rem 0.5rem 0 0;
+  font-style: italic;
+  color: var(--ink);
+}
+
+/* ------------------------------------------------------------------ */
+/* redline gestures                                                    */
+/* ------------------------------------------------------------------ */
+
+.manuscript del.proposed-deletion,
+.manuscript .proposed-deletion {
+  color: var(--redline);
+  text-decoration: line-through;
+  text-decoration-color: var(--redline);
+  text-decoration-thickness: 1.5px;
+  background: var(--redline-bg);
+  padding: 0 0.05em;
+  border-radius: 1px;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.manuscript del.proposed-deletion:hover,
+.manuscript .proposed-deletion-clickable:hover {
+  background: rgba(185, 28, 28, 0.12);
+}
+
+.manuscript ins.proposed-insertion {
+  color: var(--insertion);
+  text-decoration: none;
+  background: var(--insertion-bg);
+  padding: 0 0.15em;
+  margin: 0 0.05em;
+  border-radius: 1px;
+  font-style: italic;
+  cursor: pointer;
+  white-space: pre-wrap;
+}
+
+.manuscript del.proposed-deletion[data-active="true"],
+.manuscript ins.proposed-insertion[data-active="true"] {
+  box-shadow: 0 0 0 2px var(--redline-bg);
+  background: rgba(185, 28, 28, 0.16);
+}
+
+/* ------------------------------------------------------------------ */
+/* selection                                                           */
+/* ------------------------------------------------------------------ */
+
+.manuscript ::selection {
+  background: rgba(122, 92, 0, 0.18);
+  color: inherit;
+}
+
+/* ------------------------------------------------------------------ */
+/* margin rail                                                         */
+/* ------------------------------------------------------------------ */
+
+.margin-rail {
+  font-family: "iowan old style", Palatino, Georgia, serif;
+  font-size: 0.88rem;
+  line-height: 1.45;
+  color: var(--ink);
+}
+
+.thread-card {
+  background: var(--card);
+  border: 1px solid var(--rule);
+  border-left: 2px solid var(--redline);
+  padding: 0.75rem 0.85rem 0.7rem;
+  border-radius: 2px;
+  transition:
+    box-shadow 120ms ease,
+    border-color 120ms ease;
+}
+
+.thread-card[data-active="true"] {
+  box-shadow:
+    0 1px 0 var(--rule),
+    0 6px 18px -8px rgba(0, 0, 0, 0.12);
+  border-left-color: var(--accent);
+}
+
+.thread-card .anchor-quote {
+  font-style: italic;
+  color: var(--muted);
+  text-decoration: line-through;
+  text-decoration-color: var(--muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
+  margin-bottom: 0.4rem;
+  display: block;
+  max-height: 2.6em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.thread-card textarea,
+.thread-card input {
+  width: 100%;
+  background: transparent;
+  border: none;
+  outline: none;
+  font: inherit;
+  color: inherit;
+  resize: none;
+  padding: 0.15rem 0;
+  display: block;
+}
+
+.thread-card textarea.replacement {
+  color: var(--insertion);
+  font-style: italic;
+}
+
+.thread-card textarea.note {
+  color: var(--ink);
+  border-top: 1px dashed var(--rule);
+  margin-top: 0.4rem;
+  padding-top: 0.4rem;
+  font-size: 0.85rem;
+  min-height: 2.4em;
+}
+
+.thread-card textarea::placeholder,
+.thread-card input::placeholder {
+  color: var(--muted);
+  font-style: italic;
+  opacity: 0.7;
+}
+
+.thread-card .meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.7rem;
+  color: var(--muted);
+  margin-top: 0.45rem;
+  letter-spacing: 0.02em;
+}
+
+.thread-card .actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.45rem;
+}
+
+.thread-card button {
+  font: inherit;
+  font-size: 0.75rem;
+  background: transparent;
+  border: 1px solid var(--rule);
+  padding: 0.2rem 0.55rem;
+  border-radius: 2px;
+  color: var(--ink);
+  cursor: pointer;
+  transition:
+    background 100ms ease,
+    border-color 100ms ease;
+}
+
+.thread-card button:hover {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: var(--ink);
+}
+
+.thread-card button.accept {
+  color: var(--insertion);
+  border-color: rgba(15, 81, 50, 0.4);
+}
+
+.thread-card button.accept:hover {
+  background: var(--insertion-bg);
+  border-color: var(--insertion);
+}
+
+.thread-card button.decline {
+  color: var(--muted);
+}
+
+.thread-card .variants {
+  margin-top: 0.4rem;
+  border-top: 1px dotted var(--rule);
+  padding-top: 0.4rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  align-items: center;
+}
+
+.thread-card .variant-chip {
+  font-size: 0.7rem;
+  padding: 0.1rem 0.45rem;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  cursor: pointer;
+  color: var(--muted);
+  background: transparent;
+}
+
+.thread-card .variant-chip[data-active="true"] {
+  background: rgba(122, 92, 0, 0.1);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* ------------------------------------------------------------------ */
+/* layout chrome                                                       */
+/* ------------------------------------------------------------------ */
+
+.page-shell {
+  min-height: 100dvh;
+  padding: 4rem 3rem 6rem;
+}
+
+.page-header {
+  max-width: 1200px;
+  margin: 0 auto 2rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  color: var(--muted);
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
+  font-variant: small-caps;
+}
+
+.page-header .title {
+  font-style: italic;
+  font-variant: normal;
+  letter-spacing: 0;
+}
+
+.page-header kbd {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  background: #f0ede0;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  padding: 0.05rem 0.35rem;
+  margin: 0 0.15rem;
+  color: var(--ink);
+}
+
+.layout {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 22rem;
+  gap: 3.5rem;
+  align-items: start;
+}
+
+.manuscript-wrap {
+  max-width: 36rem;
+  justify-self: end;
+  width: 100%;
+  position: relative;
+}
+
+.rail-wrap {
+  position: relative;
+  min-height: 10rem;
+}
+
+.empty-rail {
+  color: var(--muted);
+  font-style: italic;
+  font-size: 0.88rem;
+  border-left: 1px dashed var(--rule);
+  padding: 0.5rem 0.75rem;
+}
