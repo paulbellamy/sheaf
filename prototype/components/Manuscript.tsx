@@ -2,32 +2,111 @@
 
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
+import { TextSelection } from "@tiptap/pm/state";
+import type { MarkType, Node as PMNode } from "@tiptap/pm/model";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
-import { newId, type DraftVariant, type Thread } from "@/lib/types";
+import { newId, type Thread } from "@/lib/types";
 import { sampleManuscript } from "@/lib/sampleText";
-import { ProposedDeletion, findThreadRange } from "./extensions/ProposedDeletion";
-import { ReplacementWidget } from "./extensions/ReplacementWidget";
+import {
+  ProposedDeletion,
+  findThreadRange,
+} from "./extensions/ProposedDeletion";
+import {
+  ProposedInsertion,
+  findInsertionRange,
+} from "./extensions/ProposedInsertion";
+import { ThreadInteraction } from "./extensions/ThreadInteraction";
 import { MarginRail } from "./MarginRail";
+
+const THREAD_IDLE_MS = 1800;
+const THREAD_NEAR_POS = 2;
+
+type EditContext = {
+  threadId: string;
+  lastPos: number;
+  lastTime: number;
+};
+
+function findThreadIdAt(
+  doc: PMNode,
+  pos: number,
+  types: MarkType[],
+): string | null {
+  let found: string | null = null;
+  doc.nodesBetween(Math.max(0, pos - 1), Math.min(doc.content.size, pos + 1), (node) => {
+    if (found) return false;
+    if (!node.isText) return true;
+    for (const m of node.marks) {
+      if (types.includes(m.type) && typeof m.attrs.threadId === "string") {
+        found = m.attrs.threadId;
+        return false;
+      }
+    }
+    return true;
+  });
+  return found;
+}
 
 export function Manuscript() {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
-  const [justCreatedId, setJustCreatedId] = useState<string | null>(null);
   const [, bumpLayout] = useState(0);
 
-  const threadsRef = useRef<Thread[]>([]);
+  const editContextRef = useRef<EditContext | null>(null);
   const manuscriptRef = useRef<HTMLDivElement | null>(null);
+
+  // Shared helper: decide which thread an edit belongs to.
+  const pickThreadId = useCallback(
+    (doc: PMNode, pos: number, schema: PMNode["type"]["schema"]): {
+      threadId: string;
+      isNew: boolean;
+    } => {
+      const insType = schema.marks.proposedInsertion;
+      const delType = schema.marks.proposedDeletion;
+      const existing = findThreadIdAt(doc, pos, [insType, delType]);
+      if (existing) {
+        editContextRef.current = {
+          threadId: existing,
+          lastPos: pos,
+          lastTime: Date.now(),
+        };
+        return { threadId: existing, isNew: false };
+      }
+
+      const now = Date.now();
+      const ctx = editContextRef.current;
+      if (
+        ctx &&
+        now - ctx.lastTime < THREAD_IDLE_MS &&
+        Math.abs(pos - ctx.lastPos) <= THREAD_NEAR_POS
+      ) {
+        ctx.lastTime = now;
+        ctx.lastPos = pos;
+        return { threadId: ctx.threadId, isNew: false };
+      }
+
+      const threadId = newId("thrd");
+      editContextRef.current = { threadId, lastPos: pos, lastTime: now };
+      return { threadId, isNew: true };
+    },
+    [],
+  );
+
+  const registerThread = useCallback((threadId: string) => {
+    setThreads((prev) => [
+      ...prev,
+      { id: threadId, note: "", state: "open", createdAt: Date.now() },
+    ]);
+  }, []);
 
   const editor = useEditor({
     extensions: [
-      StarterKit.configure({}),
+      StarterKit,
       ProposedDeletion,
-      ReplacementWidget.configure({
-        getThreads: () => threadsRef.current,
-        onThreadClick: (id) => {
-          setActiveThreadId(id);
-        },
+      ProposedInsertion,
+      ThreadInteraction.configure({
+        onThreadClick: (id) => setActiveThreadId(id),
       }),
     ],
     content: sampleManuscript,
@@ -37,18 +116,163 @@ export function Manuscript() {
         class: "ProseMirror manuscript-prose",
         spellcheck: "false",
       },
+
+      // Any character typed becomes a proposed insertion.
+      handleTextInput(view, from, to, text) {
+        const schema = view.state.schema;
+        const insType = schema.marks.proposedInsertion;
+        const delType = schema.marks.proposedDeletion;
+
+        const { threadId, isNew } = pickThreadId(view.state.doc, from, schema);
+
+        const insMark = insType.create({ threadId });
+        const delMark = delType.create({ threadId });
+
+        let tr = view.state.tr;
+
+        if (from !== to) {
+          // Replacement: mark original range as deletion, insert new text after.
+          tr = tr.addMark(from, to, delMark);
+          tr = tr.insert(to, schema.text(text, [insMark]));
+          tr = tr.setSelection(TextSelection.create(tr.doc, to + text.length));
+        } else {
+          // Pure insertion.
+          tr = tr.insert(from, schema.text(text, [insMark]));
+          tr = tr.setSelection(TextSelection.create(tr.doc, from + text.length));
+        }
+
+        editContextRef.current = {
+          threadId,
+          lastPos: (from !== to ? to : from) + text.length,
+          lastTime: Date.now(),
+        };
+
+        view.dispatch(tr);
+        if (isNew) registerThread(threadId);
+        setActiveThreadId(threadId);
+        return true;
+      },
+
+      // Backspace / Delete → proposed deletion (unless undoing your own insertion).
+      handleKeyDown(view, event) {
+        if (event.key !== "Backspace" && event.key !== "Delete") return false;
+
+        const { from, to, empty } = view.state.selection;
+        let delFrom: number;
+        let delTo: number;
+
+        if (!empty) {
+          delFrom = from;
+          delTo = to;
+        } else if (event.key === "Backspace") {
+          if (from === 0) return false;
+          delFrom = from - 1;
+          delTo = from;
+        } else {
+          if (to >= view.state.doc.content.size) return false;
+          delFrom = to;
+          delTo = to + 1;
+        }
+
+        const schema = view.state.schema;
+        const insType = schema.marks.proposedInsertion;
+        const delType = schema.marks.proposedDeletion;
+
+        let sawText = false;
+        let allInsertion = true;
+        let allAlreadyDeleted = true;
+        view.state.doc.nodesBetween(delFrom, delTo, (node) => {
+          if (!node.isText) return true;
+          sawText = true;
+          if (!node.marks.some((m) => m.type === insType)) allInsertion = false;
+          if (!node.marks.some((m) => m.type === delType))
+            allAlreadyDeleted = false;
+          return true;
+        });
+        if (!sawText) {
+          allInsertion = false;
+          allAlreadyDeleted = false;
+        }
+
+        let tr = view.state.tr;
+
+        if (sawText && allInsertion) {
+          // Undoing one's own proposed insertion → actually delete from doc.
+          tr = tr.delete(delFrom, delTo);
+          tr = tr.setSelection(TextSelection.create(tr.doc, delFrom));
+        } else if (sawText && allAlreadyDeleted) {
+          // Already marked for deletion → just move cursor past the strikethrough.
+          const newPos = event.key === "Backspace" ? delFrom : delTo;
+          tr = tr.setSelection(TextSelection.create(view.state.doc, newPos));
+        } else {
+          const { threadId, isNew } = pickThreadId(
+            view.state.doc,
+            delFrom,
+            schema,
+          );
+          tr = tr.addMark(delFrom, delTo, delType.create({ threadId }));
+          const newPos = event.key === "Backspace" ? delFrom : delTo;
+          tr = tr.setSelection(TextSelection.create(tr.doc, newPos));
+
+          editContextRef.current = {
+            threadId,
+            lastPos: delFrom,
+            lastTime: Date.now(),
+          };
+
+          if (isNew) registerThread(threadId);
+          setActiveThreadId(threadId);
+        }
+
+        view.dispatch(tr);
+        event.preventDefault();
+        return true;
+      },
+
+      // Paste → convert pasted text into a proposed insertion as well.
+      handlePaste(view, event) {
+        const text = event.clipboardData?.getData("text/plain");
+        if (!text) return false;
+        const { from, to } = view.state.selection;
+        const schema = view.state.schema;
+        const insType = schema.marks.proposedInsertion;
+        const delType = schema.marks.proposedDeletion;
+        const { threadId, isNew } = pickThreadId(view.state.doc, from, schema);
+
+        let tr = view.state.tr;
+        if (from !== to) {
+          tr = tr.addMark(from, to, delType.create({ threadId }));
+          tr = tr.insert(
+            to,
+            schema.text(text, [insType.create({ threadId })]),
+          );
+          tr = tr.setSelection(TextSelection.create(tr.doc, to + text.length));
+        } else {
+          tr = tr.insert(
+            from,
+            schema.text(text, [insType.create({ threadId })]),
+          );
+          tr = tr.setSelection(
+            TextSelection.create(tr.doc, from + text.length),
+          );
+        }
+
+        editContextRef.current = {
+          threadId,
+          lastPos: (from !== to ? to : from) + text.length,
+          lastTime: Date.now(),
+        };
+
+        view.dispatch(tr);
+        if (isNew) registerThread(threadId);
+        setActiveThreadId(threadId);
+        event.preventDefault();
+        return true;
+      },
     },
   });
 
-  // Keep threadsRef current + nudge editor to recompute decorations.
-  useEffect(() => {
-    threadsRef.current = threads;
-    if (editor) {
-      editor.view.dispatch(editor.state.tr);
-    }
-  }, [threads, editor]);
-
-  // Force a layout recompute after the editor settles.
+  // Force MarginRail layout recompute whenever the doc changes.
   useEffect(() => {
     if (!editor) return;
     const handler = () => bumpLayout((n) => n + 1);
@@ -58,176 +282,120 @@ export function Manuscript() {
     };
   }, [editor]);
 
-  // Recompute rail alignment on window resize.
   useLayoutEffect(() => {
     const onResize = () => bumpLayout((n) => n + 1);
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
-  const startThread = useCallback(() => {
-    if (!editor) return;
-    const { from, to, empty } = editor.state.selection;
-    if (empty) return;
-
-    const anchorText = editor.state.doc.textBetween(from, to, " ");
-    if (!anchorText.trim()) return;
-
-    // Refuse to start a thread inside an existing thread range.
-    let overlap = false;
-    editor.state.doc.nodesBetween(from, to, (node) => {
-      if (overlap) return false;
-      if (node.marks?.some((m) => m.type.name === "proposedDeletion")) {
-        overlap = true;
-      }
-      return true;
-    });
-    if (overlap) return;
-
-    const threadId = newId("thrd");
-    const variantId = newId("var");
-
-    editor
-      .chain()
-      .focus()
-      .setMark("proposedDeletion", { threadId })
-      .setTextSelection(to)
-      .run();
-
-    const thread: Thread = {
-      id: threadId,
-      anchorText,
-      variants: [
-        { id: variantId, author: "you", replacement: "", note: "" },
-      ],
-      activeVariantId: variantId,
-      state: "open",
-      createdAt: Date.now(),
-    };
-
-    setThreads((prev) => [...prev, thread]);
-    setActiveThreadId(threadId);
-    setJustCreatedId(threadId);
-    window.setTimeout(() => setJustCreatedId(null), 200);
-  }, [editor]);
-
-  // Keyboard shortcut: cmd/ctrl + e to start a thread.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "e") {
-        e.preventDefault();
-        startThread();
-      }
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [startThread]);
+  const getThreadView = useCallback(
+    (threadId: string) => {
+      if (!editor) return null;
+      const del = findThreadRange(editor.state.doc, threadId);
+      const ins = findInsertionRange(editor.state.doc, threadId);
+      if (!del && !ins) return null;
+      return { del, ins };
+    },
+    [editor],
+  );
 
   const getAnchorTop = useCallback(
     (threadId: string): number | null => {
       if (!editor || !manuscriptRef.current) return null;
-      const range = findThreadRange(editor.state.doc, threadId);
-      if (!range) return null;
+      const view = getThreadView(threadId);
+      if (!view) return null;
+      const pos = view.del?.from ?? view.ins?.from ?? null;
+      if (pos === null) return null;
       try {
-        const coords = editor.view.coordsAtPos(range.from);
+        const coords = editor.view.coordsAtPos(pos);
         const wrapRect = manuscriptRef.current.getBoundingClientRect();
         return coords.top - wrapRect.top;
       } catch {
         return null;
       }
     },
-    [editor],
+    [editor, getThreadView],
   );
 
-  const updateVariant = useCallback(
-    (threadId: string, variantId: string, patch: Partial<DraftVariant>) => {
-      setThreads((prev) =>
-        prev.map((t) =>
-          t.id !== threadId
-            ? t
-            : {
-                ...t,
-                variants: t.variants.map((v) =>
-                  v.id === variantId ? { ...v, ...patch } : v,
-                ),
-              },
-        ),
-      );
-    },
-    [],
-  );
-
-  const selectVariant = useCallback((threadId: string, variantId: string) => {
+  const setNote = useCallback((threadId: string, note: string) => {
     setThreads((prev) =>
-      prev.map((t) =>
-        t.id !== threadId ? t : { ...t, activeVariantId: variantId },
-      ),
-    );
-  }, []);
-
-  const forkVariant = useCallback((threadId: string) => {
-    setThreads((prev) =>
-      prev.map((t) => {
-        if (t.id !== threadId) return t;
-        const parent = t.variants.find((v) => v.id === t.activeVariantId);
-        const newVariant: DraftVariant = {
-          id: newId("var"),
-          author: "you",
-          replacement: parent?.replacement ?? "",
-          note: "",
-        };
-        return {
-          ...t,
-          variants: [...t.variants, newVariant],
-          activeVariantId: newVariant.id,
-        };
-      }),
+      prev.map((t) => (t.id === threadId ? { ...t, note } : t)),
     );
   }, []);
 
   const acceptThread = useCallback(
     (threadId: string) => {
       if (!editor) return;
-      const thread = threadsRef.current.find((t) => t.id === threadId);
-      if (!thread) return;
-      const variant =
-        thread.variants.find((v) => v.id === thread.activeVariantId) ||
-        thread.variants[0];
-      const range = findThreadRange(editor.state.doc, threadId);
-      if (!range) return;
+      const view = getThreadView(threadId);
+      if (!view) {
+        setThreads((prev) => prev.filter((t) => t.id !== threadId));
+        return;
+      }
 
-      const tr = editor.state.tr;
-      if (variant.replacement.length > 0) {
-        tr.insertText(variant.replacement, range.from, range.to);
-      } else {
-        tr.delete(range.from, range.to);
+      const schema = editor.state.schema;
+      const insType = schema.marks.proposedInsertion;
+
+      // Positions can shift when we delete; do the later op first.
+      const ops: Array<{ kind: "delete" | "unmark"; from: number; to: number }> =
+        [];
+      if (view.del) ops.push({ kind: "delete", from: view.del.from, to: view.del.to });
+      if (view.ins) ops.push({ kind: "unmark", from: view.ins.from, to: view.ins.to });
+      ops.sort((a, b) => b.from - a.from);
+
+      let tr = editor.state.tr;
+      for (const op of ops) {
+        if (op.kind === "delete") tr = tr.delete(op.from, op.to);
+        else tr = tr.removeMark(op.from, op.to, insType);
       }
       editor.view.dispatch(tr);
 
       setThreads((prev) => prev.filter((t) => t.id !== threadId));
       setActiveThreadId(null);
+      if (editContextRef.current?.threadId === threadId) {
+        editContextRef.current = null;
+      }
     },
-    [editor],
+    [editor, getThreadView],
   );
 
   const declineThread = useCallback(
     (threadId: string) => {
       if (!editor) return;
-      editor.commands.unsetProposedDeletion(threadId);
+      const view = getThreadView(threadId);
+      if (!view) {
+        setThreads((prev) => prev.filter((t) => t.id !== threadId));
+        return;
+      }
+      const schema = editor.state.schema;
+      const delType = schema.marks.proposedDeletion;
+
+      const ops: Array<{ kind: "unmark" | "delete"; from: number; to: number }> =
+        [];
+      if (view.del) ops.push({ kind: "unmark", from: view.del.from, to: view.del.to });
+      if (view.ins) ops.push({ kind: "delete", from: view.ins.from, to: view.ins.to });
+      ops.sort((a, b) => b.from - a.from);
+
+      let tr = editor.state.tr;
+      for (const op of ops) {
+        if (op.kind === "delete") tr = tr.delete(op.from, op.to);
+        else tr = tr.removeMark(op.from, op.to, delType);
+      }
+      editor.view.dispatch(tr);
+
       setThreads((prev) => prev.filter((t) => t.id !== threadId));
       setActiveThreadId(null);
+      if (editContextRef.current?.threadId === threadId) {
+        editContextRef.current = null;
+      }
     },
-    [editor],
+    [editor, getThreadView],
   );
 
   return (
     <>
       <header className="page-header">
         <span className="title">sheaf · redline prototype</span>
-        <span>
-          select text, press <kbd>⌘</kbd>
-          <kbd>E</kbd> to start a thread
-        </span>
+        <span>edit anywhere — your changes become suggestions.</span>
       </header>
       <div className="layout">
         <div className="manuscript-wrap" ref={manuscriptRef}>
@@ -238,12 +406,10 @@ export function Manuscript() {
         <MarginRail
           threads={threads}
           activeThreadId={activeThreadId}
-          justCreatedId={justCreatedId}
           getAnchorTop={getAnchorTop}
+          getThreadView={getThreadView}
           onActivate={setActiveThreadId}
-          onUpdateVariant={updateVariant}
-          onSelectVariant={selectVariant}
-          onForkVariant={forkVariant}
+          onSetNote={setNote}
           onAccept={acceptThread}
           onDecline={declineThread}
         />

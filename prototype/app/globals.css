@@ -59,11 +59,15 @@ body {
   letter-spacing: -0.01em;
 }
 
-.manuscript p.subtitle {
-  font-style: italic;
+.manuscript h1 + p em {
   color: var(--muted);
-  font-size: 1.1rem;
-  margin: 0 0 2.5rem;
+  font-style: italic;
+  font-size: 1.05rem;
+}
+
+.manuscript h1 + p {
+  margin-top: 0;
+  margin-bottom: 2rem;
 }
 
 .manuscript h2 {
@@ -86,13 +90,7 @@ body {
   margin-top: -0.4rem;
 }
 
-.manuscript .newthought {
-  font-variant: small-caps;
-  letter-spacing: 0.04em;
-  font-size: 1.08em;
-}
-
-.manuscript section > p:first-of-type::first-letter {
+.manuscript h1 + p + p::first-letter {
   font-size: 3.2rem;
   float: left;
   line-height: 0.9;
@@ -127,18 +125,20 @@ body {
   color: var(--insertion);
   text-decoration: none;
   background: var(--insertion-bg);
-  padding: 0 0.15em;
-  margin: 0 0.05em;
+  padding: 0 0.1em;
   border-radius: 1px;
   font-style: italic;
   cursor: pointer;
-  white-space: pre-wrap;
 }
 
-.manuscript del.proposed-deletion[data-active="true"],
-.manuscript ins.proposed-insertion[data-active="true"] {
+.manuscript del.proposed-deletion[data-active="true"] {
   box-shadow: 0 0 0 2px var(--redline-bg);
-  background: rgba(185, 28, 28, 0.16);
+  background: rgba(185, 28, 28, 0.18);
+}
+
+.manuscript ins.proposed-insertion[data-active="true"] {
+  box-shadow: 0 0 0 2px var(--insertion-bg);
+  background: rgba(15, 81, 50, 0.18);
 }
 
 /* ------------------------------------------------------------------ */
@@ -179,22 +179,37 @@ body {
   border-left-color: var(--accent);
 }
 
-.thread-card .anchor-quote {
-  font-style: italic;
-  color: var(--muted);
-  text-decoration: line-through;
-  text-decoration-color: var(--muted);
+.thread-card .diff-preview {
   font-size: 0.82rem;
-  line-height: 1.35;
+  line-height: 1.4;
   margin-bottom: 0.4rem;
   display: block;
-  max-height: 2.6em;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
-.thread-card textarea,
-.thread-card input {
+.thread-card .diff-preview .del {
+  color: var(--redline);
+  text-decoration: line-through;
+  text-decoration-color: var(--redline);
+  background: var(--redline-bg);
+  padding: 0 0.15em;
+  border-radius: 1px;
+}
+
+.thread-card .diff-preview .arrow {
+  color: var(--muted);
+  margin: 0 0.3em;
+  font-style: italic;
+}
+
+.thread-card .diff-preview .ins {
+  color: var(--insertion);
+  background: var(--insertion-bg);
+  padding: 0 0.15em;
+  border-radius: 1px;
+  font-style: italic;
+}
+
+.thread-card textarea {
   width: 100%;
   background: transparent;
   border: none;
@@ -206,41 +221,25 @@ body {
   display: block;
 }
 
-.thread-card textarea.replacement {
-  color: var(--insertion);
-  font-style: italic;
-}
-
 .thread-card textarea.note {
   color: var(--ink);
   border-top: 1px dashed var(--rule);
-  margin-top: 0.4rem;
+  margin-top: 0.1rem;
   padding-top: 0.4rem;
   font-size: 0.85rem;
-  min-height: 2.4em;
+  min-height: 1.6em;
 }
 
-.thread-card textarea::placeholder,
-.thread-card input::placeholder {
+.thread-card textarea::placeholder {
   color: var(--muted);
   font-style: italic;
   opacity: 0.7;
 }
 
-.thread-card .meta {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 0.7rem;
-  color: var(--muted);
-  margin-top: 0.45rem;
-  letter-spacing: 0.02em;
-}
-
 .thread-card .actions {
   display: flex;
   gap: 0.5rem;
-  margin-top: 0.45rem;
+  margin-top: 0.5rem;
 }
 
 .thread-card button {
@@ -274,32 +273,6 @@ body {
 
 .thread-card button.decline {
   color: var(--muted);
-}
-
-.thread-card .variants {
-  margin-top: 0.4rem;
-  border-top: 1px dotted var(--rule);
-  padding-top: 0.4rem;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.3rem;
-  align-items: center;
-}
-
-.thread-card .variant-chip {
-  font-size: 0.7rem;
-  padding: 0.1rem 0.45rem;
-  border: 1px solid var(--rule);
-  border-radius: 999px;
-  cursor: pointer;
-  color: var(--muted);
-  background: transparent;
-}
-
-.thread-card .variant-chip[data-active="true"] {
-  background: rgba(122, 92, 0, 0.1);
-  color: var(--accent);
-  border-color: var(--accent);
 }
 
 /* ------------------------------------------------------------------ */

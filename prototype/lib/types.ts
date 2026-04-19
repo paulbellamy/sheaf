@@ -1,15 +1,6 @@
-export type DraftVariant = {
-  id: string;
-  author: string;
-  replacement: string;
-  note: string;
-};
-
 export type Thread = {
   id: string;
-  anchorText: string;
-  variants: DraftVariant[];
-  activeVariantId: string;
+  note: string;
   state: "open" | "accepted" | "declined";
   createdAt: number;
 };

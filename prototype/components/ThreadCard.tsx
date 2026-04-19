@@ -1,43 +1,34 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import type { Thread, DraftVariant } from "@/lib/types";
-import { newId } from "@/lib/types";
+import type { Thread } from "@/lib/types";
+
+export type ThreadView = {
+  del: { from: number; to: number; text: string } | null;
+  ins: { from: number; to: number; text: string } | null;
+};
 
 type Props = {
   thread: Thread;
+  view: ThreadView | null;
   active: boolean;
-  autoFocus?: boolean;
   onActivate: () => void;
-  onUpdateVariant: (variantId: string, patch: Partial<DraftVariant>) => void;
-  onSelectVariant: (variantId: string) => void;
-  onForkVariant: () => void;
+  onSetNote: (note: string) => void;
   onAccept: () => void;
   onDecline: () => void;
 };
 
 export function ThreadCard({
   thread,
+  view,
   active,
-  autoFocus,
   onActivate,
-  onUpdateVariant,
-  onSelectVariant,
-  onForkVariant,
+  onSetNote,
   onAccept,
   onDecline,
 }: Props) {
-  const replacementRef = useRef<HTMLTextAreaElement | null>(null);
-
-  useEffect(() => {
-    if (autoFocus && replacementRef.current) {
-      replacementRef.current.focus();
-    }
-  }, [autoFocus]);
-
-  const variant =
-    thread.variants.find((v) => v.id === thread.activeVariantId) ||
-    thread.variants[0];
+  const delText = view?.del?.text ?? "";
+  const insText = view?.ins?.text ?? "";
 
   return (
     <div
@@ -46,69 +37,36 @@ export function ThreadCard({
       data-thread-id={thread.id}
       onMouseDown={onActivate}
     >
-      <span className="anchor-quote" title={thread.anchorText}>
-        {thread.anchorText}
-      </span>
-
-      <AutoGrowTextarea
-        className="replacement"
-        placeholder="replace with…"
-        value={variant.replacement}
-        onChange={(v) => onUpdateVariant(variant.id, { replacement: v })}
-        textareaRef={replacementRef}
-      />
+      {(delText || insText) && (
+        <div className="diff-preview">
+          {delText && (
+            <span className="del" title={delText}>
+              {delText}
+            </span>
+          )}
+          {delText && insText && <span className="arrow">→</span>}
+          {insText && (
+            <span className="ins" title={insText}>
+              {insText}
+            </span>
+          )}
+        </div>
+      )}
 
       <AutoGrowTextarea
         className="note"
         placeholder="a note in the margin…"
-        value={variant.note}
-        onChange={(v) => onUpdateVariant(variant.id, { note: v })}
+        value={thread.note}
+        onChange={onSetNote}
       />
-
-      {thread.variants.length > 1 && (
-        <div className="variants">
-          <span
-            className="meta"
-            style={{ marginRight: "0.2rem", marginTop: 0 }}
-          >
-            drafts:
-          </span>
-          {thread.variants.map((v, i) => (
-            <button
-              key={v.id}
-              className="variant-chip"
-              data-active={v.id === thread.activeVariantId ? "true" : "false"}
-              onClick={(e) => {
-                e.stopPropagation();
-                onSelectVariant(v.id);
-              }}
-              title={v.replacement || "(empty)"}
-            >
-              {v.author}·{i + 1}
-            </button>
-          ))}
-        </div>
-      )}
 
       <div className="actions">
         <button className="accept" onClick={onAccept}>
           accept
         </button>
-        <button onClick={onForkVariant}>draft another way</button>
         <button className="decline" onClick={onDecline}>
           discard
         </button>
-      </div>
-
-      <div className="meta">
-        <span>{variant.author}</span>
-        <span>
-          {thread.state === "open"
-            ? "open"
-            : thread.state === "accepted"
-              ? "accepted"
-              : "declined"}
-        </span>
       </div>
     </div>
   );
@@ -119,23 +77,20 @@ function AutoGrowTextarea({
   onChange,
   placeholder,
   className,
-  textareaRef,
 }: {
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
   className?: string;
-  textareaRef?: React.RefObject<HTMLTextAreaElement | null>;
 }) {
-  const internalRef = useRef<HTMLTextAreaElement | null>(null);
-  const ref = textareaRef ?? internalRef;
+  const ref = useRef<HTMLTextAreaElement | null>(null);
 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     el.style.height = "auto";
     el.style.height = `${el.scrollHeight}px`;
-  }, [value, ref]);
+  }, [value]);
 
   return (
     <textarea
@@ -146,8 +101,7 @@ function AutoGrowTextarea({
       rows={1}
       onChange={(e) => onChange(e.target.value)}
       onMouseDown={(e) => e.stopPropagation()}
+      onKeyDown={(e) => e.stopPropagation()}
     />
   );
 }
-
-export { newId };

@@ -1,22 +1,16 @@
 "use client";
 
 import { useLayoutEffect, useRef, useState } from "react";
-import type { Thread, DraftVariant } from "@/lib/types";
-import { ThreadCard } from "./ThreadCard";
+import type { Thread } from "@/lib/types";
+import { ThreadCard, type ThreadView } from "./ThreadCard";
 
 type Props = {
   threads: Thread[];
   activeThreadId: string | null;
-  justCreatedId: string | null;
   getAnchorTop: (threadId: string) => number | null;
+  getThreadView: (threadId: string) => ThreadView | null;
   onActivate: (id: string) => void;
-  onUpdateVariant: (
-    threadId: string,
-    variantId: string,
-    patch: Partial<DraftVariant>,
-  ) => void;
-  onSelectVariant: (threadId: string, variantId: string) => void;
-  onForkVariant: (threadId: string) => void;
+  onSetNote: (threadId: string, note: string) => void;
   onAccept: (threadId: string) => void;
   onDecline: (threadId: string) => void;
 };
@@ -26,12 +20,10 @@ const CARD_GAP = 12;
 export function MarginRail({
   threads,
   activeThreadId,
-  justCreatedId,
   getAnchorTop,
+  getThreadView,
   onActivate,
-  onUpdateVariant,
-  onSelectVariant,
-  onForkVariant,
+  onSetNote,
   onAccept,
   onDecline,
 }: Props) {
@@ -39,7 +31,6 @@ export function MarginRail({
   const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const [tops, setTops] = useState<Record<string, number>>({});
 
-  // Recompute card positions: align to anchor, then push down to avoid overlap.
   useLayoutEffect(() => {
     const rail = railRef.current;
     if (!rail) return;
@@ -53,7 +44,6 @@ export function MarginRail({
 
     const next: Record<string, number> = {};
     let cursor = 0;
-
     for (const t of ordered) {
       const anchorTop = getAnchorTop(t.id);
       const el = cardRefs.current.get(t.id);
@@ -63,7 +53,6 @@ export function MarginRail({
       next[t.id] = top;
       cursor = top + h + CARD_GAP;
     }
-
     setTops(next);
   }, [threads, getAnchorTop]);
 
@@ -71,8 +60,8 @@ export function MarginRail({
     return (
       <div className="margin-rail rail-wrap" ref={railRef}>
         <div className="empty-rail">
-          select a phrase and press{" "}
-          <kbd style={{ fontSize: "0.7rem" }}>⌘E</kbd> to start a thread.
+          edit anywhere in the manuscript. your changes become suggestions
+          in the margin.
         </div>
       </div>
     );
@@ -97,14 +86,10 @@ export function MarginRail({
         >
           <ThreadCard
             thread={t}
+            view={getThreadView(t.id)}
             active={t.id === activeThreadId}
-            autoFocus={t.id === justCreatedId}
             onActivate={() => onActivate(t.id)}
-            onUpdateVariant={(variantId, patch) =>
-              onUpdateVariant(t.id, variantId, patch)
-            }
-            onSelectVariant={(variantId) => onSelectVariant(t.id, variantId)}
-            onForkVariant={() => onForkVariant(t.id)}
+            onSetNote={(note) => onSetNote(t.id, note)}
             onAccept={() => onAccept(t.id)}
             onDecline={() => onDecline(t.id)}
           />

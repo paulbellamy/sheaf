@@ -1,20 +1,23 @@
 import { Mark, mergeAttributes } from "@tiptap/core";
+import type { Node as PMNode } from "@tiptap/pm/model";
 
-export interface ProposedDeletionOptions {
+export interface ProposedInsertionOptions {
   HTMLAttributes: Record<string, unknown>;
 }
 
 declare module "@tiptap/core" {
   interface Commands<ReturnType> {
-    proposedDeletion: {
-      setProposedDeletion: (attrs: { threadId: string }) => ReturnType;
-      unsetProposedDeletion: (threadId: string) => ReturnType;
+    proposedInsertion: {
+      setProposedInsertion: (attrs: { threadId: string }) => ReturnType;
+      unsetProposedInsertion: (threadId: string) => ReturnType;
     };
   }
 }
 
-export const ProposedDeletion = Mark.create<ProposedDeletionOptions>({
-  name: "proposedDeletion",
+export const ProposedInsertion = Mark.create<ProposedInsertionOptions>({
+  name: "proposedInsertion",
+
+  inclusive: true,
 
   addOptions() {
     return { HTMLAttributes: {} };
@@ -31,14 +34,14 @@ export const ProposedDeletion = Mark.create<ProposedDeletionOptions>({
   },
 
   parseHTML() {
-    return [{ tag: "del[data-thread-id]" }];
+    return [{ tag: "ins[data-thread-id]" }];
   },
 
   renderHTML({ HTMLAttributes }) {
     return [
-      "del",
+      "ins",
       mergeAttributes(this.options.HTMLAttributes, HTMLAttributes, {
-        class: "proposed-deletion",
+        class: "proposed-insertion",
       }),
       0,
     ];
@@ -46,11 +49,11 @@ export const ProposedDeletion = Mark.create<ProposedDeletionOptions>({
 
   addCommands() {
     return {
-      setProposedDeletion:
+      setProposedInsertion:
         (attrs) =>
         ({ commands }) =>
           commands.setMark(this.name, attrs),
-      unsetProposedDeletion:
+      unsetProposedInsertion:
         (threadId) =>
         ({ tr, state, dispatch }) => {
           const type = state.schema.marks[this.name];
@@ -74,8 +77,8 @@ export const ProposedDeletion = Mark.create<ProposedDeletionOptions>({
   },
 });
 
-export function findThreadRange(
-  doc: import("@tiptap/pm/model").Node,
+export function findInsertionRange(
+  doc: PMNode,
   threadId: string,
 ): { from: number; to: number; text: string } | null {
   let from: number | null = null;
@@ -84,7 +87,7 @@ export function findThreadRange(
   doc.descendants((node, pos) => {
     if (!node.isText) return true;
     const has = node.marks.some(
-      (m) => m.type.name === "proposedDeletion" && m.attrs.threadId === threadId,
+      (m) => m.type.name === "proposedInsertion" && m.attrs.threadId === threadId,
     );
     if (has) {
       if (from === null) from = pos;
