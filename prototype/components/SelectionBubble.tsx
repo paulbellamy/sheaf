@@ -53,6 +53,76 @@ function LinkIcon() {
   );
 }
 
+function BulletListIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="3" cy="4" r="0.8" fill="currentColor" />
+      <circle cx="3" cy="8" r="0.8" fill="currentColor" />
+      <circle cx="3" cy="12" r="0.8" fill="currentColor" />
+      <path d="M6 4h8" />
+      <path d="M6 8h8" />
+      <path d="M6 12h8" />
+    </svg>
+  );
+}
+
+function OrderedListIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <text x="1" y="5.5" fontSize="4" fill="currentColor" stroke="none" fontFamily="inherit">1.</text>
+      <text x="1" y="9.5" fontSize="4" fill="currentColor" stroke="none" fontFamily="inherit">2.</text>
+      <text x="1" y="13.5" fontSize="4" fill="currentColor" stroke="none" fontFamily="inherit">3.</text>
+      <path d="M6 4h8" />
+      <path d="M6 8h8" />
+      <path d="M6 12h8" />
+    </svg>
+  );
+}
+
+function TaskListIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <rect x="1.5" y="2.5" width="3" height="3" rx="0.5" />
+      <rect x="1.5" y="6.5" width="3" height="3" rx="0.5" />
+      <rect x="1.5" y="10.5" width="3" height="3" rx="0.5" />
+      <path d="M2.2 4l0.7 0.7 1.4 -1.4" />
+      <path d="M6.5 4h8" />
+      <path d="M6.5 8h8" />
+      <path d="M6.5 12h8" />
+    </svg>
+  );
+}
+
 export function SelectionBubble({
   editor,
   onComment,
@@ -82,6 +152,43 @@ export function SelectionBubble({
     const range = currentRange();
     action();
     onStructuralMark(label, range);
+  };
+
+  const describeBlock = (): string => {
+    for (const level of [1, 2, 3, 4, 5, 6] as const) {
+      if (editor.isActive("heading", { level })) return `H${level}`;
+    }
+    if (editor.isActive("bulletList")) return "bullet list";
+    if (editor.isActive("orderedList")) return "numbered list";
+    if (editor.isActive("taskList")) return "task list";
+    if (editor.isActive("blockquote")) return "blockquote";
+    if (editor.isActive("codeBlock")) return "code block";
+    return "¶";
+  };
+
+  const toggleBlock = (
+    kind: "heading" | "bulletList" | "orderedList" | "taskList",
+  ) => {
+    const range = currentRange();
+    const before = describeBlock();
+    const chain = editor.chain().focus();
+    switch (kind) {
+      case "heading":
+        chain.toggleHeading({ level: 2 }).run();
+        break;
+      case "bulletList":
+        chain.toggleBulletList().run();
+        break;
+      case "orderedList":
+        chain.toggleOrderedList().run();
+        break;
+      case "taskList":
+        chain.toggleTaskList().run();
+        break;
+    }
+    const after = describeBlock();
+    if (before === after) return;
+    onStructuralMark(`${before} → ${after}`, range);
   };
 
   const applyLink = () => {
@@ -162,6 +269,44 @@ export function SelectionBubble({
             title="link"
           >
             <LinkIcon />
+          </button>
+          <span className="bubble-sep" />
+          <button
+            className="bubble-btn"
+            data-active={editor.isActive("heading", { level: 2 }) ? "true" : "false"}
+            onClick={() => toggleBlock("heading")}
+            aria-label="heading"
+            title="heading"
+          >
+            H
+          </button>
+          <span className="bubble-sep" />
+          <button
+            className="bubble-btn"
+            data-active={editor.isActive("bulletList") ? "true" : "false"}
+            onClick={() => toggleBlock("bulletList")}
+            aria-label="bullet list"
+            title="bullet list"
+          >
+            <BulletListIcon />
+          </button>
+          <button
+            className="bubble-btn"
+            data-active={editor.isActive("orderedList") ? "true" : "false"}
+            onClick={() => toggleBlock("orderedList")}
+            aria-label="numbered list"
+            title="numbered list"
+          >
+            <OrderedListIcon />
+          </button>
+          <button
+            className="bubble-btn"
+            data-active={editor.isActive("taskList") ? "true" : "false"}
+            onClick={() => toggleBlock("taskList")}
+            aria-label="task list"
+            title="task list"
+          >
+            <TaskListIcon />
           </button>
           <span className="bubble-sep" />
           <button
