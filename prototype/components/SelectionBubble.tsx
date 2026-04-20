@@ -107,6 +107,34 @@ export function SelectionBubble({
           </button>
           <button
             className="bubble-btn"
+            data-active={editor.isActive("underline") ? "true" : "false"}
+            onClick={() =>
+              run(
+                () => editor.chain().focus().toggleUnderline().run(),
+                "underline",
+              )
+            }
+            aria-label="underline"
+            title="underline"
+          >
+            <span style={{ textDecoration: "underline" }}>U</span>
+          </button>
+          <button
+            className="bubble-btn"
+            data-active={editor.isActive("strike") ? "true" : "false"}
+            onClick={() =>
+              run(
+                () => editor.chain().focus().toggleStrike().run(),
+                "strikethrough",
+              )
+            }
+            aria-label="strikethrough"
+            title="strikethrough"
+          >
+            <s>S</s>
+          </button>
+          <button
+            className="bubble-btn"
             data-active={editor.isActive("code") ? "true" : "false"}
             onClick={() =>
               run(
