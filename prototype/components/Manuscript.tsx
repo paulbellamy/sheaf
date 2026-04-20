@@ -742,7 +742,15 @@ export function Manuscript() {
         <span className="title">sheaf · redline prototype</span>
         <span>
           edit anywhere — your changes become suggestions. press{" "}
-          <kbd>?</kbd> for help.
+          <button
+            type="button"
+            className="help-key-btn"
+            onClick={() => setShowHelp(true)}
+            aria-label="open help"
+          >
+            <kbd>?</kbd>
+          </button>{" "}
+          for help.
         </span>
       </header>
       <div className="layout">
