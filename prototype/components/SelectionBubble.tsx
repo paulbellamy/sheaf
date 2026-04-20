@@ -133,7 +133,7 @@ export function SelectionBubble({
           </button>
           <span className="bubble-sep" />
           <button
-            className="bubble-btn comment"
+            className="bubble-btn"
             onClick={onComment}
             aria-label="comment"
             title="note"

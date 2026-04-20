@@ -29,8 +29,7 @@ import { HelpModal } from "./HelpModal";
 import { ReviewBundle } from "./ReviewBundle";
 import { SelectionBubble } from "./SelectionBubble";
 
-const THREAD_IDLE_MS = 1800;
-const THREAD_NEAR_POS = 2;
+const THREAD_IDLE_MS = 4000;
 
 type EditContext = {
   threadId: string;
@@ -143,24 +142,35 @@ function tryIndent(
   return true;
 }
 
-function findThreadIdAt(
+// Walk outward from `pos` in each direction. A mark is "contiguous" if we
+// encounter it before we cross any unmarked text. Block boundaries (closing
+// </p>, opening <li>, etc.) are transparent — they do not break contiguity,
+// so edits spanning adjacent paragraphs or list items collapse into one
+// thread.
+function findContiguousThreadId(
   doc: PMNode,
   pos: number,
   types: MarkType[],
 ): string | null {
-  let found: string | null = null;
-  doc.nodesBetween(Math.max(0, pos - 1), Math.min(doc.content.size, pos + 1), (node) => {
-    if (found) return false;
-    if (!node.isText) return true;
-    for (const m of node.marks) {
-      if (types.includes(m.type) && typeof m.attrs.threadId === "string") {
-        found = m.attrs.threadId;
-        return false;
+  const walk = (direction: -1 | 1): string | null => {
+    let p = pos;
+    const limit = direction === -1 ? 0 : doc.content.size;
+    while (p !== limit) {
+      const $p = doc.resolve(p);
+      const node = direction === -1 ? $p.nodeBefore : $p.nodeAfter;
+      if (node && node.isText) {
+        for (const m of node.marks) {
+          if (types.includes(m.type) && typeof m.attrs.threadId === "string") {
+            return m.attrs.threadId;
+          }
+        }
+        return null;
       }
+      p += direction;
     }
-    return true;
-  });
-  return found;
+    return null;
+  };
+  return walk(-1) ?? walk(1);
 }
 
 export function Manuscript() {
@@ -204,7 +214,10 @@ export function Manuscript() {
     } => {
       const insType = schema.marks.proposedInsertion;
       const delType = schema.marks.proposedDeletion;
-      const existing = findThreadIdAt(doc, pos, [insType, delType]);
+      // 1. Contiguous with an existing marked range? Reuse that thread —
+      //    this is the primary merge rule, covering edits that span
+      //    paragraph / list-item boundaries.
+      const existing = findContiguousThreadId(doc, pos, [insType, delType]);
       if (existing) {
         editContextRef.current = {
           threadId: existing,
@@ -214,13 +227,14 @@ export function Manuscript() {
         return { threadId: existing, isNew: false };
       }
 
+      // 2. Soft fallback: if the user is still in a short idle window
+      //    from their previous edit (e.g. they just pressed Enter into
+      //    an empty block that has no marks yet), keep extending the
+      //    same thread so the very first character of the next block
+      //    joins the previous one.
       const now = Date.now();
       const ctx = editContextRef.current;
-      if (
-        ctx &&
-        now - ctx.lastTime < THREAD_IDLE_MS &&
-        Math.abs(pos - ctx.lastPos) <= THREAD_NEAR_POS
-      ) {
+      if (ctx && now - ctx.lastTime < THREAD_IDLE_MS) {
         ctx.lastTime = now;
         ctx.lastPos = pos;
         return { threadId: ctx.threadId, isNew: false };
@@ -260,6 +274,10 @@ export function Manuscript() {
       },
     ]);
     setActiveThreadId(id);
+    // A structural transform (e.g. "- " → bullet list) dropped the trigger
+    // text; reset the edit context so follow-on typing starts a fresh
+    // redline thread rather than inheriting the (now orphaned) previous id.
+    editContextRef.current = null;
   }, []);
 
   const registerNoteThread = useCallback((threadId: string) => {

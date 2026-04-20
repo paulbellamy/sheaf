@@ -132,7 +132,7 @@ function AutoGrowTextarea({
 
   useEffect(() => {
     if (autoFocus) {
-      ref.current?.focus();
+      ref.current?.focus({ preventScroll: true });
     }
     // Fire once on mount only.
     // eslint-disable-next-line react-hooks/exhaustive-deps

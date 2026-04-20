@@ -956,10 +956,6 @@ body {
   color: var(--accent);
 }
 
-.bubble-btn.comment {
-  color: var(--accent);
-}
-
 .bubble-sep {
   width: 1px;
   height: 1rem;

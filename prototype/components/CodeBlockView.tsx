@@ -43,8 +43,17 @@ export function CodeBlockView({ node, updateAttributes, extension }: Props) {
           <span>wrap</span>
         </label>
       </div>
-      <pre>
-        <NodeViewContent<"code"> as="code" />
+      <pre
+        style={{
+          whiteSpace: wrap ? "pre-wrap" : "pre",
+          wordBreak: wrap ? "break-word" : "normal",
+          overflowX: wrap ? "hidden" : "auto",
+        }}
+      >
+        <NodeViewContent<"code">
+          as="code"
+          style={{ whiteSpace: "inherit", wordBreak: "inherit" }}
+        />
       </pre>
     </NodeViewWrapper>
   );
