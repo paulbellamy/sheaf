@@ -12,6 +12,25 @@ type Props = {
   onOutdent: () => void;
 };
 
+function PencilIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M11.5 2.5l2 2-8 8-2.5.5.5-2.5 8-8z" />
+      <path d="M10 4l2 2" />
+    </svg>
+  );
+}
+
 function LinkIcon() {
   return (
     <svg
@@ -138,7 +157,7 @@ export function SelectionBubble({
             aria-label="comment"
             title="note"
           >
-            ✎
+            <PencilIcon />
           </button>
         </div>
       ) : (
