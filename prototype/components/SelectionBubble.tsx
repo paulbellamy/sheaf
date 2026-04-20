@@ -1,0 +1,219 @@
+"use client";
+
+import { BubbleMenu } from "@tiptap/react/menus";
+import type { Editor } from "@tiptap/react";
+import { useState } from "react";
+
+type Range = { from: number; to: number };
+
+type Props = {
+  editor: Editor | null;
+  onComment: () => void;
+  onStructuralMark: (label: string, range?: Range) => void;
+  onIndent: () => void;
+  onOutdent: () => void;
+};
+
+function PencilIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M11.5 2.5l2 2-8 8-2.5.5.5-2.5 8-8z" />
+      <path d="M10 4l2 2" />
+    </svg>
+  );
+}
+
+function LinkIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M6.5 9.5l3-3" />
+      <path d="M7 4.5l1.5-1.5a2.5 2.5 0 0 1 3.5 3.5L10.5 8" />
+      <path d="M9 11.5L7.5 13a2.5 2.5 0 0 1-3.5-3.5L5.5 8" />
+    </svg>
+  );
+}
+
+export function SelectionBubble({
+  editor,
+  onComment,
+  onStructuralMark,
+  onIndent,
+  onOutdent,
+}: Props) {
+  const [linkMode, setLinkMode] = useState(false);
+  const [linkUrl, setLinkUrl] = useState("");
+
+  if (!editor) return null;
+
+  const currentRange = (): Range | undefined => {
+    const { from, to } = editor.state.selection;
+    return from !== to ? { from, to } : undefined;
+  };
+
+  // Formatting mark toggles (bold/italic/underline/strike/code) let the
+  // editor handle the transaction; the Manuscript's transaction reconciler
+  // creates or removes the matching margin thread automatically. That keeps
+  // Cmd+B, toolbar clicks, and undo/redo in one place.
+  const runMark = (action: () => void) => {
+    action();
+  };
+
+  const runWithRange = (action: () => void, label: string) => {
+    const range = currentRange();
+    action();
+    onStructuralMark(label, range);
+  };
+
+  const applyLink = () => {
+    if (!linkUrl) {
+      setLinkMode(false);
+      return;
+    }
+    const range = currentRange();
+    editor.chain().focus().extendMarkRange("link").setLink({ href: linkUrl }).run();
+    onStructuralMark("linked text", range);
+    setLinkUrl("");
+    setLinkMode(false);
+  };
+
+  return (
+    <BubbleMenu editor={editor} className="selection-bubble">
+      {!linkMode ? (
+        <div className="bubble-row">
+          <button
+            className="bubble-btn"
+            data-active={editor.isActive("bold") ? "true" : "false"}
+            onClick={() =>
+              runMark(() => editor.chain().focus().toggleBold().run())
+            }
+            aria-label="bold"
+            title="bold"
+          >
+            <strong>B</strong>
+          </button>
+          <button
+            className="bubble-btn"
+            data-active={editor.isActive("italic") ? "true" : "false"}
+            onClick={() =>
+              runMark(() => editor.chain().focus().toggleItalic().run())
+            }
+            aria-label="italic"
+            title="italic"
+          >
+            <em>I</em>
+          </button>
+          <button
+            className="bubble-btn"
+            data-active={editor.isActive("underline") ? "true" : "false"}
+            onClick={() =>
+              runMark(() => editor.chain().focus().toggleUnderline().run())
+            }
+            aria-label="underline"
+            title="underline"
+          >
+            <span style={{ textDecoration: "underline" }}>U</span>
+          </button>
+          <button
+            className="bubble-btn"
+            data-active={editor.isActive("strike") ? "true" : "false"}
+            onClick={() =>
+              runMark(() => editor.chain().focus().toggleStrike().run())
+            }
+            aria-label="strikethrough"
+            title="strikethrough"
+          >
+            <s>S</s>
+          </button>
+          <button
+            className="bubble-btn"
+            data-active={editor.isActive("code") ? "true" : "false"}
+            onClick={() =>
+              runMark(() => editor.chain().focus().toggleCode().run())
+            }
+            aria-label="inline code"
+            title="inline code"
+          >
+            {"</>"}
+          </button>
+          <button
+            className="bubble-btn"
+            onClick={() => setLinkMode(true)}
+            aria-label="link"
+            title="link"
+          >
+            <LinkIcon />
+          </button>
+          <span className="bubble-sep" />
+          <button
+            className="bubble-btn"
+            onClick={() => runWithRange(onOutdent, "outdent")}
+            aria-label="outdent"
+            title="outdent (shift+tab)"
+          >
+            ⇤
+          </button>
+          <button
+            className="bubble-btn"
+            onClick={() => runWithRange(onIndent, "indent")}
+            aria-label="indent"
+            title="indent (tab)"
+          >
+            ⇥
+          </button>
+          <span className="bubble-sep" />
+          <button
+            className="bubble-btn"
+            onClick={onComment}
+            aria-label="comment"
+            title="note"
+          >
+            <PencilIcon />
+          </button>
+        </div>
+      ) : (
+        <div className="bubble-row link-row">
+          <input
+            autoFocus
+            className="bubble-input"
+            placeholder="https://…"
+            value={linkUrl}
+            onChange={(e) => setLinkUrl(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                applyLink();
+              } else if (e.key === "Escape") {
+                e.preventDefault();
+                setLinkMode(false);
+                setLinkUrl("");
+              }
+            }}
+          />
+          <button className="bubble-btn" onClick={applyLink}>
+            ↵
+          </button>
+        </div>
+      )}
+    </BubbleMenu>
+  );
+}
