@@ -173,6 +173,82 @@ function findContiguousThreadId(
   return walk(-1) ?? walk(1);
 }
 
+// Formatting marks tracked as structural diffs against the baseline document.
+// Keyed by the mark's schema name; value is the label shown in the margin.
+const TRACKED_FORMATTING_MARKS: Record<string, string> = {
+  bold: "bold",
+  italic: "italic",
+  underline: "underline",
+  strike: "strikethrough",
+  code: "inline code",
+};
+
+type MarkDiff = { label: string; range: { from: number; to: number } };
+
+// Flatten a doc into a per-character array where each entry carries the set
+// of tracked formatting marks active at that character. When
+// `skipProposedInsertion` is true, characters belonging to a proposedInsertion
+// are dropped entirely — this lets us line up the baseline (original) doc
+// against the current doc even after the user has typed new text: what's left
+// after stripping insertions should have the same length as the baseline.
+function collectFormattingTokens(
+  doc: PMNode,
+  skipProposedInsertion: boolean,
+): Array<Set<string>> {
+  const tokens: Array<Set<string>> = [];
+  doc.descendants((node) => {
+    if (!node.isText) return true;
+    const isProposedIns = node.marks.some(
+      (m) => m.type.name === "proposedInsertion",
+    );
+    if (skipProposedInsertion && isProposedIns) return true;
+    const markSet = new Set<string>();
+    for (const m of node.marks) {
+      if (TRACKED_FORMATTING_MARKS[m.type.name]) markSet.add(m.type.name);
+    }
+    const text = node.text ?? "";
+    for (let i = 0; i < text.length; i++) tokens.push(new Set(markSet));
+    return true;
+  });
+  return tokens;
+}
+
+// Diff two equal-length token streams (baseline vs. current without pending
+// insertions). Ranges are token-index positions; they're used purely to
+// uniquely key the diff for the margin rail, not to anchor to DOM positions.
+function diffFormattingTokens(
+  baseline: Array<Set<string>>,
+  current: Array<Set<string>>,
+): MarkDiff[] {
+  const diffs: MarkDiff[] = [];
+  const len = Math.min(baseline.length, current.length);
+  for (const markName of Object.keys(TRACKED_FORMATTING_MARKS)) {
+    const label = TRACKED_FORMATTING_MARKS[markName];
+    const changed: number[] = [];
+    for (let i = 0; i < len; i++) {
+      if (baseline[i].has(markName) !== current[i].has(markName)) changed.push(i);
+    }
+    let start: number | null = null;
+    let prev: number | null = null;
+    for (const p of changed) {
+      if (start === null) {
+        start = p;
+        prev = p;
+      } else if (p === (prev as number) + 1) {
+        prev = p;
+      } else {
+        diffs.push({ label, range: { from: start, to: (prev as number) + 1 } });
+        start = p;
+        prev = p;
+      }
+    }
+    if (start !== null) {
+      diffs.push({ label, range: { from: start, to: (prev as number) + 1 } });
+    }
+  }
+  return diffs;
+}
+
 export function Manuscript() {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
@@ -182,6 +258,7 @@ export function Manuscript() {
 
   const editContextRef = useRef<EditContext | null>(null);
   const manuscriptRef = useRef<HTMLDivElement | null>(null);
+  const baselineDocRef = useRef<PMNode | null>(null);
 
   const lowlight = useMemo(() => createLowlight(common), []);
 
@@ -260,25 +337,42 @@ export function Manuscript() {
     ]);
   }, []);
 
-  const registerStructuralThread = useCallback((label: string) => {
-    const id = newId("strc");
-    setThreads((prev) => [
-      ...prev,
-      {
-        id,
-        kind: "structural",
-        note: "",
-        state: "pending",
-        createdAt: Date.now(),
-        structural: { label },
-      },
-    ]);
-    setActiveThreadId(id);
-    // A structural transform (e.g. "- " → bullet list) dropped the trigger
-    // text; reset the edit context so follow-on typing starts a fresh
-    // redline thread rather than inheriting the (now orphaned) previous id.
-    editContextRef.current = null;
-  }, []);
+  const registerStructuralThread = useCallback(
+    (label: string, range?: { from: number; to: number }) => {
+      const id = newId("strc");
+      setThreads((prev) => {
+        let purgedSameLabel = false;
+        const filtered = prev.filter((t) => {
+          if (!range) return true;
+          if (
+            t.kind !== "structural" ||
+            t.state !== "pending" ||
+            t.note !== ""
+          )
+            return true;
+          const r = t.structural?.range;
+          if (!r || r.from !== range.from || r.to !== range.to) return true;
+          if (t.structural?.label === label) purgedSameLabel = true;
+          return false;
+        });
+        if (range && purgedSameLabel) return filtered;
+        return [
+          ...filtered,
+          {
+            id,
+            kind: "structural",
+            note: "",
+            state: "pending",
+            createdAt: Date.now(),
+            structural: range ? { label, range } : { label },
+          },
+        ];
+      });
+      setActiveThreadId(id);
+      editContextRef.current = null;
+    },
+    [],
+  );
 
   const registerNoteThread = useCallback((threadId: string) => {
     setThreads((prev) => [
@@ -305,7 +399,7 @@ export function Manuscript() {
       ProposedDeletion,
       ProposedInsertion,
       ThreadInteraction.configure({
-        onThreadClick: (id) => setActiveThreadId(id),
+        onThreadClick: (id) => activateThread(id),
       }),
     ],
     content: sampleManuscript,
@@ -363,7 +457,7 @@ export function Manuscript() {
 
         view.dispatch(tr);
         if (isNew) registerThread(threadId);
-        setActiveThreadId(threadId);
+        activateThread(threadId);
         return true;
       },
 
@@ -461,7 +555,7 @@ export function Manuscript() {
           };
 
           if (isNew) registerThread(threadId);
-          setActiveThreadId(threadId);
+          activateThread(threadId);
         }
 
         view.dispatch(tr);
@@ -505,23 +599,42 @@ export function Manuscript() {
 
         view.dispatch(tr);
         if (isNew) registerThread(threadId);
-        setActiveThreadId(threadId);
+        activateThread(threadId);
         event.preventDefault();
         return true;
       },
     },
   });
 
-  // Force MarginRail layout recompute whenever the doc changes; also GC
-  // redline threads whose marks have been stripped (e.g. by an input-rule
-  // transform that deleted the trigger text).
+  // Force MarginRail layout recompute whenever the doc changes. Also:
+  //   1) GC redline threads whose marks have been stripped.
+  //   2) Reconcile formatting (bold/italic/underline/strike/code) threads
+  //      against the baseline doc — every transaction replays the full diff,
+  //      so undo/redo, keyboard shortcuts, and the toolbar all stay in sync.
   useEffect(() => {
     if (!editor) return;
+    if (!baselineDocRef.current) baselineDocRef.current = editor.state.doc;
+    const trackedLabels = new Set(Object.values(TRACKED_FORMATTING_MARKS));
+
     const handler = () => {
       bumpLayout((n) => n + 1);
+
+      const baseline = baselineDocRef.current;
+      const diffs = baseline
+        ? diffFormattingTokens(
+            collectFormattingTokens(baseline, false),
+            collectFormattingTokens(editor.state.doc, true),
+          )
+        : [];
+      const diffKeys = new Set(
+        diffs.map((d) => `${d.label}:${d.range.from}:${d.range.to}`),
+      );
+
       setThreads((prev) => {
         let changed = false;
-        const next = prev.filter((t) => {
+
+        // 1) Drop redline threads whose underlying marks are gone.
+        const afterRedlineGC = prev.filter((t) => {
           if (t.kind !== "redline") return true;
           const hasDel = !!findThreadRange(editor.state.doc, t.id);
           const hasIns = !!findInsertionRange(editor.state.doc, t.id);
@@ -531,10 +644,52 @@ export function Manuscript() {
           }
           return true;
         });
-        return changed ? next : prev;
+
+        // 2) Reconcile formatting threads with the current diff set.
+        const isFormattingThread = (t: Thread) =>
+          t.kind === "structural" &&
+          !!t.structural?.range &&
+          trackedLabels.has(t.structural.label);
+
+        const seen = new Set<string>();
+        const afterReconcile: Thread[] = [];
+        for (const t of afterRedlineGC) {
+          if (!isFormattingThread(t)) {
+            afterReconcile.push(t);
+            continue;
+          }
+          const k = `${t.structural!.label}:${t.structural!.range!.from}:${t.structural!.range!.to}`;
+          if (diffKeys.has(k)) {
+            afterReconcile.push(t);
+            seen.add(k);
+          } else if (t.note !== "" || t.state === "submitted") {
+            // Preserve user-annotated or already-submitted threads.
+            afterReconcile.push(t);
+            seen.add(k);
+          } else {
+            changed = true;
+          }
+        }
+        for (const d of diffs) {
+          const k = `${d.label}:${d.range.from}:${d.range.to}`;
+          if (seen.has(k)) continue;
+          afterReconcile.push({
+            id: newId("strc"),
+            kind: "structural",
+            note: "",
+            state: "pending",
+            createdAt: Date.now(),
+            structural: { label: d.label, range: d.range },
+          });
+          changed = true;
+        }
+
+        return changed ? afterReconcile : prev;
       });
     };
     editor.on("transaction", handler);
+    // Fire once on mount to populate from initial doc state.
+    handler();
     return () => {
       editor.off("transaction", handler);
     };
@@ -614,6 +769,27 @@ export function Manuscript() {
   const setNote = useCallback((threadId: string, note: string) => {
     setThreads((prev) =>
       prev.map((t) => (t.id === threadId ? { ...t, note } : t)),
+    );
+  }, []);
+
+  const setThreadCollapsed = useCallback(
+    (threadId: string, collapsed: boolean) => {
+      setThreads((prev) =>
+        prev.map((t) => (t.id === threadId ? { ...t, collapsed } : t)),
+      );
+    },
+    [],
+  );
+
+  const setAllCollapsed = useCallback((collapsed: boolean) => {
+    setThreads((prev) => prev.map((t) => ({ ...t, collapsed })));
+  }, []);
+
+  const activateThread = useCallback((id: string | null) => {
+    setActiveThreadId(id);
+    if (id === null) return;
+    setThreads((prev) =>
+      prev.map((t) => (t.id === id && t.collapsed ? { ...t, collapsed: false } : t)),
     );
   }, []);
 
@@ -764,16 +940,18 @@ export function Manuscript() {
           activeThreadId={activeThreadId}
           getAnchorTop={getAnchorTop}
           getThreadView={getThreadView}
-          onActivate={setActiveThreadId}
+          onActivate={activateThread}
           onSetNote={setNote}
           onAccept={acceptThread}
           onDecline={declineThread}
+          onToggleCollapsed={setThreadCollapsed}
+          onSetAllCollapsed={setAllCollapsed}
         />
       </div>
       <SelectionBubble
         editor={editor}
         onComment={startNoteThread}
-        onStructuralMark={(label) => registerStructuralThread(label)}
+        onStructuralMark={(label, range) => registerStructuralThread(label, range)}
         onIndent={() => {
           if (!editor) return;
           tryIndent(editor.state, editor.view.dispatch, "in");

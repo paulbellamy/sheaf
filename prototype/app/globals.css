@@ -395,6 +395,80 @@ body {
   border-left-color: var(--accent);
 }
 
+/* collapsed card — compact, chevron flush right, preview visible */
+.thread-card {
+  position: relative;
+}
+
+.thread-card[data-collapsed="true"] {
+  padding: 0.4rem 1.6rem 0.4rem 0.85rem;
+}
+
+.thread-card[data-collapsed="true"] .structural-preview,
+.thread-card[data-collapsed="true"] .diff-preview {
+  margin-bottom: 0;
+}
+
+.thread-chevron {
+  position: absolute;
+  top: 0.35rem;
+  right: 0.35rem;
+  width: 1.1rem;
+  height: 1.1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-radius: 2px;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0;
+}
+
+.thread-chevron:hover {
+  color: var(--ink);
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.thread-chevron .note-dot {
+  position: absolute;
+  top: 0.15rem;
+  right: 0.15rem;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* rail header — collapse/expand all */
+.rail-header {
+  position: absolute;
+  top: -1.3rem;
+  right: 0;
+  display: flex;
+  justify-content: flex-end;
+  z-index: 2;
+}
+
+.rail-header-btn {
+  font: inherit;
+  font-size: 0.72rem;
+  font-variant: small-caps;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  padding: 0.15rem 0.4rem;
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.rail-header-btn:hover {
+  color: var(--ink);
+  background: rgba(0, 0, 0, 0.04);
+}
+
 .structural-preview {
   font-size: 0.78rem;
   margin-bottom: 0.35rem;

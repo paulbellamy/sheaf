@@ -4,10 +4,12 @@ import { BubbleMenu } from "@tiptap/react/menus";
 import type { Editor } from "@tiptap/react";
 import { useState } from "react";
 
+type Range = { from: number; to: number };
+
 type Props = {
   editor: Editor | null;
   onComment: () => void;
-  onStructuralMark: (label: string) => void;
+  onStructuralMark: (label: string, range?: Range) => void;
   onIndent: () => void;
   onOutdent: () => void;
 };
@@ -63,9 +65,23 @@ export function SelectionBubble({
 
   if (!editor) return null;
 
-  const run = (action: () => void, label: string) => {
+  const currentRange = (): Range | undefined => {
+    const { from, to } = editor.state.selection;
+    return from !== to ? { from, to } : undefined;
+  };
+
+  // Formatting mark toggles (bold/italic/underline/strike/code) let the
+  // editor handle the transaction; the Manuscript's transaction reconciler
+  // creates or removes the matching margin thread automatically. That keeps
+  // Cmd+B, toolbar clicks, and undo/redo in one place.
+  const runMark = (action: () => void) => {
     action();
-    onStructuralMark(label);
+  };
+
+  const runWithRange = (action: () => void, label: string) => {
+    const range = currentRange();
+    action();
+    onStructuralMark(label, range);
   };
 
   const applyLink = () => {
@@ -73,8 +89,9 @@ export function SelectionBubble({
       setLinkMode(false);
       return;
     }
+    const range = currentRange();
     editor.chain().focus().extendMarkRange("link").setLink({ href: linkUrl }).run();
-    onStructuralMark("linked text");
+    onStructuralMark("linked text", range);
     setLinkUrl("");
     setLinkMode(false);
   };
@@ -87,7 +104,7 @@ export function SelectionBubble({
             className="bubble-btn"
             data-active={editor.isActive("bold") ? "true" : "false"}
             onClick={() =>
-              run(() => editor.chain().focus().toggleBold().run(), "bold")
+              runMark(() => editor.chain().focus().toggleBold().run())
             }
             aria-label="bold"
             title="bold"
@@ -98,7 +115,7 @@ export function SelectionBubble({
             className="bubble-btn"
             data-active={editor.isActive("italic") ? "true" : "false"}
             onClick={() =>
-              run(() => editor.chain().focus().toggleItalic().run(), "italic")
+              runMark(() => editor.chain().focus().toggleItalic().run())
             }
             aria-label="italic"
             title="italic"
@@ -109,10 +126,7 @@ export function SelectionBubble({
             className="bubble-btn"
             data-active={editor.isActive("underline") ? "true" : "false"}
             onClick={() =>
-              run(
-                () => editor.chain().focus().toggleUnderline().run(),
-                "underline",
-              )
+              runMark(() => editor.chain().focus().toggleUnderline().run())
             }
             aria-label="underline"
             title="underline"
@@ -123,10 +137,7 @@ export function SelectionBubble({
             className="bubble-btn"
             data-active={editor.isActive("strike") ? "true" : "false"}
             onClick={() =>
-              run(
-                () => editor.chain().focus().toggleStrike().run(),
-                "strikethrough",
-              )
+              runMark(() => editor.chain().focus().toggleStrike().run())
             }
             aria-label="strikethrough"
             title="strikethrough"
@@ -137,10 +148,7 @@ export function SelectionBubble({
             className="bubble-btn"
             data-active={editor.isActive("code") ? "true" : "false"}
             onClick={() =>
-              run(
-                () => editor.chain().focus().toggleCode().run(),
-                "inline code",
-              )
+              runMark(() => editor.chain().focus().toggleCode().run())
             }
             aria-label="inline code"
             title="inline code"
@@ -158,10 +166,7 @@ export function SelectionBubble({
           <span className="bubble-sep" />
           <button
             className="bubble-btn"
-            onClick={() => {
-              onOutdent();
-              onStructuralMark("outdent");
-            }}
+            onClick={() => runWithRange(onOutdent, "outdent")}
             aria-label="outdent"
             title="outdent (shift+tab)"
           >
@@ -169,10 +174,7 @@ export function SelectionBubble({
           </button>
           <button
             className="bubble-btn"
-            onClick={() => {
-              onIndent();
-              onStructuralMark("indent");
-            }}
+            onClick={() => runWithRange(onIndent, "indent")}
             aria-label="indent"
             title="indent (tab)"
           >

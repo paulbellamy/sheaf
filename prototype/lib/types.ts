@@ -8,8 +8,9 @@ export type Thread = {
   note: string;
   state: ThreadState;
   createdAt: number;
-  structural?: { label: string };
+  structural?: { label: string; range?: { from: number; to: number } };
   autoFocusNote?: boolean;
+  collapsed?: boolean;
 };
 
 export type Review = {
