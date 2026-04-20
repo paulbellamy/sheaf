@@ -195,6 +195,7 @@ body {
   background: var(--redline-bg);
   padding: 0 0.15em;
   border-radius: 1px;
+  white-space: pre-wrap;
 }
 
 .thread-card .diff-preview .arrow {
@@ -209,6 +210,7 @@ body {
   padding: 0 0.15em;
   border-radius: 1px;
   font-style: italic;
+  white-space: pre-wrap;
 }
 
 .thread-card textarea {

@@ -1,4 +1,6 @@
 import { Mark, mergeAttributes } from "@tiptap/core";
+import type { Node as PMNode } from "@tiptap/pm/model";
+import { extractMarkedRange } from "./extractMarkedRange";
 
 export interface ProposedDeletionOptions {
   HTMLAttributes: Record<string, unknown>;
@@ -75,24 +77,8 @@ export const ProposedDeletion = Mark.create<ProposedDeletionOptions>({
 });
 
 export function findThreadRange(
-  doc: import("@tiptap/pm/model").Node,
+  doc: PMNode,
   threadId: string,
 ): { from: number; to: number; text: string } | null {
-  let from: number | null = null;
-  let to: number | null = null;
-  let text = "";
-  doc.descendants((node, pos) => {
-    if (!node.isText) return true;
-    const has = node.marks.some(
-      (m) => m.type.name === "proposedDeletion" && m.attrs.threadId === threadId,
-    );
-    if (has) {
-      if (from === null) from = pos;
-      to = pos + node.nodeSize;
-      text += node.text ?? "";
-    }
-    return true;
-  });
-  if (from === null || to === null) return null;
-  return { from, to, text };
+  return extractMarkedRange(doc, "proposedDeletion", threadId);
 }
