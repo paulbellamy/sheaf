@@ -34,8 +34,16 @@ the runnable block. jupyter's term, kept verbatim — no gain in renaming what e
 - **source** — the code
 - **inputs** — references to other cells, transclusions, or declared parameters (see §5.6)
 - **output** — what it produced last time it ran (may be stale, may be sealed, may be empty)
+- **determinism** — one of **pure**, **seeded**, or **impure**. default is pure:
+  - **pure** — no clock, no rng, no network, no fs outside declared inputs. the runtime sandboxes the cell and blocks these. a pure cell is a function from (source, kernel, inputs) to output, full stop. seals verify by re-running and comparing the output hash byte-for-byte.
+  - **seeded** — deterministic given an rng seed. the seed is a declared input; the sandbox still blocks clock/network/fs. seal semantics identical to pure — byte-for-byte output match — just with the seed in the input set.
+  - **impure** — real side effects allowed: databases, http, filesystem, external apis. shippable (this is how real code does real work), but sealing uses a **contract** instead of an output hash (see seal below).
 
-cells render with clear visual separation from prose — monospace source, an output panel below. but the output panel renders the output *as a figure* (plot, table, rendered component, image), not as a code-repl scrollback. the manuscript reads like a book with figures, not like a terminal with annotations.
+pure is default because the three tensions in the thesis (integration, repeatability, experimentation) all land cleanest when most cells are pure. impure exists because production code has to talk to the world.
+
+syntax in the info string: `{cell: true, id: cell_7fa2, determinism: impure}`. omitted = pure.
+
+cells render with clear visual separation from prose — monospace source, an output panel below. for pure/seeded cells, the output panel renders the output *as a figure* (plot, table, rendered component, image). for impure cells, the panel renders the **contract result** — a ✓/✗ badge with the contract description and a "last verified at commit X" note, not a captured figure. the manuscript reads like a book with figures for pure work and audit badges for impure work.
 
 ### kernel
 the runtime environment bound to a manuscript. jupyter's term, kept. sheaf's twist: the kernel is **declared per manuscript in a sidecar** (`kernel.yml`) and **pinned per commit**. so "what python was this output produced with" is always answerable by checking out that commit.
@@ -67,10 +75,17 @@ new primitive, jupyter has no equivalent. a **seal** is a pin on an output that 
 - **hash of cell source** (including language)
 - **hash of kernel declaration** (language version, deps, data refs, env, resource limits)
 - **hash of resolved inputs** (the specific values the cell read from other cells, transclusions, and parameters)
-- **hash of produced output**
+- **verification target** — what the re-run must produce to verify. depends on the cell's determinism posture:
+  - **pure / seeded** → **hash of produced output bytes**. CI re-runs and must produce a byte-identical output. this is the strongest guarantee and the default.
+  - **impure** → a **contract**: one or more predicates the re-run output must satisfy. supported contract forms:
+    - **schema** — json schema, type signature, row shape, response shape.
+    - **predicate cell** — a second, pure cell that takes the impure cell's output and returns bool. the seal verifies iff the predicate is true. the predicate is itself sealed (it's pure), so the contract is auditable.
+    - **execution success** — the weakest contract: cell ran without raising. combine with declared invariants (e.g. `response.status == 202`) for useful-but-lightweight seals.
 - **timestamp + actor** (who sealed it, when)
 
-a sealed output is **reproducible**: given the same (code, kernel, inputs), re-running produces the same (output hash). CI verifies this on every accept. drift blocks the merge.
+a sealed output is **reproducible** in the sense appropriate to its posture: pure/seeded means byte-identical; impure means contract-satisfying. CI verifies on every accept. drift for pure/seeded = output hash mismatch. drift for impure = contract no longer holds (schema broken, predicate false, execution raised). either drift blocks the merge.
+
+the author chooses the contract strength for impure cells. a db query might seal with "returns ≥1 row of shape `{id: string, …}`"; an email-send might seal with "executes without error and `response.status == 202`"; an llm call might seal with "output validates against this json schema." both are shippable; both are deploy-time gated. impure cells don't get a free pass — they seal against a different target.
 
 unsealed outputs render differently on the page — a visible "draft" mark in the gutter, probably the same ghost-underline the thread-centric ux uses for live-draft passages. readers can tell at a glance which figures are provenance-guaranteed and which are "someone ran this once on their laptop."
 
@@ -86,6 +101,24 @@ notably: never "execute," never "deploy," never "commit." the verbs are the same
 
 ---
 
+## 2.1 execution model
+
+the single biggest thing sheaf takes from jupyter and the single biggest thing it rejects.
+
+**takes**: cells, kernels, outputs, interactive feel, figure-rich manuscripts.
+
+**rejects**: cells share mutable global state, can run in any order, and persist that state across sessions. this is jupyter's core failure mode — the reason a notebook that "works" on the author's laptop doesn't reproduce anywhere else. sheaf cannot inherit it.
+
+sheaf's model: **cells are pure functions of their declared inputs and the kernel. there is no shared mutable kernel state across cells.** run a cell, you get an output that depends only on (source, kernel, inputs). run it again with the same inputs, you get the same output (byte-identical for pure/seeded; contract-satisfying for impure). no "oops, i ran cell 3 before cell 7 and now the df is different."
+
+execution order is derived from the **input dag**: cell B reading cell A's output is an edge A→B. running B runs A first if A's output on the bench is stale. document order is for humans; execution order is for the runtime. the two can diverge and that's fine — the manuscript is a book, not a script.
+
+exception, handled explicitly: shared resources that are expensive to construct (db pools, loaded models, warm caches). these live in **context cells** — a cell whose output is the handle, declared as an input to the cells that use it. the context cell runs once per bench session and its output is memoized. this preserves jupyter's "set up the notebook once, then iterate" ergonomics without reintroducing hidden global state. every dependency is still on the dag; every dependency is still explicit.
+
+the bench enforces this model — it runs cells in isolated workers with explicit input injection, not in a long-lived repl. the sandbox strictness depends on determinism posture (see §2 cell).
+
+---
+
 ## 3. aesthetic commitments
 
 these are load-bearing — a dev tool aesthetic would collapse the thesis.
@@ -93,6 +126,7 @@ these are load-bearing — a dev tool aesthetic would collapse the thesis.
 - **figures, not repls.** output renders as the thing it is (plot, table, component, image, value), not as scrollback. if the output is a react component, the page shows the rendered component. if it's a dataframe, a paginated table. if it's just a number, the number, typeset. code-repl output is the fallback for "we don't know how to render this," not the default.
 - **cells feel like paragraphs with equipment.** a cell's source block sits on the page with the same gutter vocabulary as prose — paragraph numbers, density marks, thread pins. the code is part of the reading, not a sidebar to it.
 - **sealed vs. live is visually unambiguous.** a sealed output has a subtle provenance mark (a wax-seal glyph, a thin underline in the seal color, whatever the visual language settles on). a live output has the existing draft ghost mark. readers can tell at a glance.
+- **impure cells are audit badges, not figures.** where a pure/seeded cell renders its output as a figure, an impure cell renders a **contract badge** — a small ✓/✗ with the contract summary ("schema holds," "status 202," "predicate passed") and a "last verified at commit X" line. no captured figure bytes on the page. this is an honest visual: the reader knows immediately that this cell talks to the world and what the world is being asked to guarantee, not what the world happened to say one time on a tuesday.
 - **kernel status is peripheral.** connection state, memory, gpu availability — all in a thin gutter strip, not a top-bar dashboard. the manuscript is the focus; the kernel is equipment.
 - **bench feels disposable.** visibly a scratch space. the "promote" gesture has weight to it (an animation, a confirmation, a commit-level feel). running on the bench should feel costless; promoting should feel deliberate.
 - **drift is loud but not panicked.** a drifted figure shows its original self, struck through, with a gutter mark and a one-click "re-seal" thread. no modal, no red banner.
@@ -188,22 +222,28 @@ no existing invariant is weakened. the md ↔ ycrdt sync algorithm (§4 of desig
 ## 7. v0 / v1 cuts
 
 v0 ships:
-- cells as md extension with language + simple frontmatter
+- cells as md extension with language + info-string annotations (`cell: true`, `id`, `determinism`)
 - per-manuscript `kernel.yml`, manually declared
-- bench runs (python + ts kernels), ephemeral, per-draft
+- bench runs (python + ts kernels), ephemeral, per-draft, input-dag driven
+- **pure cells with sandbox enforcement** (no clock/rng/network/fs outside declared inputs)
 - promote gesture (bench run → thread-with-draft)
 - output sidecar files, unsealed by default
-- manual seal gesture writing the seal stanza
+- manual seal gesture writing the seal stanza — output-hash seals for pure cells
 - reader can see sealed vs. unsealed outputs on the page
 
 v0 punts:
+- **impure cells with contracts** (v1 — until then, impure cells exist but can't be sealed, so can't ship in production manuscripts)
+- **seeded cells** (v1 — seed capture + sandbox that permits only declared rng)
 - CI re-run on accept (v1 — until then, seals are assertions, not verified)
 - drift detection (v1 — until then, seals can silently rot)
+- context cells (v1 — v0 re-runs deps on every cell run, correct but slow)
 - parameterized cells + sliders (v1)
 - reader-runnable cells (v1)
 - weave-level kernel sharing (v1)
 - deploys-to-target integration (v1+)
 - gpu / long-running / streaming cells (v1+)
+
+**minimal v0 cut**: if impure contracts are unbaked by ship date, v0 can launch pure-only. authors can still write impure cells (they'll run on the bench) but they render as unsealed/unpublishable and production manuscripts reject them. this preserves the thesis (manuscript = spec = deploy target) without requiring the contract machinery to be ready on day one.
 
 v0 is enough to validate the thesis: does a manuscript with runnable cells + a propose/accept review loop feel like the right object. the harder reproducibility + deploy machinery comes after the ux metaphor earns its keep.
 
@@ -213,7 +253,8 @@ v0 is enough to validate the thesis: does a manuscript with runnable cells + a p
 
 - **policy: must production-marked manuscripts have 100% sealed cells?** arguments both ways. "yes" keeps prod honest; "no" allows gradual adoption and lets a cell be a comment-on-code (ran once, output is illustrative, don't pretend it's reproducible). leaning yes with an explicit `allow-unsealed: true` escape hatch per cell.
 - **how long does bench state live?** per-session is minimal; per-draft is convenient but expensive. a draft left open for a week shouldn't pin a worker. probably: per-session with opt-in retention, plus a warm-start hint that re-runs recent cells automatically on reopen.
-- **what counts as "resolved inputs" for the seal?** upstream cells' outputs obviously. transclusions pinned to a commit obviously. environment variables — some, redacted. wall clock, random seeds — must be captured (and the cell's frontmatter should declare its determinism posture). network calls — a nightmare; probably the seal records the response digest and re-runs require cache hits.
+- **sandbox enforcement for pure/seeded cells.** the runtime has to actually block clock/rng/network/fs, not just ask politely. open design space: monkey-patch the stdlib (cheap, bypassable — `import ctypes` defeats it), run in a locked-down container (stricter, more expensive, per-cell overhead), or language-level (wasm sandboxes, deno permissions). probably tiered: cheap check in the editor, container-grade in CI.
+- **contract design for impure cells.** schema is easy and composable. predicate-cells are maximally expressive but authoring a good predicate is work. "executes without error + asserted invariants" is the pragmatic default. what does the in-editor ux for authoring a contract look like — a sibling cell? a stanza in the info string? a dedicated pane?
 - **who can seal whose output?** the author of the draft, obviously. a reviewer countersigning a seal for extra confidence — useful. an agent sealing — needs an audit trail but likely fine under the same thread model.
 - **kernel updates as their own ceremony?** bumping a python minor version drifts every cell. that's correct but noisy. probably a **kernel-bump** is a weave across all a manuscript's cells, re-seals in bulk, reviewable as one unit. worth prototyping.
 - **rendering unknown mime types?** pluggable renderers, but also a sane "code-repl scrollback" fallback so nothing breaks when a cell produces something weird.
