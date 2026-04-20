@@ -60,8 +60,7 @@ export function MarginRail({
     return (
       <div className="margin-rail rail-wrap" ref={railRef}>
         <div className="empty-rail">
-          edit anywhere in the manuscript. your changes become suggestions
-          in the margin.
+          edit to propose. submit when ready.
         </div>
       </div>
     );
