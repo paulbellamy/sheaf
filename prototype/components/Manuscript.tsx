@@ -4,6 +4,7 @@ import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { Extension } from "@tiptap/core";
 import { CodeBlockLowlight } from "@tiptap/extension-code-block-lowlight";
+import { TaskList, TaskItem } from "@tiptap/extension-list";
 import { ReactNodeViewRenderer } from "@tiptap/react";
 import { CodeBlockView } from "./CodeBlockView";
 import { TextSelection } from "@tiptap/pm/state";
@@ -86,6 +87,54 @@ function structuralLabelFor(trigger: MarkdownTrigger): string {
     case "codeBlock":
       return `¶ → code block${trigger.language ? ` (${trigger.language})` : ""}`;
   }
+}
+
+// Revert a block-level structural transition labeled "A → B" by applying
+// the command that restores state A. Returns true if a revert was applied.
+function revertBlockTransition(
+  editor: import("@tiptap/react").Editor,
+  label: string,
+  range: { from: number; to: number },
+): boolean {
+  const m = label.match(/^(.+?) → (.+)$/);
+  if (!m) return false;
+  const [, from, to] = m;
+
+  const docSize = editor.state.doc.content.size;
+  const pos = Math.min(Math.max(range.from, 0), docSize);
+  const chain = editor.chain().focus().setTextSelection(pos);
+
+  const headingFrom = from.match(/^H([1-6])$/);
+
+  // Apply the command that produces state `from` from current state `to`.
+  if (headingFrom) {
+    chain.setHeading({
+      level: parseInt(headingFrom[1], 10) as 1 | 2 | 3 | 4 | 5 | 6,
+    });
+  } else if (from === "¶") {
+    if (/^H[1-6]$/.test(to)) chain.setParagraph();
+    else if (to === "bullet list") chain.toggleBulletList();
+    else if (to === "numbered list") chain.toggleOrderedList();
+    else if (to === "task list") chain.toggleTaskList();
+    else if (to === "blockquote") chain.toggleBlockquote();
+    else if (to.startsWith("code block")) chain.toggleCodeBlock();
+    else return false;
+  } else if (from === "bullet list") {
+    chain.toggleBulletList();
+  } else if (from === "numbered list") {
+    chain.toggleOrderedList();
+  } else if (from === "task list") {
+    chain.toggleTaskList();
+  } else if (from === "blockquote") {
+    chain.toggleBlockquote();
+  } else if (from.startsWith("code block")) {
+    chain.toggleCodeBlock();
+  } else {
+    return false;
+  }
+
+  chain.run();
+  return true;
 }
 
 const MAX_INDENT = 6;
@@ -340,7 +389,61 @@ export function Manuscript() {
   const registerStructuralThread = useCallback(
     (label: string, range?: { from: number; to: number }) => {
       const id = newId("strc");
+      // Block-type transitions carry an arrow in their label ("¶ → H2",
+      // "bullet list → numbered list"). Formatting-mark labels do not.
+      const isBlockTransition = label.includes(" → ");
+      const parts = isBlockTransition ? label.match(/^(.+?) → (.+)$/) : null;
+      const newFrom = parts?.[1];
+      const newTo = parts?.[2];
+      let addedThread = false;
       setThreads((prev) => {
+        // Block transitions: diff is always "original state → current state".
+        // Any overlapping pending block-transition thread represents the
+        // same block; inherit its "from" (the original state) and purge it.
+        // If the inherited original equals the new target, the block is
+        // back to its baseline — emit no note.
+        if (isBlockTransition && range && newFrom && newTo) {
+          let inheritedFrom: string | null = null;
+          const remaining = prev.filter((t) => {
+            if (
+              t.kind !== "structural" ||
+              t.state !== "pending" ||
+              t.note !== ""
+            )
+              return true;
+            const r = t.structural?.range;
+            if (!r) return true;
+            const existingLabel = t.structural?.label ?? "";
+            if (!existingLabel.includes(" → ")) return true;
+            const overlaps =
+              Math.max(r.from, range.from) <= Math.min(r.to, range.to);
+            if (!overlaps) return true;
+            const m = existingLabel.match(/^(.+?) → (.+)$/);
+            if (m) inheritedFrom = m[1];
+            return false;
+          });
+          const effectiveFrom = inheritedFrom ?? newFrom;
+          if (effectiveFrom === newTo) {
+            return remaining;
+          }
+          addedThread = true;
+          return [
+            ...remaining,
+            {
+              id,
+              kind: "structural",
+              note: "",
+              state: "pending",
+              createdAt: Date.now(),
+              structural: {
+                label: `${effectiveFrom} → ${newTo}`,
+                range,
+              },
+            },
+          ];
+        }
+
+        // Formatting marks / label-only structural threads.
         let purgedSameLabel = false;
         const filtered = prev.filter((t) => {
           if (!range) return true;
@@ -356,6 +459,7 @@ export function Manuscript() {
           return false;
         });
         if (range && purgedSameLabel) return filtered;
+        addedThread = true;
         return [
           ...filtered,
           {
@@ -368,7 +472,8 @@ export function Manuscript() {
           },
         ];
       });
-      setActiveThreadId(id);
+      if (addedThread) setActiveThreadId(id);
+      else setActiveThreadId(null);
       editContextRef.current = null;
     },
     [],
@@ -396,6 +501,8 @@ export function Manuscript() {
       }),
       BlockIndent,
       CodeBlock,
+      TaskList,
+      TaskItem.configure({ nested: true }),
       ProposedDeletion,
       ProposedInsertion,
       ThreadInteraction.configure({
@@ -421,9 +528,15 @@ export function Manuscript() {
         const trigger = detectMarkdownTrigger(view.state.doc, from, text);
         if (trigger && from === to) {
           const label = structuralLabelFor(trigger);
+          const triggerPos = from;
           // Let default behaviour run so input rules fire. Schedule the
           // structural thread after the transaction settles.
-          queueMicrotask(() => registerStructuralThread(label));
+          queueMicrotask(() =>
+            registerStructuralThread(label, {
+              from: triggerPos,
+              to: triggerPos,
+            }),
+          );
           return false;
         }
 
@@ -845,6 +958,18 @@ export function Manuscript() {
       if (!target) return;
 
       if (target.kind !== "redline") {
+        // Dismissing a block-level structural note undoes the transform.
+        if (
+          target.kind === "structural" &&
+          target.structural?.range &&
+          target.structural.label.includes(" → ")
+        ) {
+          revertBlockTransition(
+            editor,
+            target.structural.label,
+            target.structural.range,
+          );
+        }
         setThreads((prev) => prev.filter((t) => t.id !== threadId));
         setActiveThreadId(null);
         return;
