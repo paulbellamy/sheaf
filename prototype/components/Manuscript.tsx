@@ -1104,6 +1104,7 @@ export function Manuscript({
     if (from === to) return;
     const threadId = newId("note");
     registerNoteThread(threadId, { from, to });
+    editor.commands.setTextSelection(to);
   }, [editor, registerNoteThread]);
 
   return (
