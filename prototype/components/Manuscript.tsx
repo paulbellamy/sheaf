@@ -249,7 +249,7 @@ function diffFormattingTokens(
   return diffs;
 }
 
-export function Manuscript() {
+export function Manuscript({ initialContent }: { initialContent?: string } = {}) {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
@@ -402,7 +402,7 @@ export function Manuscript() {
         onThreadClick: (id) => activateThread(id),
       }),
     ],
-    content: sampleManuscript,
+    content: initialContent ?? sampleManuscript,
     immediatelyRender: false,
     editorProps: {
       attributes: {

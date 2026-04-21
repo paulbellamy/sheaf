@@ -1320,3 +1320,198 @@ body {
   color: var(--redline);
   text-decoration: line-through;
 }
+
+/* ------------------------------------------------------------------ */
+/* doc shell — rail + main                                             */
+/* ------------------------------------------------------------------ */
+
+.doc-shell {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  min-height: 100vh;
+  font-size: 14px;
+}
+
+.doc-shell.collapsed {
+  grid-template-columns: 40px 1fr;
+}
+
+.doc-rail-wrap {
+  position: sticky;
+  top: 0;
+  max-height: 100vh;
+  border-right: 1px solid var(--rule);
+  display: flex;
+  flex-direction: column;
+}
+
+.doc-shell.collapsed .doc-rail-wrap {
+  align-items: center;
+}
+
+.doc-rail-wrap .review-rail {
+  border-right: none;
+  flex: 1;
+  min-height: 0;
+}
+
+.rail-toggle {
+  align-self: flex-end;
+  margin: 0.5rem 0.5rem 0;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.rail-toggle:hover {
+  border-color: var(--accent);
+  color: var(--ink);
+}
+
+.doc-shell.collapsed .rail-toggle {
+  align-self: center;
+}
+
+.doc-main {
+  padding: 3rem 2rem 5rem;
+  min-width: 0;
+}
+
+.doc-loading,
+.doc-error {
+  padding: 3rem 0;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.doc-error {
+  color: var(--redline);
+  font-style: normal;
+}
+
+.review-rail a {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--rule);
+  background: transparent;
+  border-radius: 4px;
+  padding: 0.55rem 0.7rem;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.review-rail a:hover {
+  border-color: var(--accent);
+}
+
+.review-rail li.selected a {
+  background: var(--card);
+  border-color: var(--accent);
+}
+
+/* ------------------------------------------------------------------ */
+/* dashboard                                                           */
+/* ------------------------------------------------------------------ */
+
+.dashboard {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.dashboard header {
+  margin-bottom: 2rem;
+}
+
+.dashboard header h1 {
+  font-size: 2rem;
+  margin: 0;
+}
+
+.dashboard header .muted {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin: 0.25rem 0 0;
+}
+
+.dashboard-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.dashboard-list li a {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.25rem 1rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.dashboard-list li a:hover {
+  border-color: var(--accent);
+  background: var(--card);
+}
+
+.dashboard-list .title {
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.dashboard-list .meta {
+  color: var(--muted);
+  font-size: 0.82rem;
+  justify-self: end;
+}
+
+.dashboard-list .path {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  grid-column: 1 / -1;
+}
+
+.dashboard-section {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin: 1.6rem 0 0.6rem;
+  font-weight: 600;
+}
+
+.dashboard-list .title .pill {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.08rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border: 1px solid var(--rule);
+  color: var(--muted);
+  vertical-align: middle;
+}
+
+.dashboard-list .pill-submitted {
+  color: var(--accent);
+  border-color: var(--accent);
+}
