@@ -1074,19 +1074,8 @@ body {
 }
 
 /* ------------------------------------------------------------------ */
-/* /review — inspect drafts produced by agents via MCP                 */
+/* doc rail — shared list of docs + drafts                             */
 /* ------------------------------------------------------------------ */
-
-.review-root {
-  min-height: 100vh;
-}
-
-.review-shell {
-  display: grid;
-  grid-template-columns: 340px 1fr;
-  min-height: 100vh;
-  font-size: 14px;
-}
 
 .review-rail {
   border-right: 1px solid var(--rule);
@@ -1112,40 +1101,6 @@ body {
   display: flex;
   align-items: center;
   gap: 0.35rem;
-}
-
-.stream-dot {
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--muted);
-}
-
-.stream-dot.stream-live {
-  background: var(--insertion);
-  box-shadow: 0 0 0 0 rgba(15, 81, 50, 0.35);
-  animation: stream-pulse 1.8s ease-out infinite;
-}
-
-.stream-dot.stream-connecting {
-  background: var(--accent);
-}
-
-.stream-dot.stream-fallback {
-  background: var(--redline);
-}
-
-@keyframes stream-pulse {
-  0% {
-    box-shadow: 0 0 0 0 rgba(15, 81, 50, 0.35);
-  }
-  70% {
-    box-shadow: 0 0 0 7px rgba(15, 81, 50, 0);
-  }
-  100% {
-    box-shadow: 0 0 0 0 rgba(15, 81, 50, 0);
-  }
 }
 
 .review-rail h3 {
@@ -1212,114 +1167,6 @@ body {
   border-radius: 4px;
   margin-bottom: 0.8rem;
   font-size: 0.8rem;
-}
-
-.review-pane {
-  padding: 2rem 2.5rem;
-  max-width: 900px;
-  overflow-x: auto;
-}
-
-.review-empty {
-  color: var(--muted);
-  font-style: italic;
-  padding: 3rem 0;
-}
-
-.review-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 2rem;
-  border-bottom: 1px solid var(--rule);
-  padding-bottom: 1rem;
-  margin-bottom: 1.5rem;
-}
-
-.review-head h1 {
-  font-size: 1.35rem;
-  margin: 0 0 0.25rem;
-}
-
-.review-head .muted {
-  color: var(--muted);
-  font-size: 0.82rem;
-}
-
-.review-actions {
-  display: flex;
-  gap: 0.5rem;
-}
-
-.review-actions button {
-  padding: 0.45rem 1rem;
-  border-radius: 4px;
-  font-family: inherit;
-  font-size: 0.9rem;
-  cursor: pointer;
-  border: 1px solid var(--rule);
-  background: var(--paper);
-}
-
-.review-actions button.accept {
-  color: var(--insertion);
-  border-color: var(--insertion);
-}
-
-.review-actions button.accept:hover:not(:disabled) {
-  background: var(--insertion-bg);
-}
-
-.review-actions button.decline {
-  color: var(--redline);
-  border-color: var(--redline);
-}
-
-.review-actions button.decline:hover:not(:disabled) {
-  background: var(--redline-bg);
-}
-
-.review-actions button:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-}
-
-.diff-block + .diff-block {
-  margin-top: 2rem;
-}
-
-.diff-path {
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  font-size: 0.85rem;
-  color: var(--muted);
-  margin: 0 0 0.4rem;
-}
-
-.diff {
-  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-  font-size: 13px;
-  line-height: 1.55;
-  background: var(--card);
-  border: 1px solid var(--rule);
-  border-radius: 4px;
-  padding: 0.8rem 1rem;
-  white-space: pre-wrap;
-  overflow-x: auto;
-}
-
-.diff-row {
-  display: inline;
-}
-
-.diff-add {
-  background: var(--insertion-bg);
-  color: var(--insertion);
-}
-
-.diff-del {
-  background: var(--redline-bg);
-  color: var(--redline);
-  text-decoration: line-through;
 }
 
 /* ------------------------------------------------------------------ */

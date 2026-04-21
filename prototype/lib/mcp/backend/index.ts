@@ -106,6 +106,7 @@ export type Thread = {
   id: ThreadId;
   created: number;
   status: ThreadStatus;
+  draft_id?: DraftId;
   targets: ThreadTarget[];
   messages: ThreadMessage[];
 };
@@ -114,6 +115,7 @@ export type ThreadSummary = {
   id: ThreadId;
   status: ThreadStatus;
   created: number;
+  draft_id?: DraftId;
   target_paths: DocPath[];
   message_count: number;
   last_message_preview: string;
@@ -171,6 +173,7 @@ export interface Backend {
   listThreads(opts: {
     path?: DocPath;
     thread_id?: ThreadId;
+    ref?: Ref;
   }): Promise<ThreadSummary[]>;
 
   readThread(id: ThreadId): Promise<Thread>;
@@ -180,6 +183,7 @@ export interface Backend {
     message: string;
     author?: string;
     draft?: ThreadDraftBody;
+    ref?: Ref;
   }): Promise<ThreadId>;
 
   replyThread(
@@ -193,7 +197,7 @@ export interface Backend {
   /**
    * Subscribe to mutation events. Returns an unsubscribe function.
    *
-   * Used by the SSE route to push live updates to the /review browser UI.
+   * Used by the SSE route to push live updates to the /doc browser UI.
    * Emitted from any mutation that changes what a reviewer would see:
    * Fork, Write, Edit, Propose, Merge, declineDraft.
    */

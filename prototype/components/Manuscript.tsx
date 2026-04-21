@@ -15,6 +15,9 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 
 import { newId, type Thread } from "@/lib/types";
 import { sampleManuscript } from "@/lib/sampleText";
+import { rangeToAnchor } from "@/lib/md-anchor";
+import { backendSummaryToUiThread } from "@/lib/threads-adapter";
+import type { ThreadSummary } from "@/lib/mcp/backend";
 import {
   ProposedDeletion,
   findThreadRange,
@@ -249,12 +252,28 @@ function diffFormattingTokens(
   return diffs;
 }
 
-export function Manuscript({ initialContent }: { initialContent?: string } = {}) {
+type ManuscriptProps = {
+  initialContent?: string;
+  md?: string;
+  docPath?: string;
+  docRef?: string;
+};
+
+export function Manuscript({
+  initialContent,
+  md,
+  docPath,
+  docRef = "main",
+}: ManuscriptProps = {}) {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
   const [showReview, setShowReview] = useState(false);
   const [, bumpLayout] = useState(0);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [draftBusy, setDraftBusy] = useState(false);
+  const mdRef = useRef<string>(md ?? "");
+  mdRef.current = md ?? "";
 
   const editContextRef = useRef<EditContext | null>(null);
   const manuscriptRef = useRef<HTMLDivElement | null>(null);
@@ -705,6 +724,48 @@ export function Manuscript({ initialContent }: { initialContent?: string } = {})
     return () => window.removeEventListener("resize", onResize);
   }, []);
 
+  // Hydrate server threads on mount and whenever doc/ref changes. Server
+  // threads are rendered as submitted note-cards; they coexist with local
+  // pending threads keyed by distinct id prefixes.
+  useEffect(() => {
+    if (!docPath) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const r = await fetch(
+          `/api/ui/threads?path=${encodeURIComponent(docPath)}&ref=${encodeURIComponent(docRef)}`,
+          { cache: "no-store" },
+        );
+        if (!r.ok) return;
+        const body = (await r.json()) as { threads: ThreadSummary[] };
+        if (cancelled) return;
+        const server = body.threads.map(backendSummaryToUiThread);
+        const serverIds = new Set(server.map((t) => t.id));
+        setThreads((prev) => [
+          ...prev.filter((t) => !serverIds.has(t.id)),
+          ...server,
+        ]);
+      } catch {
+        // silent — SSE will retry; user-visible errors surface on submit.
+      }
+    };
+    void load();
+
+    const source = new EventSource("/api/ui/drafts/stream");
+    source.onmessage = (msg) => {
+      try {
+        const event = JSON.parse(msg.data) as { kind: string };
+        if (event.kind === "thread_changed") void load();
+      } catch {
+        /* ignore */
+      }
+    };
+    return () => {
+      cancelled = true;
+      source.close();
+    };
+  }, [docPath, docRef]);
+
   // Global keyboard: "?" toggles help, Esc closes panels.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -888,16 +949,107 @@ export function Manuscript({ initialContent }: { initialContent?: string } = {})
     [editor, threads, getThreadView],
   );
 
-  const submitReview = useCallback((coverNote: string) => {
-    setThreads((prev) =>
-      prev.map((t) => {
-        if (t.state !== "pending") return t;
-        const note = coverNote && !t.note ? coverNote : t.note;
-        return { ...t, state: "submitted", note };
-      }),
-    );
-    setShowReview(false);
-  }, []);
+  const submitReview = useCallback(
+    async (coverNote: string) => {
+      setSubmitError(null);
+      const pending = threads.filter((t) => t.state === "pending");
+      if (!docPath) {
+        // No backend binding: fall back to local-only toggle.
+        setThreads((prev) =>
+          prev.map((t) => {
+            if (t.state !== "pending") return t;
+            const note = coverNote && !t.note ? coverNote : t.note;
+            return { ...t, state: "submitted", note };
+          }),
+        );
+        setShowReview(false);
+        return;
+      }
+      if (!editor) return;
+
+      const rangeFor = (t: Thread): { from: number; to: number } | null => {
+        if (t.kind === "note" && t.anchor) return t.anchor;
+        if (t.kind === "structural" && t.structural?.range)
+          return t.structural.range;
+        if (t.kind === "redline") {
+          const view = getThreadView(t.id);
+          const a = view?.del?.from ?? view?.ins?.from;
+          const b = view?.del?.to ?? view?.ins?.to;
+          if (a !== undefined && b !== undefined) return { from: a, to: b };
+        }
+        return null;
+      };
+
+      const failures: string[] = [];
+      const acceptedIds: string[] = [];
+      for (const t of pending) {
+        const range = rangeFor(t);
+        if (!range) {
+          failures.push(`${t.kind} thread has no anchor`);
+          continue;
+        }
+        const anchor = rangeToAnchor(editor, mdRef.current, range.from, range.to);
+        if (!anchor) {
+          failures.push(`could not locate "${t.note || t.kind}" in markdown`);
+          continue;
+        }
+        const message = t.note || coverNote || `(${t.kind})`;
+        try {
+          const r = await fetch(
+            `/api/ui/threads?ref=${encodeURIComponent(docRef)}`,
+            {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                path: docPath,
+                message,
+                targets: [{ char_range: anchor.char_range }],
+              }),
+            },
+          );
+          if (!r.ok) {
+            const body = (await r.json().catch(() => ({}))) as {
+              error?: string;
+            };
+            failures.push(body.error ?? `HTTP ${r.status}`);
+            continue;
+          }
+          acceptedIds.push(t.id);
+        } catch (e) {
+          failures.push(e instanceof Error ? e.message : String(e));
+        }
+      }
+
+      setThreads((prev) => prev.filter((t) => !acceptedIds.includes(t.id)));
+      if (failures.length === 0) {
+        setShowReview(false);
+      } else {
+        setSubmitError(failures.join("; "));
+      }
+    },
+    [threads, docPath, docRef, editor, getThreadView],
+  );
+
+  const actOnDraft = useCallback(
+    async (kind: "accept" | "decline") => {
+      if (docRef === "main") return;
+      setDraftBusy(true);
+      try {
+        const r = await fetch(`/api/ui/drafts/${docRef}/${kind}`, {
+          method: "POST",
+        });
+        if (!r.ok) {
+          const body = (await r.json().catch(() => ({}))) as { error?: string };
+          setSubmitError(body.error ?? `${kind} failed`);
+        }
+      } catch (e) {
+        setSubmitError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setDraftBusy(false);
+      }
+    },
+    [docRef],
+  );
 
   const pendingThreads = useMemo(
     () => threads.filter((t) => t.state === "pending"),
@@ -915,20 +1067,57 @@ export function Manuscript({ initialContent }: { initialContent?: string } = {})
   return (
     <>
       <header className="page-header">
-        <span className="title">sheaf · redline prototype</span>
-        <span>
-          edit anywhere — your changes become suggestions. press{" "}
-          <button
-            type="button"
-            className="help-key-btn"
-            onClick={() => setShowHelp(true)}
-            aria-label="open help"
-          >
-            <kbd>?</kbd>
-          </button>{" "}
-          for help.
+        <span className="title">
+          {docRef !== "main" ? `draft · ${docPath ?? ""}` : "sheaf · redline prototype"}
+        </span>
+        <span className="page-header-right">
+          {docRef !== "main" ? (
+            <>
+              <button
+                type="button"
+                className="draft-accept"
+                disabled={draftBusy}
+                onClick={() => void actOnDraft("accept")}
+              >
+                accept draft
+              </button>
+              <button
+                type="button"
+                className="draft-decline"
+                disabled={draftBusy}
+                onClick={() => void actOnDraft("decline")}
+              >
+                decline draft
+              </button>
+            </>
+          ) : (
+            <>
+              edit anywhere — your changes become suggestions. press{" "}
+              <button
+                type="button"
+                className="help-key-btn"
+                onClick={() => setShowHelp(true)}
+                aria-label="open help"
+              >
+                <kbd>?</kbd>
+              </button>{" "}
+              for help.
+            </>
+          )}
         </span>
       </header>
+      {submitError ? (
+        <div className="submit-error" role="alert">
+          {submitError}
+          <button
+            type="button"
+            onClick={() => setSubmitError(null)}
+            aria-label="dismiss"
+          >
+            ×
+          </button>
+        </div>
+      ) : null}
       <div className="layout">
         <div className="manuscript-wrap" ref={manuscriptRef}>
           <div className="manuscript">

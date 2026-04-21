@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 /**
- * SSE stream of backend mutation events. The /review page opens an
+ * SSE stream of backend mutation events. The /doc page opens an
  * EventSource against this route and refetches list/detail on each event.
  *
  * Events are plain JSON matching `BackendEvent` from backend/index.ts.

@@ -45,6 +45,13 @@ export function DocView({
   );
 
   if (error) return <div className="doc-error">{error}</div>;
-  if (!html) return <div className="doc-loading">loading {path}…</div>;
-  return <Manuscript initialContent={html} />;
+  if (!html || !data) return <div className="doc-loading">loading {path}…</div>;
+  return (
+    <Manuscript
+      initialContent={html}
+      md={data.md}
+      docPath={path}
+      docRef={docRef ?? "main"}
+    />
+  );
 }

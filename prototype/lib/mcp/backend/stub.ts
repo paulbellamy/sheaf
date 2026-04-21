@@ -33,7 +33,8 @@ import { McpError, err } from "../errors";
  *   workspaces/<ws>/docs/<name>.md
  *   workspaces/<ws>/docs/<name>.threads/thrd_<id>.yaml
  *   .drafts/<draft_id>/meta.json
- *   .drafts/<draft_id>/workspaces/<ws>/docs/<name>.md    # changed files only
+ *   .drafts/<draft_id>/workspaces/<ws>/docs/<name>.md         # changed files only
+ *   .drafts/<draft_id>/workspaces/<ws>/docs/<name>.threads/thrd_<id>.yaml
  *   .op_log.json
  *
  * No yjs, no git, no case-2 sync. Every "commit" is a new uuid so clients
@@ -601,14 +602,21 @@ export class StubBackend implements Backend {
     return out.sort((a, b) => b.created_at - a.created_at);
   }
 
-  private threadSidecarPath(docPath: DocPath, threadId: ThreadId): string {
-    const base = docPath.replace(/\.md$/, ".threads");
-    return path.join(this.root, base, `${threadId}.yaml`);
+  private threadSidecarPath(homeDoc: DocPath, t: Thread): string {
+    const base = homeDoc.replace(/\.md$/, ".threads");
+    const file = `${t.id}.yaml`;
+    if (t.draft_id) {
+      return path.join(this.root, ".drafts", t.draft_id, base, file);
+    }
+    return path.join(this.root, base, file);
   }
 
   private async allThreadFiles(): Promise<string[]> {
-    const all = await walk(path.join(this.root, "workspaces"));
-    return all.filter((f) => /\.threads\/thrd_[A-Za-z0-9-]+\.yaml$/.test(f));
+    const mainFiles = await walk(path.join(this.root, "workspaces"));
+    const draftFiles = await walk(path.join(this.root, ".drafts"));
+    return [...mainFiles, ...draftFiles].filter((f) =>
+      /\.threads\/thrd_[A-Za-z0-9-]+\.yaml$/.test(f),
+    );
   }
 
   private async loadThread(id: ThreadId): Promise<Thread> {
@@ -622,8 +630,11 @@ export class StubBackend implements Backend {
     throw err.threadNotFound(id);
   }
 
-  private async saveThread(homeDoc: DocPath, t: Thread): Promise<void> {
-    const sidecar = this.threadSidecarPath(homeDoc, t.id);
+  private async saveThread(t: Thread): Promise<void> {
+    if (t.targets.length === 0) {
+      throw new McpError("invalid_path", "thread has no targets to save");
+    }
+    const sidecar = this.threadSidecarPath(t.targets[0].path, t);
     await this.ensureDir(path.dirname(sidecar));
     await fs.writeFile(sidecar, yaml.stringify(t), "utf8");
   }
@@ -631,13 +642,17 @@ export class StubBackend implements Backend {
   async listThreads(opts: {
     path?: DocPath;
     thread_id?: ThreadId;
+    ref?: Ref;
   }): Promise<ThreadSummary[]> {
     const files = await this.allThreadFiles();
+    const wantDraftId =
+      opts.ref === undefined || opts.ref === "main" ? undefined : opts.ref;
     const out: ThreadSummary[] = [];
     for (const f of files) {
       const raw = await fs.readFile(f, "utf8");
       const t = yaml.parse(raw) as Thread;
       if (opts.thread_id && t.id !== opts.thread_id) continue;
+      if (opts.ref !== undefined && t.draft_id !== wantDraftId) continue;
       const paths = t.targets.map((tg) => tg.path);
       if (opts.path && !paths.includes(opts.path)) continue;
       const last = t.messages[t.messages.length - 1];
@@ -645,6 +660,7 @@ export class StubBackend implements Backend {
         id: t.id,
         status: t.status,
         created: t.created,
+        draft_id: t.draft_id,
         target_paths: paths,
         message_count: t.messages.length,
         last_message_preview: last
@@ -664,15 +680,23 @@ export class StubBackend implements Backend {
     message: string;
     author?: string;
     draft?: ThreadDraftBody;
+    ref?: Ref;
   }): Promise<ThreadId> {
     return this.withLock(async () => {
       if (opts.targets.length === 0) {
         throw new McpError("invalid_path", "at least one target is required");
       }
+      const ref: Ref = opts.ref ?? "main";
+      let draftId: DraftId | undefined;
+      if (ref !== "main") {
+        assertDraftRef(ref);
+        await this.loadDraftMeta(ref);
+        draftId = ref;
+      }
       const id: ThreadId = `thrd_${randomUUID()}`;
       const targets: Thread["targets"] = [];
       for (const t of opts.targets) {
-        const { md } = await this.readDoc(t.path, "main");
+        const { md } = await this.readDoc(t.path, ref);
         const from = Math.max(0, Math.min(t.char_range.from, md.length));
         const to = Math.max(from, Math.min(t.char_range.to, md.length));
         const anchored = md.slice(from, to);
@@ -697,6 +721,7 @@ export class StubBackend implements Backend {
         id,
         created: now,
         status: "open",
+        draft_id: draftId,
         targets,
         messages: [
           {
@@ -707,7 +732,7 @@ export class StubBackend implements Backend {
           },
         ],
       };
-      await this.saveThread(opts.targets[0].path, thread);
+      await this.saveThread(thread);
       this.emit({ kind: "thread_changed", thread_id: id });
       return id;
     });
@@ -726,7 +751,7 @@ export class StubBackend implements Backend {
         body: message,
         draft: opts?.draft,
       });
-      await this.saveThread(thread.targets[0].path, thread);
+      await this.saveThread(thread);
       this.emit({ kind: "thread_changed", thread_id: id });
     });
   }
@@ -735,7 +760,7 @@ export class StubBackend implements Backend {
     return this.withLock(async () => {
       const thread = await this.loadThread(id);
       thread.status = "accepted";
-      await this.saveThread(thread.targets[0].path, thread);
+      await this.saveThread(thread);
       this.emit({ kind: "thread_changed", thread_id: id });
     });
   }

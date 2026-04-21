@@ -6,6 +6,7 @@ import {
   anchorSchema,
   authorArg,
   pathArg,
+  refOptionalArg,
   threadDraftSchema,
   threadIdArg,
 } from "../schemas";
@@ -29,14 +30,16 @@ export function registerThreadTools(
       inputSchema: {
         path: pathArg.optional(),
         thread_id: threadIdArg.optional(),
+        ref: refOptionalArg,
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ path: p, thread_id }) => {
+    async ({ path: p, thread_id, ref }) => {
       try {
         const threads = await backend.listThreads({
           path: p,
           thread_id,
+          ref,
         });
         const text = threads
           .map(
@@ -97,16 +100,18 @@ export function registerThreadTools(
         message: z.string().min(1).describe("First message in the thread."),
         author: authorArg,
         draft: threadDraftSchema.optional(),
+        ref: refOptionalArg,
       },
       annotations: { readOnlyHint: false, openWorldHint: false },
     },
-    async ({ targets, message, author, draft }) => {
+    async ({ targets, message, author, draft, ref }) => {
       try {
         const id = await backend.addThread({
           targets,
           message,
           author,
           draft,
+          ref,
         });
         return {
           content: [{ type: "text", text: `created thread ${id}` }],
