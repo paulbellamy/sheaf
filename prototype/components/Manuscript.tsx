@@ -739,12 +739,22 @@ export function Manuscript({
         if (!r.ok) return;
         const body = (await r.json()) as { threads: ThreadSummary[] };
         if (cancelled) return;
-        const server = body.threads.map(backendSummaryToUiThread);
+        const server = body.threads
+          .filter((t) => t.status === "open")
+          .map(backendSummaryToUiThread);
         const serverIds = new Set(server.map((t) => t.id));
-        setThreads((prev) => [
-          ...prev.filter((t) => !serverIds.has(t.id)),
-          ...server,
-        ]);
+        setThreads((prev) => {
+          const merged = [
+            ...prev.filter((t) => !serverIds.has(t.id)),
+            ...server,
+          ];
+          const seen = new Set<string>();
+          return merged.filter((t) => {
+            if (seen.has(t.id)) return false;
+            seen.add(t.id);
+            return true;
+          });
+        });
       } catch {
         // silent — SSE will retry; user-visible errors surface on submit.
       }
@@ -862,11 +872,20 @@ export function Manuscript({
     );
   }, []);
 
+  const resolveOnServer = useCallback(async (threadId: string) => {
+    try {
+      await fetch(`/api/ui/threads/${threadId}/resolve`, { method: "POST" });
+    } catch {
+      // Server-side resolution is best-effort; local dismissal already ran.
+    }
+  }, []);
+
   const acceptThread = useCallback(
     (threadId: string) => {
       if (!editor) return;
       const target = threads.find((t) => t.id === threadId);
       if (!target) return;
+      if (target.state !== "pending") void resolveOnServer(threadId);
 
       if (target.kind !== "redline") {
         // Structural + note threads: accept = dismiss card.
@@ -904,7 +923,7 @@ export function Manuscript({
         editContextRef.current = null;
       }
     },
-    [editor, threads, getThreadView],
+    [editor, threads, getThreadView, resolveOnServer],
   );
 
   const declineThread = useCallback(
@@ -912,6 +931,7 @@ export function Manuscript({
       if (!editor) return;
       const target = threads.find((t) => t.id === threadId);
       if (!target) return;
+      if (target.state !== "pending") void resolveOnServer(threadId);
 
       if (target.kind !== "redline") {
         setThreads((prev) => prev.filter((t) => t.id !== threadId));
@@ -946,12 +966,13 @@ export function Manuscript({
         editContextRef.current = null;
       }
     },
-    [editor, threads, getThreadView],
+    [editor, threads, getThreadView, resolveOnServer],
   );
 
   const submitReview = useCallback(
     async (coverNote: string) => {
       setSubmitError(null);
+      setShowReview(false);
       const pending = threads.filter((t) => t.state === "pending");
       if (!docPath) {
         // No backend binding: fall back to local-only toggle.
@@ -962,7 +983,6 @@ export function Manuscript({
             return { ...t, state: "submitted", note };
           }),
         );
-        setShowReview(false);
         return;
       }
       if (!editor) return;
@@ -981,18 +1001,10 @@ export function Manuscript({
       };
 
       const failures: string[] = [];
-      const acceptedIds: string[] = [];
+      const rekey: Array<{ from: string; to: string }> = [];
       for (const t of pending) {
-        const range = rangeFor(t);
-        if (!range) {
-          failures.push(`${t.kind} thread has no anchor`);
-          continue;
-        }
+        const range = rangeFor(t) ?? { from: 0, to: 0 };
         const anchor = rangeToAnchor(editor, mdRef.current, range.from, range.to);
-        if (!anchor) {
-          failures.push(`could not locate "${t.note || t.kind}" in markdown`);
-          continue;
-        }
         const message = t.note || coverNote || `(${t.kind})`;
         try {
           const r = await fetch(
@@ -1014,18 +1026,47 @@ export function Manuscript({
             failures.push(body.error ?? `HTTP ${r.status}`);
             continue;
           }
-          acceptedIds.push(t.id);
+          const body = (await r.json()) as { thread_id: string };
+          rekey.push({ from: t.id, to: body.thread_id });
         } catch (e) {
           failures.push(e instanceof Error ? e.message : String(e));
         }
       }
 
-      setThreads((prev) => prev.filter((t) => !acceptedIds.includes(t.id)));
-      if (failures.length === 0) {
-        setShowReview(false);
-      } else {
-        setSubmitError(failures.join("; "));
+      // Rename PM marks so redline anchors stay wired to the new server id.
+      if (rekey.length > 0) {
+        const schema = editor.state.schema;
+        const insType = schema.marks.proposedInsertion;
+        const delType = schema.marks.proposedDeletion;
+        const map = new Map(rekey.map((r) => [r.from, r.to]));
+        let tr = editor.state.tr;
+        editor.state.doc.descendants((node, pos) => {
+          if (!node.isText) return true;
+          for (const m of node.marks) {
+            if (m.type !== insType && m.type !== delType) continue;
+            const next = map.get(m.attrs.threadId as string);
+            if (!next) continue;
+            tr = tr.removeMark(pos, pos + node.nodeSize, m.type);
+            tr = tr.addMark(
+              pos,
+              pos + node.nodeSize,
+              m.type.create({ threadId: next }),
+            );
+          }
+          return true;
+        });
+        if (tr.steps.length > 0) editor.view.dispatch(tr);
       }
+
+      setThreads((prev) => {
+        const map = new Map(rekey.map((r) => [r.from, r.to]));
+        return prev.map((t) => {
+          const next = map.get(t.id);
+          if (!next) return t;
+          return { ...t, id: next, state: "submitted" };
+        });
+      });
+      if (failures.length > 0) setSubmitError(failures.join("; "));
     },
     [threads, docPath, docRef, editor, getThreadView],
   );

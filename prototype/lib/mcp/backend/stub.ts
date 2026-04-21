@@ -619,12 +619,25 @@ export class StubBackend implements Backend {
     );
   }
 
+  // The file's on-disk location is authoritative: a thread under .drafts/<id>/
+  // is scoped to that draft, everything else is main. The YAML may carry a
+  // stale draft_id from a pre-fix run; trust the path instead.
+  private draftIdFromFilePath(file: string): DraftId | undefined {
+    const rel = path.relative(this.root, file);
+    const parts = rel.split(path.sep);
+    if (parts[0] !== ".drafts") return undefined;
+    const id = parts[1];
+    return id && DRAFT_ID_RE.test(id) ? id : undefined;
+  }
+
   private async loadThread(id: ThreadId): Promise<Thread> {
     const files = await this.allThreadFiles();
     for (const f of files) {
       if (path.basename(f) === `${id}.yaml`) {
         const raw = await fs.readFile(f, "utf8");
-        return yaml.parse(raw) as Thread;
+        const t = yaml.parse(raw) as Thread;
+        t.draft_id = this.draftIdFromFilePath(f);
+        return t;
       }
     }
     throw err.threadNotFound(id);
@@ -651,8 +664,9 @@ export class StubBackend implements Backend {
     for (const f of files) {
       const raw = await fs.readFile(f, "utf8");
       const t = yaml.parse(raw) as Thread;
+      const draftId = this.draftIdFromFilePath(f);
       if (opts.thread_id && t.id !== opts.thread_id) continue;
-      if (opts.ref !== undefined && t.draft_id !== wantDraftId) continue;
+      if (opts.ref !== undefined && draftId !== wantDraftId) continue;
       const paths = t.targets.map((tg) => tg.path);
       if (opts.path && !paths.includes(opts.path)) continue;
       const last = t.messages[t.messages.length - 1];
@@ -660,7 +674,7 @@ export class StubBackend implements Backend {
         id: t.id,
         status: t.status,
         created: t.created,
-        draft_id: t.draft_id,
+        draft_id: draftId,
         target_paths: paths,
         message_count: t.messages.length,
         last_message_preview: last
