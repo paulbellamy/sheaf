@@ -1,10 +1,6 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
-import * as yaml from "yaml";
-import { promises as fs } from "node:fs";
-import * as path from "node:path";
-
 import type { Backend } from "../backend/index";
 import { pathArg, refOptionalArg } from "../schemas";
 import { toToolError } from "../errors";
@@ -12,8 +8,8 @@ import { toToolError } from "../errors";
 /**
  * Read — mirrors Claude Code's Read for sheaf docs.
  *
- * Extra: `ref` selects main or a draft. Thread sidecar yaml files are readable
- * directly so agents can inspect threads as plain text if they want.
+ * `ref` selects main or a draft. Threads are not exposed through Read;
+ * use ListThreads / ReadThread.
  */
 export function registerRead(server: McpServer, backend: Backend): void {
   server.registerTool(
@@ -21,7 +17,7 @@ export function registerRead(server: McpServer, backend: Backend): void {
     {
       title: "Read",
       description:
-        "Read a sheaf doc's markdown, or a thread sidecar yaml file. Pass ref to read from a draft; omit for main.",
+        "Read a sheaf doc's markdown. Pass ref to read from a draft; omit for main.",
       inputSchema: {
         file_path: pathArg,
         offset: z
@@ -42,16 +38,6 @@ export function registerRead(server: McpServer, backend: Backend): void {
     },
     async ({ file_path, offset, limit, ref }) => {
       try {
-        if (file_path.includes(".threads/") && file_path.endsWith(".yaml")) {
-          const root =
-            process.env.SHEAF_DATA_ROOT ?? path.join(process.cwd(), "data");
-          const abs = path.join(root, file_path);
-          const raw = await fs.readFile(abs, "utf8");
-          yaml.parse(raw);
-          return {
-            content: [{ type: "text", text: sliceText(raw, offset, limit) }],
-          };
-        }
         const { md, ycrdt_version, head_commit } = await backend.readDoc(
           file_path,
           ref,

@@ -159,7 +159,14 @@ export interface Backend {
 
   merge(draftId: DraftId): Promise<{ commit: string }>;
 
+  declineDraft(draftId: DraftId): Promise<void>;
+
   listDrafts(path?: DocPath): Promise<DraftSummary[]>;
+
+  /** Files changed in a draft relative to main, for UI diff rendering. */
+  draftChanges(
+    draftId: DraftId,
+  ): Promise<{ path: DocPath; main_md: string; draft_md: string }[]>;
 
   listThreads(opts: {
     path?: DocPath;

@@ -1071,3 +1071,215 @@ body {
 .link-row {
   padding: 0 0.15rem;
 }
+
+/* ------------------------------------------------------------------ */
+/* /review — inspect drafts produced by agents via MCP                 */
+/* ------------------------------------------------------------------ */
+
+.review-root {
+  min-height: 100vh;
+}
+
+.review-shell {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  min-height: 100vh;
+  font-size: 14px;
+}
+
+.review-rail {
+  border-right: 1px solid var(--rule);
+  padding: 1.5rem 1.25rem;
+  overflow-y: auto;
+  max-height: 100vh;
+  position: sticky;
+  top: 0;
+}
+
+.review-rail header {
+  margin-bottom: 1rem;
+}
+
+.review-rail h2 {
+  font-size: 1.4rem;
+  margin: 0;
+}
+
+.review-rail .muted {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.review-rail h3 {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin: 1.2rem 0 0.5rem;
+}
+
+.review-rail ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.review-rail li {
+  margin-bottom: 0.35rem;
+}
+
+.review-rail li.selected button {
+  background: var(--card);
+  border-color: var(--accent);
+}
+
+.review-rail li button {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--rule);
+  background: transparent;
+  border-radius: 4px;
+  padding: 0.55rem 0.7rem;
+  cursor: pointer;
+  font-family: inherit;
+  color: var(--ink);
+}
+
+.review-rail li button:hover {
+  border-color: var(--accent);
+}
+
+.review-rail .title {
+  font-weight: 600;
+}
+
+.review-rail .meta,
+.review-rail .hint {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.review-rail .hint {
+  font-style: italic;
+  margin-top: 0.2rem;
+}
+
+.review-err {
+  background: var(--redline-bg);
+  color: var(--redline);
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--redline);
+  border-radius: 4px;
+  margin-bottom: 0.8rem;
+  font-size: 0.8rem;
+}
+
+.review-pane {
+  padding: 2rem 2.5rem;
+  max-width: 900px;
+  overflow-x: auto;
+}
+
+.review-empty {
+  color: var(--muted);
+  font-style: italic;
+  padding: 3rem 0;
+}
+
+.review-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 2rem;
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.review-head h1 {
+  font-size: 1.35rem;
+  margin: 0 0 0.25rem;
+}
+
+.review-head .muted {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.review-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.review-actions button {
+  padding: 0.45rem 1rem;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+  border: 1px solid var(--rule);
+  background: var(--paper);
+}
+
+.review-actions button.accept {
+  color: var(--insertion);
+  border-color: var(--insertion);
+}
+
+.review-actions button.accept:hover:not(:disabled) {
+  background: var(--insertion-bg);
+}
+
+.review-actions button.decline {
+  color: var(--redline);
+  border-color: var(--redline);
+}
+
+.review-actions button.decline:hover:not(:disabled) {
+  background: var(--redline-bg);
+}
+
+.review-actions button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.diff-block + .diff-block {
+  margin-top: 2rem;
+}
+
+.diff-path {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin: 0 0 0.4rem;
+}
+
+.diff {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.55;
+  background: var(--card);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 0.8rem 1rem;
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
+
+.diff-row {
+  display: inline;
+}
+
+.diff-add {
+  background: var(--insertion-bg);
+  color: var(--insertion);
+}
+
+.diff-del {
+  background: var(--redline-bg);
+  color: var(--redline);
+  text-decoration: line-through;
+}

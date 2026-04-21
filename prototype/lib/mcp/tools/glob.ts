@@ -6,8 +6,8 @@ import { refOptionalArg } from "../schemas";
 import { toToolError } from "../errors";
 
 /**
- * Glob — mirrors Claude Code's Glob. Matches paths inside the sheaf repo
- * (workspaces/**.md + thread sidecars).
+ * Glob — mirrors Claude Code's Glob. Matches paths under workspaces/**.md.
+ * Threads are surfaced via ListThreads / ReadThread, not Glob.
  */
 export function registerGlob(server: McpServer, backend: Backend): void {
   server.registerTool(

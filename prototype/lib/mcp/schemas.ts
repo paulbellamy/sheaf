@@ -9,7 +9,7 @@ export const pathArg = z
   .string()
   .min(1)
   .describe(
-    "Repo-root-relative doc path, e.g. 'workspaces/infra/docs/proposal.md'. Thread sidecar yaml files (…/<doc>.threads/thrd_<id>.yaml) are also readable.",
+    "Repo-root-relative doc path, e.g. 'workspaces/infra/docs/proposal.md'.",
   );
 
 export const refArg = z

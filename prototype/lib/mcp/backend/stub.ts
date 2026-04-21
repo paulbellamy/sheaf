@@ -495,6 +495,36 @@ export class StubBackend implements Backend {
     });
   }
 
+  declineDraft(draftId: DraftId): Promise<void> {
+    return this.withLock(async () => {
+      const meta = await this.loadDraftMeta(draftId);
+      meta.state = "declined";
+      await this.saveDraftMeta(meta);
+    });
+  }
+
+  async draftChanges(
+    draftId: DraftId,
+  ): Promise<{ path: DocPath; main_md: string; draft_md: string }[]> {
+    await this.loadDraftMeta(draftId);
+    const draftRoot = path.join(this.root, ".drafts", draftId);
+    const files = await walk(draftRoot);
+    const out: { path: DocPath; main_md: string; draft_md: string }[] = [];
+    for (const f of files) {
+      const rel = path.relative(draftRoot, f).replace(/\\/g, "/");
+      if (!rel.startsWith("workspaces/") || !rel.endsWith(".md")) continue;
+      const draft_md = await fs.readFile(f, "utf8");
+      let main_md = "";
+      try {
+        main_md = await fs.readFile(this.absMain(rel), "utf8");
+      } catch {
+        main_md = "";
+      }
+      out.push({ path: rel, main_md, draft_md });
+    }
+    return out.sort((a, b) => a.path.localeCompare(b.path));
+  }
+
   async listDrafts(p?: DocPath): Promise<DraftSummary[]> {
     const dir = path.join(this.root, ".drafts");
     let entries: import("node:fs").Dirent[];
