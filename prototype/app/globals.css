@@ -1108,6 +1108,43 @@ body {
 .review-rail .muted {
   color: var(--muted);
   font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.stream-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.stream-dot.stream-live {
+  background: var(--insertion);
+  box-shadow: 0 0 0 0 rgba(15, 81, 50, 0.35);
+  animation: stream-pulse 1.8s ease-out infinite;
+}
+
+.stream-dot.stream-connecting {
+  background: var(--accent);
+}
+
+.stream-dot.stream-fallback {
+  background: var(--redline);
+}
+
+@keyframes stream-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(15, 81, 50, 0.35);
+  }
+  70% {
+    box-shadow: 0 0 0 7px rgba(15, 81, 50, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(15, 81, 50, 0);
+  }
 }
 
 .review-rail h3 {

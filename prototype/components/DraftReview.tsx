@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { lineDiff, type DiffLine } from "@/lib/diff";
 
@@ -21,6 +21,18 @@ type DraftDetail = {
   changes: { path: string; main_md: string; draft_md: string }[];
 };
 
+type BackendEvent =
+  | { kind: "draft_created"; draft_id: string; base_path: string }
+  | { kind: "draft_changed"; draft_id: string; path: string }
+  | {
+      kind: "draft_state";
+      draft_id: string;
+      state: DraftSummary["state"];
+    }
+  | { kind: "thread_changed"; thread_id: string };
+
+type StreamStatus = "connecting" | "live" | "fallback";
+
 const STATE_ORDER: DraftSummary["state"][] = [
   "submitted",
   "open",
@@ -28,12 +40,18 @@ const STATE_ORDER: DraftSummary["state"][] = [
   "declined",
 ];
 
+const FALLBACK_POLL_MS = 15_000;
+
 export function DraftReview() {
   const [drafts, setDrafts] = useState<DraftSummary[] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<DraftDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [streamStatus, setStreamStatus] = useState<StreamStatus>("connecting");
+
+  const selectedIdRef = useRef<string | null>(null);
+  selectedIdRef.current = selectedId;
 
   const fetchDrafts = useCallback(async () => {
     try {
@@ -46,41 +64,75 @@ export function DraftReview() {
     }
   }, []);
 
-  useEffect(() => {
-    void fetchDrafts();
-    const t = setInterval(fetchDrafts, 3000);
-    return () => clearInterval(t);
-  }, [fetchDrafts]);
+  const fetchDetail = useCallback(async (id: string) => {
+    try {
+      const r = await fetch(`/api/ui/drafts/${id}`, { cache: "no-store" });
+      if (r.status === 404) {
+        setDetail(null);
+        return;
+      }
+      const body = (await r.json()) as DraftDetail;
+      if (selectedIdRef.current === id) setDetail(body);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
 
   useEffect(() => {
     if (!selectedId) {
       setDetail(null);
       return;
     }
-    let abandoned = false;
-    const go = async () => {
+    void fetchDetail(selectedId);
+  }, [selectedId, fetchDetail]);
+
+  useEffect(() => {
+    void fetchDrafts();
+    const t = setInterval(fetchDrafts, FALLBACK_POLL_MS);
+    return () => clearInterval(t);
+  }, [fetchDrafts]);
+
+  // SSE — primary live-update channel. Event receipt triggers fetchDrafts /
+  // fetchDetail; the FALLBACK_POLL_MS interval above is only a safety net.
+  useEffect(() => {
+    const source = new EventSource("/api/ui/drafts/stream");
+    let opened = false;
+
+    source.onopen = () => {
+      opened = true;
+      setStreamStatus("live");
+    };
+
+    source.onerror = () => {
+      void opened;
+      setStreamStatus("fallback");
+    };
+
+    source.onmessage = (msg) => {
+      setStreamStatus("live");
+      let event: BackendEvent;
       try {
-        const r = await fetch(`/api/ui/drafts/${selectedId}`, {
-          cache: "no-store",
-        });
-        if (r.status === 404) {
-          if (!abandoned) setDetail(null);
-          return;
+        event = JSON.parse(msg.data) as BackendEvent;
+      } catch {
+        return;
+      }
+      if (
+        event.kind === "draft_created" ||
+        event.kind === "draft_state"
+      ) {
+        void fetchDrafts();
+      } else if (event.kind === "draft_changed") {
+        void fetchDrafts();
+        if (selectedIdRef.current === event.draft_id) {
+          void fetchDetail(event.draft_id);
         }
-        const body = (await r.json()) as DraftDetail;
-        if (!abandoned) setDetail(body);
-      } catch (e) {
-        if (!abandoned)
-          setError(e instanceof Error ? e.message : String(e));
       }
     };
-    void go();
-    const t = setInterval(go, 2000);
+
     return () => {
-      abandoned = true;
-      clearInterval(t);
+      source.close();
     };
-  }, [selectedId]);
+  }, [fetchDrafts, fetchDetail]);
 
   const grouped = useMemo(() => {
     const out: Record<DraftSummary["state"], DraftSummary[]> = {
@@ -119,7 +171,15 @@ export function DraftReview() {
         <header>
           <h2>drafts</h2>
           <p className="muted">
-            live from the MCP server · polls every 3s
+            <span
+              className={`stream-dot stream-${streamStatus}`}
+              aria-hidden
+            />
+            {streamStatus === "live"
+              ? "live · streaming MCP events"
+              : streamStatus === "connecting"
+                ? "connecting to MCP stream…"
+                : "stream offline · polling every 15s"}
           </p>
         </header>
         {error ? <div className="review-err">{error}</div> : null}

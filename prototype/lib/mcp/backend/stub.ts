@@ -5,6 +5,7 @@ import * as yaml from "yaml";
 
 import {
   type Backend,
+  type BackendEvent,
   type DocContent,
   type DocPath,
   type DocSummary,
@@ -132,10 +133,28 @@ export class StubBackend implements Backend {
   private opLogPath: string;
   private opLogCache: OpLog | null = null;
   private lockChain: Promise<unknown> = Promise.resolve();
+  private subscribers = new Set<(event: BackendEvent) => void>();
 
   constructor(root: string) {
     this.root = root;
     this.opLogPath = path.join(root, ".op_log.json");
+  }
+
+  subscribe(listener: (event: BackendEvent) => void): () => void {
+    this.subscribers.add(listener);
+    return () => {
+      this.subscribers.delete(listener);
+    };
+  }
+
+  private emit(event: BackendEvent): void {
+    for (const listener of this.subscribers) {
+      try {
+        listener(event);
+      } catch {
+        // listener errors must not break callers
+      }
+    }
   }
 
   /** Serialize all mutating operations to keep the on-disk store consistent. */
@@ -377,10 +396,12 @@ export class StubBackend implements Backend {
         const abs = this.absDraft(ref, p);
         await this.ensureDir(path.dirname(abs));
         await fs.writeFile(abs, content, "utf8");
-        return {
+        const result = {
           commit: `c-${sha(`${ref}:${p}:${content}:${Date.now()}`).slice(0, 12)}`,
           ycrdt_version: `v-${sha(content).slice(0, 12)}`,
         };
+        this.emit({ kind: "draft_changed", draft_id: ref, path: p });
+        return result;
       }),
     );
   }
@@ -424,10 +445,12 @@ export class StubBackend implements Backend {
         const abs = this.absDraft(ref, p);
         await this.ensureDir(path.dirname(abs));
         await fs.writeFile(abs, next, "utf8");
-        return {
+        const result = {
           commit: `c-${sha(`${ref}:${p}:${next}:${Date.now()}`).slice(0, 12)}`,
           ycrdt_version: `v-${sha(next).slice(0, 12)}`,
         };
+        this.emit({ kind: "draft_changed", draft_id: ref, path: p });
+        return result;
       }),
     );
   }
@@ -453,6 +476,11 @@ export class StubBackend implements Backend {
           created_at: Date.now(),
         };
         await this.saveDraftMeta(meta);
+        this.emit({
+          kind: "draft_created",
+          draft_id: draftId,
+          base_path: p,
+        });
         ids.push(draftId);
       }
       return ids;
@@ -471,6 +499,11 @@ export class StubBackend implements Backend {
       if (note !== undefined) meta.note = note;
       if (draftName !== undefined) meta.name = draftName;
       await this.saveDraftMeta(meta);
+      this.emit({
+        kind: "draft_state",
+        draft_id: draftId,
+        state: "submitted",
+      });
       return { diff_url: `/drafts/${draftId}` };
     });
   }
@@ -489,6 +522,11 @@ export class StubBackend implements Backend {
       }
       meta.state = "accepted";
       await this.saveDraftMeta(meta);
+      this.emit({
+        kind: "draft_state",
+        draft_id: draftId,
+        state: "accepted",
+      });
       return {
         commit: `c-${sha(`merge:${draftId}:${Date.now()}`).slice(0, 12)}`,
       };
@@ -500,6 +538,11 @@ export class StubBackend implements Backend {
       const meta = await this.loadDraftMeta(draftId);
       meta.state = "declined";
       await this.saveDraftMeta(meta);
+      this.emit({
+        kind: "draft_state",
+        draft_id: draftId,
+        state: "declined",
+      });
     });
   }
 
@@ -665,6 +708,7 @@ export class StubBackend implements Backend {
         ],
       };
       await this.saveThread(opts.targets[0].path, thread);
+      this.emit({ kind: "thread_changed", thread_id: id });
       return id;
     });
   }
@@ -683,6 +727,7 @@ export class StubBackend implements Backend {
         draft: opts?.draft,
       });
       await this.saveThread(thread.targets[0].path, thread);
+      this.emit({ kind: "thread_changed", thread_id: id });
     });
   }
 
@@ -691,6 +736,7 @@ export class StubBackend implements Backend {
       const thread = await this.loadThread(id);
       thread.status = "accepted";
       await this.saveThread(thread.targets[0].path, thread);
+      this.emit({ kind: "thread_changed", thread_id: id });
     });
   }
 }

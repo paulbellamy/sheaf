@@ -189,7 +189,26 @@ export interface Backend {
   ): Promise<void>;
 
   resolveThread(id: ThreadId): Promise<void>;
+
+  /**
+   * Subscribe to mutation events. Returns an unsubscribe function.
+   *
+   * Used by the SSE route to push live updates to the /review browser UI.
+   * Emitted from any mutation that changes what a reviewer would see:
+   * Fork, Write, Edit, Propose, Merge, declineDraft.
+   */
+  subscribe(listener: (event: BackendEvent) => void): () => void;
 }
+
+export type BackendEvent =
+  | { kind: "draft_created"; draft_id: DraftId; base_path: DocPath }
+  | { kind: "draft_changed"; draft_id: DraftId; path: DocPath }
+  | {
+      kind: "draft_state";
+      draft_id: DraftId;
+      state: "open" | "submitted" | "accepted" | "declined";
+    }
+  | { kind: "thread_changed"; thread_id: ThreadId };
 
 /**
  * Deferred for the real backend:
