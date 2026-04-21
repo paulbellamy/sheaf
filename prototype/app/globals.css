@@ -1010,6 +1010,7 @@ body {
   box-shadow: 0 6px 18px -8px rgba(0, 0, 0, 0.2);
   padding: 0.15rem 0.25rem;
   display: inline-flex;
+  z-index: 20;
 }
 
 .bubble-row {
@@ -1330,6 +1331,7 @@ body {
   grid-template-columns: 280px 1fr;
   min-height: 100vh;
   font-size: 14px;
+  position: relative;
 }
 
 .doc-shell.collapsed {
@@ -1343,10 +1345,37 @@ body {
   border-right: 1px solid var(--rule);
   display: flex;
   flex-direction: column;
+  background: var(--paper);
+  z-index: 10;
 }
 
 .doc-shell.collapsed .doc-rail-wrap {
   align-items: center;
+}
+
+@media (max-width: 1023px) {
+  .doc-shell,
+  .doc-shell.collapsed {
+    grid-template-columns: 1fr;
+  }
+
+  .doc-rail-wrap {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 40px;
+    max-height: 100vh;
+  }
+
+  .doc-shell:not(.collapsed) .doc-rail-wrap {
+    width: 280px;
+    box-shadow: 2px 0 12px rgba(0, 0, 0, 0.08);
+  }
+
+  .doc-main {
+    margin-left: 40px;
+  }
 }
 
 .doc-rail-wrap .review-rail {

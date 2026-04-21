@@ -725,6 +725,7 @@ export function Manuscript({ initialContent }: { initialContent?: string } = {})
   // First-run help.
   useEffect(() => {
     if (typeof window === "undefined") return;
+    if (window.location.search.includes("nohelp")) return;
     if (!window.localStorage.getItem("sheaf.seen-help")) {
       setShowHelp(true);
     }
