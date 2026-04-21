@@ -374,20 +374,24 @@ export function Manuscript({ initialContent }: { initialContent?: string } = {})
     [],
   );
 
-  const registerNoteThread = useCallback((threadId: string) => {
-    setThreads((prev) => [
-      ...prev,
-      {
-        id: threadId,
-        kind: "note",
-        note: "",
-        state: "pending",
-        createdAt: Date.now(),
-        autoFocusNote: true,
-      },
-    ]);
-    setActiveThreadId(threadId);
-  }, []);
+  const registerNoteThread = useCallback(
+    (threadId: string, anchor?: { from: number; to: number }) => {
+      setThreads((prev) => [
+        ...prev,
+        {
+          id: threadId,
+          kind: "note",
+          note: "",
+          state: "pending",
+          createdAt: Date.now(),
+          anchor,
+          autoFocusNote: true,
+        },
+      ]);
+      setActiveThreadId(threadId);
+    },
+    [],
+  );
 
   const editor = useEditor({
     extensions: [
@@ -753,8 +757,11 @@ export function Manuscript({ initialContent }: { initialContent?: string } = {})
     (threadId: string): number | null => {
       if (!editor || !manuscriptRef.current) return null;
       const view = getThreadView(threadId);
-      if (!view) return null;
-      const pos = view.del?.from ?? view.ins?.from ?? null;
+      let pos = view?.del?.from ?? view?.ins?.from ?? null;
+      if (pos === null) {
+        const thread = threads.find((t) => t.id === threadId);
+        pos = thread?.anchor?.from ?? null;
+      }
       if (pos === null) return null;
       try {
         const coords = editor.view.coordsAtPos(pos);
@@ -764,7 +771,7 @@ export function Manuscript({ initialContent }: { initialContent?: string } = {})
         return null;
       }
     },
-    [editor, getThreadView],
+    [editor, getThreadView, threads],
   );
 
   const setNote = useCallback((threadId: string, note: string) => {
@@ -901,16 +908,8 @@ export function Manuscript({ initialContent }: { initialContent?: string } = {})
     if (!editor) return;
     const { from, to } = editor.state.selection;
     if (from === to) return;
-    const schema = editor.state.schema;
     const threadId = newId("note");
-    const delType = schema.marks.proposedDeletion;
-    // We don't want the range to look deleted, so instead we use an
-    // insertion-over-nothing trick: add a zero-width marker? Simpler for v0.2:
-    // record the selected text range via an insertion mark on a shadow char.
-    // For now, just register a note-thread without text anchoring — the user
-    // can refer to the selection via their note.
-    void delType;
-    registerNoteThread(threadId);
+    registerNoteThread(threadId, { from, to });
   }, [editor, registerNoteThread]);
 
   return (

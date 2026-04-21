@@ -9,6 +9,7 @@ export type Thread = {
   state: ThreadState;
   createdAt: number;
   structural?: { label: string; range?: { from: number; to: number } };
+  anchor?: { from: number; to: number };
   autoFocusNote?: boolean;
   collapsed?: boolean;
 };
