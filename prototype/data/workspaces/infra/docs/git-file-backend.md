@@ -1,23 +1,26 @@
 # Git file backend for sheaf
 
+**Status:** design · **Replaces:** `prototype/lib/mcp/backend/stub.ts`
+
 ## Why git
 
-Sheaf docs are markdown that humans and agents co-edit. We already have a mature tool for content-addressed history, branching, merging, and replication: git. The backend's job is to adapt git's model to sheaf's primitives (docs, drafts, threads) without inventing a new storage engine.
+Sheaf docs are markdown that humans and agents co-edit. Content-addressed history, branching, merging, and replication are already solved — by git. This backend's job is to map sheaf's primitives (docs, drafts, threads) onto git objects, not invent a new storage engine.
 
-The prototype uses a filesystem stub (`prototype/lib/mcp/backend/stub.ts`) that fakes commits with uuids. This doc describes the production git backend that replaces it behind the same `Backend` interface.
+The current prototype backs this interface with a filesystem stub that fakes commits with uuids and keeps all draft state in memory. This doc specifies the production implementation: same `Backend` surface, real git commits underneath, durable across restarts and across machines.
 
 ## Repository layout
 
 All sheaf state lives in a single git repo, rooted at the working copy:
 
 ```
+sheaf.yaml                                     # repo-level config (GC windows, per-ws overrides)
 workspaces/<ws>/docs/<name>.md                 # authored markdown, on main
-workspaces/<ws>/docs/<name>.ycrdt              # paired yjs state vector
+workspaces/<ws>/docs/<name>.ycrdt              # paired yjs state vector (json)
 workspaces/<ws>/docs/<name>.threads/           # per-doc threads
   thrd_<id>.yaml
 ```
 
-The md file is the source of truth for humans. The `.ycrdt` file is the source of truth for concurrent agent edits and is what case-2 sync (design §4.2) diffs against. They are always committed together — never one without the other — so `HEAD` is internally consistent.
+The md file is the source of truth for humans. The `.ycrdt` file is the source of truth for concurrent agent edits and is what case-2 sync (design §4.2) diffs against. It is stored as JSON so `git log -p` is legible — the size overhead vs. a compact binary encoding is acceptable at our doc sizes and gc/packing absorbs the rest. Md and ycrdt are always committed together — never one without the other — so `HEAD` is internally consistent.
 
 Threads are anchored yaml files next to the doc. Anchoring uses `{rel_pos, content_hash, anchored_text, context_before, context_after}` (see `ThreadTarget` in `backend/index.ts`); the backend re-resolves anchors on read against the current md.
 
@@ -53,11 +56,11 @@ Flip state in the draft note to `submitted`, set `submitted_at`, `note`, `name`.
 
 ### Merge(draft_id)
 
-Fast-forward or squash-merge the draft branch into main. Policy: squash, because draft history is conversational and not interesting to main. Delete the branch; keep the note so history is traceable.
+Squash-merge the draft branch into main. The squash commit message is a summary of the draft's arc — seed prompt, resolved threads, and final shape — so main's log carries the context without replaying agent ping-pong. Delete the branch; keep the note so history is traceable.
 
 ### declineDraft(draft_id)
 
-Flip state to `declined`. Keep the branch for a retention window so reviewers can resurrect or diff; GC later.
+Flip state to `declined`. Keep the branch for a retention window — configured in `sheaf.yaml` at repo root, overridable per workspace — so reviewers can resurrect or diff; GC after the window lapses.
 
 ### Threads
 
@@ -80,8 +83,3 @@ Case-2 sync (design §4.2) is the adapter: it takes a human's markdown edit and 
 - Authn/authz: which identities can fork off which paths, which can merge.
 - Remote sync: push/pull semantics when two sheaf instances share a repo, including draft-note reconciliation.
 
-## Unresolved
-
-- Squash vs. merge commit on `Merge`. Squash loses conversational authorship; merge bloats main history with agent ping-pong.
-- Whether `.ycrdt` files should be binary (compact) or json (diffable). Binary wins on size; json wins on `git log -p` legibility for debugging.
-- GC policy for declined drafts. A week? A month? Configurable per-workspace?

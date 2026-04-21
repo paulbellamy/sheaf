@@ -1,0 +1,20 @@
+id: thrd_7ed68009-8fdb-4e5c-8ae8-b5994e8094f1
+created: 1776769099283
+status: accepted
+draft_id: draft_4967b032-225b-4ac2-a8bb-bd52269a9280
+targets:
+  - path: workspaces/infra/docs/git-file-backend.md
+    anchor:
+      rel_pos: eyJmcm9tIjo1MDE5LCJ0byI6NTA5NH0=
+      content_hash: 59662bb4fd9014f3116f72ec2398f4e7a06e86b8d195194a6ed17fb30b004ccb
+      anchored_text: GC policy for declined drafts. A week? A month? Configurable
+        per-workspace?
+      context_before: |2-
+         on size; json wins on `git log -p` legibility for debugging.
+        - 
+      context_after: |+
+        
+messages:
+  - author: user
+    ts: 1776769099283
+    body: sheaf.yaml config in repo root.
