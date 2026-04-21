@@ -1,7 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+
+import type { BackendEvent } from "@/lib/mcp/backend/index";
 
 type DocEntry = {
   path: string;
@@ -24,6 +26,8 @@ type DraftEntry = {
 
 type Payload = { docs: DocEntry[]; drafts: DraftEntry[] };
 
+const REFRESH_DEBOUNCE_MS = 150;
+
 export function DocRail({
   activePath,
   activeRef,
@@ -34,26 +38,64 @@ export function DocRail({
   const [data, setData] = useState<Payload | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await fetch("/api/ui/docs", { cache: "no-store" });
-        const body = (await r.json()) as Payload | { error: string };
-        if (cancelled) return;
-        if (!r.ok) {
-          setError("error" in body ? body.error : `HTTP ${r.status}`);
-          return;
-        }
-        setData(body as Payload);
-      } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+  const load = useCallback(async (signal?: { cancelled: boolean }) => {
+    try {
+      const r = await fetch("/api/ui/docs", { cache: "no-store" });
+      const body = (await r.json()) as Payload | { error: string };
+      if (signal?.cancelled) return;
+      if (!r.ok) {
+        setError("error" in body ? body.error : `HTTP ${r.status}`);
+        return;
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
+      setError(null);
+      setData(body as Payload);
+    } catch (e) {
+      if (!signal?.cancelled) {
+        setError(e instanceof Error ? e.message : String(e));
+      }
+    }
   }, []);
+
+  useEffect(() => {
+    const signal = { cancelled: false };
+    void load(signal);
+    return () => {
+      signal.cancelled = true;
+    };
+  }, [load]);
+
+  // Refresh the index when drafts are forked, written to, or change state.
+  // Debounce bursts (e.g. an agent doing many Edits in a row) with a short
+  // trailing timer.
+  useEffect(() => {
+    const source = new EventSource("/api/ui/drafts/stream");
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const schedule = () => {
+      if (timer) return;
+      timer = setTimeout(() => {
+        timer = null;
+        void load();
+      }, REFRESH_DEBOUNCE_MS);
+    };
+    source.onmessage = (msg) => {
+      try {
+        const event = JSON.parse(msg.data) as BackendEvent;
+        if (
+          event.kind === "draft_created" ||
+          event.kind === "draft_changed" ||
+          event.kind === "draft_state"
+        ) {
+          schedule();
+        }
+      } catch {
+        /* ignore */
+      }
+    };
+    return () => {
+      source.close();
+      if (timer) clearTimeout(timer);
+    };
+  }, [load]);
 
   const groupedDocs = useMemo(() => {
     const map = new Map<string, DocEntry[]>();

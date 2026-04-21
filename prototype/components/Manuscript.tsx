@@ -426,6 +426,7 @@ export function Manuscript({
       }),
     ],
     content: initialContent ?? sampleManuscript,
+    autofocus: false,
     immediatelyRender: false,
     editorProps: {
       attributes: {
