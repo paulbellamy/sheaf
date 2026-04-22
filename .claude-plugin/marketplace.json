@@ -1,0 +1,20 @@
+{
+  "name": "sheaf",
+  "owner": {
+    "name": "Paul Bellamy",
+    "email": "paul@paulbellamy.com"
+  },
+  "metadata": {
+    "description": "Wake an idle Claude Code agent on sheaf backend events",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "sheaf-event-watcher",
+      "source": "./",
+      "description": "Streams sheaf backend events (thread_changed, draft_changed, ...) into the agent so it reacts immediately to thread submissions from /doc.",
+      "version": "0.1.0",
+      "tags": ["sheaf", "mcp", "watcher"]
+    }
+  ]
+}
