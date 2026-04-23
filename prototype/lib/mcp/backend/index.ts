@@ -218,15 +218,50 @@ export interface Backend {
   subscribe(listener: (event: BackendEvent) => void): () => void;
 }
 
-export type BackendEvent =
-  | { kind: "draft_created"; draft_id: DraftId; base_path: DocPath }
-  | { kind: "draft_changed"; draft_id: DraftId; path: DocPath }
-  | {
-      kind: "draft_state";
-      draft_id: DraftId;
-      state: "open" | "submitted" | "accepted" | "declined";
-    }
-  | { kind: "thread_changed"; thread_id: ThreadId };
+import { z } from "zod";
+
+/**
+ * Backend events.
+ *
+ * Modeled as a zod discriminated union so:
+ *  - Every `switch (event.kind)` is exhaustive-checked by TS.
+ *  - SSE frames are runtime-validated via `backendEventSchema.safeParse`;
+ *    corrupt payloads surface as errors rather than silent drops.
+ *
+ * `target_paths` on thread events lets UI consumers scope their refetches
+ * to the affected docs instead of refetching globally on any thread change.
+ */
+export const backendEventSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("draft_created"),
+    draft_id: z.string(),
+    base_path: z.string(),
+  }),
+  z.object({
+    kind: z.literal("draft_changed"),
+    draft_id: z.string(),
+    path: z.string(),
+  }),
+  z.object({
+    kind: z.literal("draft_state"),
+    draft_id: z.string(),
+    state: z.enum(["open", "submitted", "accepted", "declined"]),
+  }),
+  z.object({
+    kind: z.literal("draft_merged"),
+    draft_id: z.string(),
+    /** Paths merged into main. */
+    target_paths: z.array(z.string()),
+  }),
+  z.object({
+    kind: z.literal("thread_changed"),
+    thread_id: z.string(),
+    /** Docs the thread anchors onto; consumers scope refetches by these. */
+    target_paths: z.array(z.string()),
+  }),
+]);
+
+export type BackendEvent = z.infer<typeof backendEventSchema>;
 
 /**
  * Deferred for the real backend:

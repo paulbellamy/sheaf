@@ -835,7 +835,11 @@ export class StubBackend implements Backend {
         ],
       };
       await this.saveThread(thread);
-      this.emit({ kind: "thread_changed", thread_id: id });
+      this.emit({
+        kind: "thread_changed",
+        thread_id: id,
+        target_paths: thread.targets.map((t) => t.path),
+      });
       return id;
     });
   }
@@ -854,7 +858,11 @@ export class StubBackend implements Backend {
         draft: opts?.draft,
       });
       await this.saveThread(thread);
-      this.emit({ kind: "thread_changed", thread_id: id });
+      this.emit({
+        kind: "thread_changed",
+        thread_id: id,
+        target_paths: thread.targets.map((t) => t.path),
+      });
     });
   }
 
@@ -863,7 +871,11 @@ export class StubBackend implements Backend {
       const thread = await this.loadThread(id);
       thread.status = "accepted";
       await this.saveThread(thread);
-      this.emit({ kind: "thread_changed", thread_id: id });
+      this.emit({
+        kind: "thread_changed",
+        thread_id: id,
+        target_paths: thread.targets.map((t) => t.path),
+      });
     });
   }
 }

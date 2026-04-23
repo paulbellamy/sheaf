@@ -2,7 +2,10 @@
 
 import { useEffect } from "react";
 
-import type { BackendEvent } from "@/lib/mcp/backend/index";
+import {
+  backendEventSchema,
+  type BackendEvent,
+} from "@/lib/mcp/backend/index";
 
 type Listener = (event: BackendEvent) => void;
 
@@ -21,17 +24,27 @@ function ensureSource() {
   if (typeof window === "undefined") return null;
   const s = new EventSource("/api/ui/drafts/stream");
   s.onmessage = (msg) => {
+    let raw: unknown;
     try {
-      const event = JSON.parse(msg.data) as BackendEvent;
-      for (const cb of listeners) {
-        try {
-          cb(event);
-        } catch {
-          /* listener errors never take the stream down */
-        }
-      }
+      raw = JSON.parse(msg.data);
     } catch {
-      /* ignore malformed frames */
+      console.error("backend event: malformed JSON frame", msg.data);
+      return;
+    }
+    const parsed = backendEventSchema.safeParse(raw);
+    if (!parsed.success) {
+      // Surface corrupt frames loudly — a silent drop hid real schema drift
+      // during earlier refactors.
+      console.error("backend event: schema mismatch", parsed.error, raw);
+      return;
+    }
+    const event = parsed.data;
+    for (const cb of listeners) {
+      try {
+        cb(event);
+      } catch {
+        /* listener errors never take the stream down */
+      }
     }
   };
   // Auto-reconnect is native to EventSource; no explicit onerror wiring
