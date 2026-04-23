@@ -1,4 +1,5 @@
 import { Extension } from "@tiptap/core";
+import type { Editor } from "@tiptap/react";
 import type { EditorState, Transaction } from "@tiptap/pm/state";
 import type { MarkType, Node as PMNode } from "@tiptap/pm/model";
 import { liftListItem, sinkListItem } from "@tiptap/pm/schema-list";
@@ -52,6 +53,53 @@ export function structuralLabelFor(trigger: MarkdownTrigger): string {
     case "codeBlock":
       return `¶ → code block${trigger.language ? ` (${trigger.language})` : ""}`;
   }
+}
+
+// Revert a block-level structural transition labeled "A → B" by applying
+// the command that restores state A. Returns true if a revert was applied.
+export function revertBlockTransition(
+  editor: Editor,
+  label: string,
+  range: { from: number; to: number },
+): boolean {
+  const m = label.match(/^(.+?) → (.+)$/);
+  if (!m) return false;
+  const [, from, to] = m;
+
+  const docSize = editor.state.doc.content.size;
+  const pos = Math.min(Math.max(range.from, 0), docSize);
+  const chain = editor.chain().focus().setTextSelection(pos);
+
+  const headingFrom = from.match(/^H([1-6])$/);
+
+  if (headingFrom) {
+    chain.setHeading({
+      level: parseInt(headingFrom[1], 10) as 1 | 2 | 3 | 4 | 5 | 6,
+    });
+  } else if (from === "¶") {
+    if (/^H[1-6]$/.test(to)) chain.setParagraph();
+    else if (to === "bullet list") chain.toggleBulletList();
+    else if (to === "numbered list") chain.toggleOrderedList();
+    else if (to === "task list") chain.toggleTaskList();
+    else if (to === "blockquote") chain.toggleBlockquote();
+    else if (to.startsWith("code block")) chain.toggleCodeBlock();
+    else return false;
+  } else if (from === "bullet list") {
+    chain.toggleBulletList();
+  } else if (from === "numbered list") {
+    chain.toggleOrderedList();
+  } else if (from === "task list") {
+    chain.toggleTaskList();
+  } else if (from === "blockquote") {
+    chain.toggleBlockquote();
+  } else if (from.startsWith("code block")) {
+    chain.toggleCodeBlock();
+  } else {
+    return false;
+  }
+
+  chain.run();
+  return true;
 }
 
 export const MAX_INDENT = 6;

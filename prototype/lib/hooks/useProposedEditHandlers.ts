@@ -21,7 +21,10 @@ type EditContext = { threadId: string; lastPos: number; lastTime: number };
 type Params = {
   pickThreadId: PickThreadId;
   registerThread: (threadId: string) => void;
-  registerStructuralThread: (label: string) => void;
+  registerStructuralThread: (
+    label: string,
+    range?: { from: number; to: number },
+  ) => void;
   activateThread: (id: string | null) => void;
   onEditContext: (ctx: EditContext) => void;
   onResetEditContext: () => void;
@@ -98,7 +101,13 @@ export function useProposedEditHandlers({
         const trigger = detectMarkdownTrigger(view.state.doc, from, text);
         if (trigger && from === to) {
           const label = structuralLabelFor(trigger);
-          queueMicrotask(() => registerStructuralThread(label));
+          const triggerPos = from;
+          queueMicrotask(() =>
+            registerStructuralThread(label, {
+              from: triggerPos,
+              to: triggerPos,
+            }),
+          );
           return false;
         }
 

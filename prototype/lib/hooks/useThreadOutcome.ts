@@ -3,6 +3,7 @@ import type { Editor } from "@tiptap/react";
 
 import type { Thread } from "@/lib/types";
 import type { ThreadView } from "@/components/ThreadCard";
+import { revertBlockTransition } from "@/lib/editor-helpers";
 
 type Params = {
   editor: Editor | null;
@@ -43,6 +44,18 @@ export function useThreadOutcome({
       if (target.state !== "pending") void resolveOnServer(threadId);
 
       if (target.kind !== "redline") {
+        if (
+          kind === "decline" &&
+          target.kind === "structural" &&
+          target.structural?.range &&
+          target.structural.label.includes(" → ")
+        ) {
+          revertBlockTransition(
+            editor,
+            target.structural.label,
+            target.structural.range,
+          );
+        }
         setThreads((prev) => prev.filter((t) => t.id !== threadId));
         setActiveThreadId(null);
         return;

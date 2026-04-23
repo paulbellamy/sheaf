@@ -3,6 +3,7 @@
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import { CodeBlockLowlight } from "@tiptap/extension-code-block-lowlight";
+import { TaskList, TaskItem } from "@tiptap/extension-list";
 import { ReactNodeViewRenderer } from "@tiptap/react";
 import { CodeBlockView } from "./CodeBlockView";
 import type { Node as PMNode } from "@tiptap/pm/model";
@@ -144,7 +145,61 @@ export function Manuscript({
   const registerStructuralThread = useCallback(
     (label: string, range?: { from: number; to: number }) => {
       const id = newId("strc");
+      // Block-type transitions carry an arrow in their label ("¶ → H2",
+      // "bullet list → numbered list"). Formatting-mark labels do not.
+      const isBlockTransition = label.includes(" → ");
+      const parts = isBlockTransition ? label.match(/^(.+?) → (.+)$/) : null;
+      const newFrom = parts?.[1];
+      const newTo = parts?.[2];
+      let addedThread = false;
       setThreads((prev) => {
+        // Block transitions: diff is always "original state → current state".
+        // Any overlapping pending block-transition thread represents the
+        // same block; inherit its "from" (the original state) and purge it.
+        // If the inherited original equals the new target, the block is
+        // back to its baseline — emit no note.
+        if (isBlockTransition && range && newFrom && newTo) {
+          let inheritedFrom: string | null = null;
+          const remaining = prev.filter((t) => {
+            if (
+              t.kind !== "structural" ||
+              t.state !== "pending" ||
+              t.note !== ""
+            )
+              return true;
+            const r = t.structural?.range;
+            if (!r) return true;
+            const existingLabel = t.structural?.label ?? "";
+            if (!existingLabel.includes(" → ")) return true;
+            const overlaps =
+              Math.max(r.from, range.from) <= Math.min(r.to, range.to);
+            if (!overlaps) return true;
+            const m = existingLabel.match(/^(.+?) → (.+)$/);
+            if (m) inheritedFrom = m[1];
+            return false;
+          });
+          const effectiveFrom = inheritedFrom ?? newFrom;
+          if (effectiveFrom === newTo) {
+            return remaining;
+          }
+          addedThread = true;
+          return [
+            ...remaining,
+            {
+              id,
+              kind: "structural",
+              note: "",
+              state: "pending",
+              createdAt: Date.now(),
+              structural: {
+                label: `${effectiveFrom} → ${newTo}`,
+                range,
+              },
+            },
+          ];
+        }
+
+        // Formatting marks / label-only structural threads.
         let purgedSameLabel = false;
         const filtered = prev.filter((t) => {
           if (!range) return true;
@@ -160,6 +215,7 @@ export function Manuscript({
           return false;
         });
         if (range && purgedSameLabel) return filtered;
+        addedThread = true;
         return [
           ...filtered,
           {
@@ -172,7 +228,8 @@ export function Manuscript({
           },
         ];
       });
-      setActiveThreadId(id);
+      if (addedThread) setActiveThreadId(id);
+      else setActiveThreadId(null);
       editContextRef.current = null;
     },
     [],
@@ -216,7 +273,7 @@ export function Manuscript({
   const editorProps = useProposedEditHandlers({
     pickThreadId,
     registerThread,
-    registerStructuralThread: (label) => registerStructuralThread(label),
+    registerStructuralThread,
     activateThread,
     onEditContext,
     onResetEditContext,
@@ -229,6 +286,8 @@ export function Manuscript({
       }),
       BlockIndent,
       CodeBlock,
+      TaskList,
+      TaskItem.configure({ nested: true }),
       ProposedDeletion,
       ProposedInsertion,
       ThreadInteraction.configure({
