@@ -15,6 +15,8 @@ import {
   findInsertionRange,
 } from "@/components/extensions/ProposedInsertion";
 
+const EMPTY_TOKENS = new Uint8Array(0);
+
 /**
  * Own the per-transaction formatting reconciler. Forces MarginRail layout
  * recompute (via `onBump`), garbage-collects redline threads whose marks are
@@ -26,10 +28,20 @@ export function useFormattingDiff(
   onBump: () => void,
 ) {
   const baselineDocRef = useRef<PMNode | null>(null);
+  // Baseline doc is immutable after mount, so tokenize it once and reuse
+  // on every transaction. That halves per-keystroke work and eliminates
+  // ~O(n) allocations of baseline tokens per keystroke.
+  const baselineTokensRef = useRef<Uint8Array>(EMPTY_TOKENS);
 
   useEffect(() => {
     if (!editor) return;
-    if (!baselineDocRef.current) baselineDocRef.current = editor.state.doc;
+    if (!baselineDocRef.current) {
+      baselineDocRef.current = editor.state.doc;
+      baselineTokensRef.current = collectFormattingTokens(
+        editor.state.doc,
+        false,
+      );
+    }
     const trackedLabels = new Set(Object.values(TRACKED_FORMATTING_MARKS));
 
     const handler = () => {
@@ -38,7 +50,7 @@ export function useFormattingDiff(
       const baseline = baselineDocRef.current;
       const diffs = baseline
         ? diffFormattingTokens(
-            collectFormattingTokens(baseline, false),
+            baselineTokensRef.current,
             collectFormattingTokens(editor.state.doc, true),
           )
         : [];

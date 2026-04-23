@@ -141,6 +141,7 @@ export function findContiguousThreadId(
 
 // Formatting marks tracked as structural diffs against the baseline document.
 // Keyed by the mark's schema name; value is the label shown in the margin.
+// Order matters — it's the bit position used by the Uint8Array encoding.
 export const TRACKED_FORMATTING_MARKS: Record<string, string> = {
   bold: "bold",
   italic: "italic",
@@ -149,63 +150,85 @@ export const TRACKED_FORMATTING_MARKS: Record<string, string> = {
   code: "inline code",
 };
 
+const TRACKED_MARK_NAMES = Object.keys(TRACKED_FORMATTING_MARKS);
+const TRACKED_MARK_BITS: Record<string, number> = Object.fromEntries(
+  TRACKED_MARK_NAMES.map((name, i) => [name, 1 << i]),
+);
+
 export type MarkDiff = { label: string; range: { from: number; to: number } };
 
-// Flatten a doc into a per-character array where each entry carries the set
-// of tracked formatting marks active at that character. When
-// `skipProposedInsertion` is true, characters belonging to a proposedInsertion
-// are dropped entirely — this lets us line up the baseline (original) doc
-// against the current doc even after the user has typed new text: what's left
-// after stripping insertions should have the same length as the baseline.
+/**
+ * Flatten a doc into a per-character Uint8Array where each byte is a bitmask
+ * of the tracked formatting marks active at that character. Bit positions
+ * line up with TRACKED_MARK_NAMES. When `skipProposedInsertion` is true,
+ * characters belonging to a proposedInsertion are dropped entirely — this
+ * lets us line up the baseline (original) doc against the current doc even
+ * after the user has typed new text.
+ */
 export function collectFormattingTokens(
   doc: PMNode,
   skipProposedInsertion: boolean,
-): Array<Set<string>> {
-  const tokens: Array<Set<string>> = [];
+): Uint8Array {
+  // Upper bound: total character count in the doc.
+  const capacity = doc.textContent.length || doc.content.size;
+  const buf = new Uint8Array(capacity);
+  let n = 0;
   doc.descendants((node) => {
     if (!node.isText) return true;
-    const isProposedIns = node.marks.some(
-      (m) => m.type.name === "proposedInsertion",
-    );
-    if (skipProposedInsertion && isProposedIns) return true;
-    const markSet = new Set<string>();
+    let mask = 0;
+    let skip = false;
     for (const m of node.marks) {
-      if (TRACKED_FORMATTING_MARKS[m.type.name]) markSet.add(m.type.name);
+      if (skipProposedInsertion && m.type.name === "proposedInsertion") {
+        skip = true;
+        break;
+      }
+      const bit = TRACKED_MARK_BITS[m.type.name];
+      if (bit !== undefined) mask |= bit;
     }
+    if (skip) return true;
     const text = node.text ?? "";
-    for (let i = 0; i < text.length; i++) tokens.push(new Set(markSet));
+    const len = text.length;
+    if (n + len > buf.length) {
+      // defensive resize — shouldn't happen given `capacity`, but safe
+      const next = new Uint8Array((n + len) * 2);
+      next.set(buf);
+      (buf as Uint8Array).set(next.subarray(0, buf.length));
+    }
+    for (let i = 0; i < len; i++) buf[n + i] = mask;
+    n += len;
     return true;
   });
-  return tokens;
+  return buf.subarray(0, n);
 }
 
-// Diff two equal-length token streams (baseline vs. current without pending
-// insertions). Ranges are token-index positions; they're used purely to
-// uniquely key the diff for the margin rail, not to anchor to DOM positions.
+// Diff two token streams (baseline vs. current without pending insertions).
+// Ranges are token-index positions; used purely to uniquely key the diff for
+// the margin rail, not to anchor to DOM positions.
 export function diffFormattingTokens(
-  baseline: Array<Set<string>>,
-  current: Array<Set<string>>,
+  baseline: Uint8Array,
+  current: Uint8Array,
 ): MarkDiff[] {
   const diffs: MarkDiff[] = [];
   const len = Math.min(baseline.length, current.length);
-  for (const markName of Object.keys(TRACKED_FORMATTING_MARKS)) {
+  for (let i = 0; i < TRACKED_MARK_NAMES.length; i++) {
+    const markName = TRACKED_MARK_NAMES[i];
+    const bit = 1 << i;
     const label = TRACKED_FORMATTING_MARKS[markName];
-    const changed: number[] = [];
-    for (let i = 0; i < len; i++) {
-      if (baseline[i].has(markName) !== current[i].has(markName)) changed.push(i);
-    }
     let start: number | null = null;
     let prev: number | null = null;
-    for (const p of changed) {
-      if (start === null) {
-        start = p;
-        prev = p;
-      } else if (p === (prev as number) + 1) {
-        prev = p;
-      } else {
-        diffs.push({ label, range: { from: start, to: (prev as number) + 1 } });
-        start = p;
-        prev = p;
+    for (let p = 0; p < len; p++) {
+      const differ = (baseline[p] & bit) !== (current[p] & bit);
+      if (differ) {
+        if (start === null) {
+          start = p;
+          prev = p;
+        } else if (p === (prev as number) + 1) {
+          prev = p;
+        } else {
+          diffs.push({ label, range: { from: start, to: (prev as number) + 1 } });
+          start = p;
+          prev = p;
+        }
       }
     }
     if (start !== null) {
