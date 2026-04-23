@@ -67,7 +67,6 @@ export function registerGrep(server: McpServer, backend: Backend): void {
           glob: args.glob,
           output_mode: args.output_mode,
           case_insensitive: args["-i"],
-          show_line_numbers: args["-n"],
           before_context: args["-B"] ?? context,
           after_context: args["-A"] ?? context,
           multiline: args.multiline,

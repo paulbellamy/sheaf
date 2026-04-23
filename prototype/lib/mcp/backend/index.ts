@@ -59,7 +59,6 @@ export type GrepOptions = {
   glob?: string;
   output_mode?: "content" | "files_with_matches" | "count";
   case_insensitive?: boolean;
-  show_line_numbers?: boolean;
   before_context?: number;
   after_context?: number;
   multiline?: boolean;

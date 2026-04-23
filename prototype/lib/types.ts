@@ -14,14 +14,6 @@ export type Thread = {
   collapsed?: boolean;
 };
 
-export type Review = {
-  id: string;
-  coverNote: string;
-  verdict: "comment" | "approve" | "request-changes";
-  threadIds: string[];
-  submittedAt: number;
-};
-
 export function newId(prefix: string): string {
   // Use crypto.randomUUID() when available for collision-resistant ids.
   // Fall back to Math.random on older runtimes (e.g. non-secure contexts).
