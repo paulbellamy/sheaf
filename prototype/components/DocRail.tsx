@@ -4,28 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo } from "react";
 
 import { subscribeBackendEvents } from "@/lib/hooks/useBackendEvents";
-import { useJson } from "@/lib/hooks/useJson";
-
-type DocEntry = {
-  path: string;
-  title: string;
-  workspace: string;
-  updated_at: number;
-};
-
-type DraftEntry = {
-  draft_id: string;
-  base_path: string;
-  primary_path: string;
-  changed_paths: string[];
-  name?: string;
-  state: "open" | "submitted";
-  author: string;
-  workspace: string;
-  created_at: number;
-};
-
-type Payload = { docs: DocEntry[]; drafts: DraftEntry[] };
+import { useDocsIndex, type DocEntry } from "@/lib/hooks/useDocsIndex";
 
 const REFRESH_DEBOUNCE_MS = 150;
 
@@ -36,7 +15,7 @@ export function DocRail({
   activePath?: string;
   activeRef?: string;
 }) {
-  const { data, error, reload } = useJson<Payload>("/api/ui/docs", []);
+  const { data, error, reload } = useDocsIndex();
 
   // Refresh the index when drafts are forked, written to, or change state.
   // Debounce bursts (e.g. an agent doing many Edits in a row) with a short

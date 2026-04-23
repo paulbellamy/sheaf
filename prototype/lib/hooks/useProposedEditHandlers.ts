@@ -1,7 +1,8 @@
 import { useMemo } from "react";
 import { TextSelection } from "@tiptap/pm/state";
-import type { Node as PMNode } from "@tiptap/pm/model";
-import type { EditorProps } from "@tiptap/pm/view";
+import type { Transaction } from "@tiptap/pm/state";
+import type { Node as PMNode, Schema } from "@tiptap/pm/model";
+import type { EditorProps, EditorView } from "@tiptap/pm/view";
 
 import {
   detectMarkdownTrigger,
@@ -12,17 +13,49 @@ import {
 type PickThreadId = (
   doc: PMNode,
   pos: number,
-  schema: PMNode["type"]["schema"],
+  schema: Schema,
 ) => { threadId: string; isNew: boolean };
+
+type EditContext = { threadId: string; lastPos: number; lastTime: number };
 
 type Params = {
   pickThreadId: PickThreadId;
   registerThread: (threadId: string) => void;
   registerStructuralThread: (label: string) => void;
   activateThread: (id: string | null) => void;
-  onEditContext: (ctx: { threadId: string; lastPos: number; lastTime: number }) => void;
+  onEditContext: (ctx: EditContext) => void;
   onResetEditContext: () => void;
 };
+
+/**
+ * Shared "replace [from, to] with text as a proposed edit" operation used by
+ * both handleTextInput and handlePaste. Marks the original range as a
+ * proposedDeletion (when from !== to), inserts the new text wrapped in a
+ * proposedInsertion, and moves the cursor past the insertion.
+ */
+function proposeReplacement(
+  view: EditorView,
+  range: { from: number; to: number },
+  text: string,
+  threadId: string,
+): Transaction {
+  const schema = view.state.schema;
+  const insType = schema.marks.proposedInsertion;
+  const delType = schema.marks.proposedDeletion;
+
+  let tr = view.state.tr;
+  const { from, to } = range;
+
+  if (from !== to) {
+    tr = tr.addMark(from, to, delType.create({ threadId }));
+    tr = tr.insert(to, schema.text(text, [insType.create({ threadId })]));
+    tr = tr.setSelection(TextSelection.create(tr.doc, to + text.length));
+  } else {
+    tr = tr.insert(from, schema.text(text, [insType.create({ threadId })]));
+    tr = tr.setSelection(TextSelection.create(tr.doc, from + text.length));
+  }
+  return tr;
+}
 
 /**
  * ProseMirror editorProps handlers for the proposed-edit UX: every text input
@@ -38,6 +71,20 @@ export function useProposedEditHandlers({
   onEditContext,
 }: Params): EditorProps {
   return useMemo<EditorProps>(() => {
+    // Shared commit tail: dispatch, register, activate, stamp context.
+    const commit = (
+      view: EditorView,
+      tr: Transaction,
+      threadId: string,
+      isNew: boolean,
+      cursorPos: number,
+    ) => {
+      onEditContext({ threadId, lastPos: cursorPos, lastTime: Date.now() });
+      view.dispatch(tr);
+      if (isNew) registerThread(threadId);
+      activateThread(threadId);
+    };
+
     return {
       attributes: {
         class: "ProseMirror manuscript-prose",
@@ -55,35 +102,13 @@ export function useProposedEditHandlers({
           return false;
         }
 
-        const schema = view.state.schema;
-        const insType = schema.marks.proposedInsertion;
-        const delType = schema.marks.proposedDeletion;
-
-        const { threadId, isNew } = pickThreadId(view.state.doc, from, schema);
-
-        const insMark = insType.create({ threadId });
-        const delMark = delType.create({ threadId });
-
-        let tr = view.state.tr;
-
-        if (from !== to) {
-          tr = tr.addMark(from, to, delMark);
-          tr = tr.insert(to, schema.text(text, [insMark]));
-          tr = tr.setSelection(TextSelection.create(tr.doc, to + text.length));
-        } else {
-          tr = tr.insert(from, schema.text(text, [insMark]));
-          tr = tr.setSelection(TextSelection.create(tr.doc, from + text.length));
-        }
-
-        onEditContext({
-          threadId,
-          lastPos: (from !== to ? to : from) + text.length,
-          lastTime: Date.now(),
-        });
-
-        view.dispatch(tr);
-        if (isNew) registerThread(threadId);
-        activateThread(threadId);
+        const { threadId, isNew } = pickThreadId(
+          view.state.doc,
+          from,
+          view.state.schema,
+        );
+        const tr = proposeReplacement(view, { from, to }, text, threadId);
+        commit(view, tr, threadId, isNew, (from !== to ? to : from) + text.length);
         return true;
       },
 
@@ -168,14 +193,9 @@ export function useProposedEditHandlers({
           const newPos = event.key === "Backspace" ? delFrom : delTo;
           tr = tr.setSelection(TextSelection.create(tr.doc, newPos));
 
-          onEditContext({
-            threadId,
-            lastPos: delFrom,
-            lastTime: Date.now(),
-          });
-
-          if (isNew) registerThread(threadId);
-          activateThread(threadId);
+          commit(view, tr, threadId, isNew, delFrom);
+          event.preventDefault();
+          return true;
         }
 
         view.dispatch(tr);
@@ -187,38 +207,13 @@ export function useProposedEditHandlers({
         const text = event.clipboardData?.getData("text/plain");
         if (!text) return false;
         const { from, to } = view.state.selection;
-        const schema = view.state.schema;
-        const insType = schema.marks.proposedInsertion;
-        const delType = schema.marks.proposedDeletion;
-        const { threadId, isNew } = pickThreadId(view.state.doc, from, schema);
-
-        let tr = view.state.tr;
-        if (from !== to) {
-          tr = tr.addMark(from, to, delType.create({ threadId }));
-          tr = tr.insert(
-            to,
-            schema.text(text, [insType.create({ threadId })]),
-          );
-          tr = tr.setSelection(TextSelection.create(tr.doc, to + text.length));
-        } else {
-          tr = tr.insert(
-            from,
-            schema.text(text, [insType.create({ threadId })]),
-          );
-          tr = tr.setSelection(
-            TextSelection.create(tr.doc, from + text.length),
-          );
-        }
-
-        onEditContext({
-          threadId,
-          lastPos: (from !== to ? to : from) + text.length,
-          lastTime: Date.now(),
-        });
-
-        view.dispatch(tr);
-        if (isNew) registerThread(threadId);
-        activateThread(threadId);
+        const { threadId, isNew } = pickThreadId(
+          view.state.doc,
+          from,
+          view.state.schema,
+        );
+        const tr = proposeReplacement(view, { from, to }, text, threadId);
+        commit(view, tr, threadId, isNew, (from !== to ? to : from) + text.length);
         event.preventDefault();
         return true;
       },

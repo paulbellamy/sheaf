@@ -2,28 +2,7 @@
 
 import Link from "next/link";
 
-import { useJson } from "@/lib/hooks/useJson";
-
-type DocEntry = {
-  path: string;
-  title: string;
-  workspace: string;
-  updated_at: number;
-};
-
-type DraftEntry = {
-  draft_id: string;
-  base_path: string;
-  primary_path: string;
-  changed_paths: string[];
-  name?: string;
-  state: "open" | "submitted";
-  author: string;
-  workspace: string;
-  created_at: number;
-};
-
-type Payload = { docs: DocEntry[]; drafts: DraftEntry[] };
+import { useDocsIndex } from "@/lib/hooks/useDocsIndex";
 
 function relTime(ms: number): string {
   const diff = Date.now() - ms;
@@ -38,7 +17,7 @@ function relTime(ms: number): string {
 }
 
 export function Dashboard() {
-  const { data, error } = useJson<Payload>("/api/ui/docs", []);
+  const { data, error } = useDocsIndex();
 
   const docs = data?.docs ?? [];
   const drafts = data?.drafts ?? [];

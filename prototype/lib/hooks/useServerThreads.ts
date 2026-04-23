@@ -1,9 +1,23 @@
 import { useEffect, useRef } from "react";
 
 import type { Thread } from "@/lib/types";
-import { backendSummaryToUiThread } from "@/lib/threads-adapter";
 import type { ThreadSummary } from "@/lib/mcp/backend";
 import { subscribeBackendEvents } from "./useBackendEvents";
+
+function backendSummaryToUiThread(s: ThreadSummary): Thread {
+  return {
+    id: s.id,
+    kind: "note",
+    note: s.last_message_preview,
+    state:
+      s.status === "accepted" || s.status === "archived"
+        ? "accepted"
+        : s.status === "declined"
+          ? "declined"
+          : "submitted",
+    createdAt: s.created,
+  };
+}
 
 /**
  * Hydrate server threads on mount and whenever doc/ref changes, and re-hydrate
