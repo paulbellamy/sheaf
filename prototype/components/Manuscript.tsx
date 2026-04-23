@@ -240,6 +240,47 @@ export function Manuscript({
   const bump = useCallback(() => bumpLayout((n) => n + 1), []);
   useFormattingDiff(editor, setThreads, bump);
 
+  // When the server-driven initialContent changes, fold the new doc into the
+  // existing editor instead of remounting. This preserves selection, undo
+  // history, and any proposed marks whose threadId is still present.
+  //
+  // Safety: if the user has pending redline/note work against positions that
+  // no longer exist in the new doc, setContent will drop those marks when
+  // re-parsing HTML. We keep the thread objects in state regardless — the
+  // formatting-diff hook will GC stranded entries on the next transaction.
+  const lastAppliedContentRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!editor) return;
+    const incoming = initialContent ?? sampleManuscript;
+    if (lastAppliedContentRef.current === null) {
+      lastAppliedContentRef.current = incoming;
+      return;
+    }
+    if (lastAppliedContentRef.current === incoming) return;
+    lastAppliedContentRef.current = incoming;
+
+    // If the user has in-flight pending edits or the editor is focused,
+    // don't stomp their work. The SSE diff can still flash in DocView.
+    const hasPending = threads.some((t) => t.state === "pending");
+    if (hasPending || editor.isFocused) return;
+
+    const prevSelection = editor.state.selection;
+    const prevFrom = prevSelection.from;
+    const prevTo = prevSelection.to;
+    editor.commands.setContent(incoming, { emitUpdate: false });
+    const size = editor.state.doc.content.size;
+    if (prevFrom <= size && prevTo <= size) {
+      try {
+        editor.commands.setTextSelection({
+          from: Math.min(prevFrom, size),
+          to: Math.min(prevTo, size),
+        });
+      } catch {
+        /* selection drift is non-fatal */
+      }
+    }
+  }, [editor, initialContent, threads]);
+
   useLayoutEffect(() => {
     const onResize = () => bumpLayout((n) => n + 1);
     window.addEventListener("resize", onResize);

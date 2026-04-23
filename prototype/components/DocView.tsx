@@ -8,7 +8,6 @@ import type { BackendEvent } from "@/lib/mcp/backend/index";
 
 type Loaded = { md: string; path: string; ref: string };
 
-const FLASH_CLASS = "doc-block-flash";
 const PROSE_SELECTOR = ".manuscript-prose";
 
 // Simple LCS: for each index in `next`, returns true if that block is new or
@@ -60,40 +59,38 @@ export function DocView({
 }) {
   const [data, setData] = useState<Loaded | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const seqRef = useRef(0);
   const [rev, setRev] = useState(0);
 
-  const load = useCallback(
-    async (signal?: { cancelled: boolean }) => {
-      try {
-        const qs = docRef ? `?ref=${encodeURIComponent(docRef)}` : "";
-        const r = await fetch(`/api/ui/doc/${path}${qs}`, { cache: "no-store" });
-        const body = (await r.json()) as Loaded | { error: string };
-        if (signal?.cancelled) return;
-        if (!r.ok) {
-          setError("error" in body ? body.error : `HTTP ${r.status}`);
-          return;
-        }
-        setError(null);
-        setData((prev) => {
-          const next = body as Loaded;
-          if (prev && prev.md === next.md && prev.ref === next.ref) return prev;
-          setRev((n) => n + 1);
-          return next;
-        });
-      } catch (e) {
-        if (!signal?.cancelled) {
-          setError(e instanceof Error ? e.message : String(e));
-        }
+  const load = useCallback(async () => {
+    const mySeq = ++seqRef.current;
+    try {
+      const qs = docRef ? `?ref=${encodeURIComponent(docRef)}` : "";
+      const r = await fetch(`/api/ui/doc/${path}${qs}`, { cache: "no-store" });
+      const body = (await r.json()) as Loaded | { error: string };
+      if (mySeq !== seqRef.current) return;
+      if (!r.ok) {
+        setError("error" in body ? body.error : `HTTP ${r.status}`);
+        return;
       }
-    },
-    [path, docRef],
-  );
+      setError(null);
+      setData((prev) => {
+        const next = body as Loaded;
+        if (prev && prev.md === next.md && prev.ref === next.ref) return prev;
+        setRev((n) => n + 1);
+        return next;
+      });
+    } catch (e) {
+      if (mySeq !== seqRef.current) return;
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }, [path, docRef]);
 
   useEffect(() => {
-    const signal = { cancelled: false };
-    void load(signal);
+    void load();
     return () => {
-      signal.cancelled = true;
+      // advance the sequence so any in-flight request is discarded
+      seqRef.current += 1;
     };
   }, [load]);
 
@@ -125,40 +122,26 @@ export function DocView({
   );
 
   // Flash only the blocks whose rendered text changed between the previous
-  // and current Manuscript render. Runs after each mount driven by `rev`.
-  // First mount: records baseline without flashing.
+  // and current Manuscript render. Runs after each commit driven by `rev`.
+  // First commit: records baseline without flashing. Tracks rAF/timeout ids
+  // so we clean up on unmount.
   const containerRef = useRef<HTMLDivElement | null>(null);
   const prevTextsRef = useRef<string[] | null>(null);
-  const savedScrollRef = useRef<number | null>(null);
-  // Capture scroll position synchronously before the new Manuscript mount
-  // paints, so we can restore it if TipTap's remount-scroll kicks in.
-  if (typeof window !== "undefined" && rev > 0) {
-    savedScrollRef.current = window.scrollY;
-  }
+
   useEffect(() => {
     if (!containerRef.current) return;
-    const savedScroll = savedScrollRef.current;
     let cancelled = false;
+    let rafId: number | null = null;
+    const timers: number[] = [];
+    const overlays: HTMLElement[] = [];
     let attempts = 0;
-    // Pin scroll for ~600ms after the rev change, defeating any auto-scroll
-    // triggered by TipTap's remount / focus-on-mount behaviour.
-    if (savedScroll !== null) {
-      const pinUntil = performance.now() + 600;
-      const pin = () => {
-        if (cancelled) return;
-        if (Math.abs(window.scrollY - savedScroll) > 1) {
-          window.scrollTo(window.scrollX, savedScroll);
-        }
-        if (performance.now() < pinUntil) requestAnimationFrame(pin);
-      };
-      requestAnimationFrame(pin);
-    }
+
     const settle = () => {
       if (cancelled) return;
       const texts = sampleBlockTexts(containerRef.current);
       if (texts.length === 0) {
         if (attempts++ < 60) {
-          requestAnimationFrame(settle);
+          rafId = requestAnimationFrame(settle);
         }
         return;
       }
@@ -183,12 +166,18 @@ export function DocView({
         overlay.style.zIndex = "9999";
         overlay.style.transition = "opacity 1200ms ease-out";
         document.body.appendChild(overlay);
-        requestAnimationFrame(() => {
+        overlays.push(overlay);
+        const rafFade = requestAnimationFrame(() => {
           requestAnimationFrame(() => {
             overlay.style.opacity = "0";
           });
         });
-        window.setTimeout(() => overlay.remove(), 1400);
+        const t = window.setTimeout(() => {
+          overlay.remove();
+        }, 1400);
+        timers.push(t);
+        // track the rAF so we can cancel on unmount
+        timers.push(rafFade as unknown as number);
       };
       let flashed = 0;
       for (let i = 0; i < els.length; i++) {
@@ -196,24 +185,28 @@ export function DocView({
         flashEl(els[i]);
         flashed++;
       }
-      // If nothing was flagged as changed but texts differ overall, flash the
-      // whole prose as a fallback so the change is still visible.
       if (flashed === 0 && prev.join("\n") !== texts.join("\n")) {
         flashEl(prose as HTMLElement);
       }
     };
-    requestAnimationFrame(settle);
+    rafId = requestAnimationFrame(settle);
     return () => {
       cancelled = true;
+      if (rafId !== null) cancelAnimationFrame(rafId);
+      for (const t of timers) window.clearTimeout(t);
+      for (const el of overlays) el.remove();
     };
   }, [rev]);
 
   if (error) return <div className="doc-error">{error}</div>;
   if (!html || !data) return <div className="doc-loading">loading {path}…</div>;
+  // Note: no `key={rev}` — we want Manuscript to persist across SSE-driven
+  // doc refreshes so the user's in-flight edits, undo history, and scroll
+  // position survive. Manuscript applies `md` / `initialContent` changes
+  // via a ProseMirror transaction that preserves selection and marks.
   return (
     <div ref={containerRef}>
       <Manuscript
-        key={rev}
         initialContent={html}
         md={data.md}
         docPath={path}
