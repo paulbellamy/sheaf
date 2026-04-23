@@ -54,12 +54,6 @@ function buildCandidates(selection: string): string[] {
   if (firstLine) out.add(firstLine);
   const firstSentence = firstLine?.match(/^[^.!?]+[.!?]?/)?.[0]?.trim();
   if (firstSentence) out.add(firstSentence);
-  // Last-ditch prefixes so a long selection with one odd character still
-  // anchors to roughly the right place.
-  for (const len of [40, 20, 10]) {
-    const head = trimmed.slice(0, len).trim();
-    if (head.length >= 3) out.add(head);
-  }
   return [...out].filter((s) => s.length >= 2);
 }
 

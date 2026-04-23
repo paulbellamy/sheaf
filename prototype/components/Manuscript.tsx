@@ -64,7 +64,11 @@ export function Manuscript({
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [draftBusy, setDraftBusy] = useState(false);
   const mdRef = useRef<string>(md ?? "");
-  mdRef.current = md ?? "";
+  // Keep mdRef in sync with the prop via effect rather than mutating during
+  // render — avoids surprise if React re-invokes the render before commit.
+  useEffect(() => {
+    mdRef.current = md ?? "";
+  }, [md]);
 
   const editContextRef = useRef<EditContext | null>(null);
   const manuscriptRef = useRef<HTMLDivElement | null>(null);
@@ -310,20 +314,10 @@ export function Manuscript({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // First-run help.
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (window.location.search.includes("nohelp")) return;
-    if (!window.localStorage.getItem("sheaf.seen-help")) {
-      setShowHelp(true);
-    }
-  }, []);
-
+  // Help is always closed on load. Users press `?` (or the fab/kbd button)
+  // to open it. Dismissing just closes — no localStorage, no first-run pop.
   const dismissHelp = useCallback(() => {
     setShowHelp(false);
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem("sheaf.seen-help", "1");
-    }
   }, []);
 
   const getThreadView = useCallback(

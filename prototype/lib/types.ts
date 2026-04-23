@@ -23,5 +23,11 @@ export type Review = {
 };
 
 export function newId(prefix: string): string {
-  return `${prefix}_${Math.random().toString(36).slice(2, 8)}`;
+  // Use crypto.randomUUID() when available for collision-resistant ids.
+  // Fall back to Math.random on older runtimes (e.g. non-secure contexts).
+  const uuid =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID().replace(/-/g, "").slice(0, 8)
+      : Math.random().toString(36).slice(2, 10);
+  return `${prefix}_${uuid}`;
 }

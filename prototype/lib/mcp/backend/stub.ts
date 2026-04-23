@@ -249,7 +249,7 @@ export class StubBackend implements Backend {
   private async readOpLog(): Promise<OpLog> {
     if (this.opLogCache) return this.opLogCache;
     try {
-      const raw = await fs.readFile(this.opLogPath, "utf8");
+      const raw = await readFileNoFollow(this.opLogPath);
       this.opLogCache = JSON.parse(raw) as OpLog;
     } catch {
       this.opLogCache = {};
@@ -260,7 +260,7 @@ export class StubBackend implements Backend {
   private async writeOpLog(log: OpLog): Promise<void> {
     this.opLogCache = log;
     await this.ensureDir(path.dirname(this.opLogPath));
-    await fs.writeFile(this.opLogPath, JSON.stringify(log, null, 2), "utf8");
+    await writeFileNoFollow(this.opLogPath, JSON.stringify(log, null, 2));
   }
 
   private async cachedWrite(
@@ -279,7 +279,7 @@ export class StubBackend implements Backend {
   private async loadDraftMeta(draftId: DraftId): Promise<DraftMeta> {
     assertDraftId(draftId);
     try {
-      const raw = await fs.readFile(this.absDraftMeta(draftId), "utf8");
+      const raw = await readFileNoFollow(this.absDraftMeta(draftId));
       return JSON.parse(raw) as DraftMeta;
     } catch {
       throw err.draftNotFound(draftId);
@@ -289,7 +289,7 @@ export class StubBackend implements Backend {
   private async saveDraftMeta(meta: DraftMeta): Promise<void> {
     const p = this.absDraftMeta(meta.draft_id);
     await this.ensureDir(path.dirname(p));
-    await fs.writeFile(p, JSON.stringify(meta, null, 2), "utf8");
+    await writeFileNoFollow(p, JSON.stringify(meta, null, 2));
   }
 
   async listWorkspaces(): Promise<Workspace[]> {
@@ -312,8 +312,8 @@ export class StubBackend implements Backend {
       if (!f.endsWith(".md")) continue;
       const rel = path.relative(this.root, f).replace(/\\/g, "/");
       if (prefix && !rel.startsWith(prefix)) continue;
-      const stat = await fs.stat(f);
-      const md = await fs.readFile(f, "utf8");
+      const stat = await fs.lstat(f);
+      const md = await readFileNoFollow(f);
       results.push({
         path: rel,
         title: titleFromMd(md, path.basename(f, ".md")),
@@ -345,8 +345,8 @@ export class StubBackend implements Backend {
       if (!f.endsWith(".md")) continue;
       const rel = path.relative(draftBase, f).replace(/\\/g, "/");
       if (!rel.startsWith("workspaces/")) continue;
-      const stat = await fs.stat(f);
-      const md = await fs.readFile(f, "utf8");
+      const stat = await fs.lstat(f);
+      const md = await readFileNoFollow(f);
       overridden.set(rel, {
         path: rel,
         title: titleFromMd(md, path.basename(f, ".md")),
@@ -582,6 +582,7 @@ export class StubBackend implements Backend {
       const meta = await this.loadDraftMeta(draftId);
       const draftRoot = path.join(this.root, ".drafts", draftId);
       const draftFiles = await walk(draftRoot);
+      const mergedPaths: DocPath[] = [];
       for (const f of draftFiles) {
         const rel = path.relative(draftRoot, f).replace(/\\/g, "/");
         if (!rel.startsWith("workspaces/")) continue;
@@ -590,7 +591,8 @@ export class StubBackend implements Backend {
         assertWorkspacePath(rel);
         const dest = safeJoin(this.root, rel);
         await this.ensureDir(path.dirname(dest));
-        await fs.copyFile(f, dest);
+        await copyFileNoFollow(f, dest);
+        if (rel.endsWith(".md")) mergedPaths.push(rel);
       }
       meta.state = "accepted";
       await this.saveDraftMeta(meta);
@@ -598,6 +600,14 @@ export class StubBackend implements Backend {
         kind: "draft_state",
         draft_id: draftId,
         state: "accepted",
+      });
+      // draft_merged is distinct from draft_state=accepted: Propose-accept
+      // flips state without touching main; merge() is the one that actually
+      // lands bytes. UI that cares about "main has changed" listens here.
+      this.emit({
+        kind: "draft_merged",
+        draft_id: draftId,
+        target_paths: mergedPaths,
       });
       return {
         commit: `c-${sha(`merge:${draftId}:${Date.now()}`).slice(0, 12)}`,
@@ -629,10 +639,10 @@ export class StubBackend implements Backend {
     for (const f of files) {
       const rel = path.relative(draftRoot, f).replace(/\\/g, "/");
       if (!rel.startsWith("workspaces/") || !rel.endsWith(".md")) continue;
-      const draft_md = await fs.readFile(f, "utf8");
+      const draft_md = await readFileNoFollow(f);
       let main_md = "";
       try {
-        main_md = await fs.readFile(this.absMain(rel), "utf8");
+        main_md = await readFileNoFollow(this.absMain(rel));
       } catch {
         main_md = "";
       }
@@ -710,7 +720,7 @@ export class StubBackend implements Backend {
     const files = await this.allThreadFiles();
     for (const f of files) {
       if (path.basename(f) === `${id}.yaml`) {
-        const raw = await fs.readFile(f, "utf8");
+        const raw = await readFileNoFollow(f);
         const t = yaml.parse(raw) as Thread;
         t.draft_id = this.draftIdFromFilePath(f);
         return t;
@@ -727,7 +737,7 @@ export class StubBackend implements Backend {
     assertThreadId(t.id);
     const sidecar = this.threadSidecarPath(t.targets[0].path, t);
     await this.ensureDir(path.dirname(sidecar));
-    await fs.writeFile(sidecar, yaml.stringify(t), "utf8");
+    await writeFileNoFollow(sidecar, yaml.stringify(t));
   }
 
   async listThreads(opts: {
@@ -740,7 +750,7 @@ export class StubBackend implements Backend {
       opts.ref === undefined || opts.ref === "main" ? undefined : opts.ref;
     const out: ThreadSummary[] = [];
     for (const f of files) {
-      const raw = await fs.readFile(f, "utf8");
+      const raw = await readFileNoFollow(f);
       const t = yaml.parse(raw) as Thread;
       const draftId = this.draftIdFromFilePath(f);
       if (opts.thread_id && t.id !== opts.thread_id) continue;
