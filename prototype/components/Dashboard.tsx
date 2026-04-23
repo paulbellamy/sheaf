@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+
+import { useJson } from "@/lib/hooks/useJson";
 
 type DocEntry = {
   path: string;
@@ -37,24 +38,7 @@ function relTime(ms: number): string {
 }
 
 export function Dashboard() {
-  const [data, setData] = useState<Payload | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const r = await fetch("/api/ui/docs", { cache: "no-store" });
-        const body = (await r.json()) as Payload | { error: string };
-        if (!r.ok) {
-          setError("error" in body ? body.error : `HTTP ${r.status}`);
-          return;
-        }
-        setData(body as Payload);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      }
-    })();
-  }, []);
+  const { data, error } = useJson<Payload>("/api/ui/docs", []);
 
   const docs = data?.docs ?? [];
   const drafts = data?.drafts ?? [];

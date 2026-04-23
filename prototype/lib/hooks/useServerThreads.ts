@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 import type { Thread } from "@/lib/types";
 import { backendSummaryToUiThread } from "@/lib/threads-adapter";
@@ -15,10 +15,11 @@ export function useServerThreads(
   docRef: string,
   setThreads: (updater: (prev: Thread[]) => Thread[]) => void,
 ) {
+  const seqRef = useRef(0);
   useEffect(() => {
     if (!docPath) return;
-    let cancelled = false;
     const load = async () => {
+      const mySeq = ++seqRef.current;
       try {
         const r = await fetch(
           `/api/ui/threads?path=${encodeURIComponent(docPath)}&ref=${encodeURIComponent(docRef)}`,
@@ -26,7 +27,7 @@ export function useServerThreads(
         );
         if (!r.ok) return;
         const body = (await r.json()) as { threads: ThreadSummary[] };
-        if (cancelled) return;
+        if (mySeq !== seqRef.current) return;
         const server = body.threads
           .filter((t) => t.status === "open")
           .map(backendSummaryToUiThread);
@@ -53,7 +54,8 @@ export function useServerThreads(
       if (event.kind === "thread_changed") void load();
     });
     return () => {
-      cancelled = true;
+      // advance the sequence so any in-flight response is discarded
+      seqRef.current += 1;
       unsubscribe();
     };
   }, [docPath, docRef, setThreads]);

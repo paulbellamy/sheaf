@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 
 import { subscribeBackendEvents } from "@/lib/hooks/useBackendEvents";
+import { useJson } from "@/lib/hooks/useJson";
 
 type DocEntry = {
   path: string;
@@ -35,34 +36,7 @@ export function DocRail({
   activePath?: string;
   activeRef?: string;
 }) {
-  const [data, setData] = useState<Payload | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(async (signal?: { cancelled: boolean }) => {
-    try {
-      const r = await fetch("/api/ui/docs", { cache: "no-store" });
-      const body = (await r.json()) as Payload | { error: string };
-      if (signal?.cancelled) return;
-      if (!r.ok) {
-        setError("error" in body ? body.error : `HTTP ${r.status}`);
-        return;
-      }
-      setError(null);
-      setData(body as Payload);
-    } catch (e) {
-      if (!signal?.cancelled) {
-        setError(e instanceof Error ? e.message : String(e));
-      }
-    }
-  }, []);
-
-  useEffect(() => {
-    const signal = { cancelled: false };
-    void load(signal);
-    return () => {
-      signal.cancelled = true;
-    };
-  }, [load]);
+  const { data, error, reload } = useJson<Payload>("/api/ui/docs", []);
 
   // Refresh the index when drafts are forked, written to, or change state.
   // Debounce bursts (e.g. an agent doing many Edits in a row) with a short
@@ -73,7 +47,7 @@ export function DocRail({
       if (timer) return;
       timer = setTimeout(() => {
         timer = null;
-        void load();
+        void reload();
       }, REFRESH_DEBOUNCE_MS);
     };
     const unsubscribe = subscribeBackendEvents((event) => {
@@ -89,7 +63,7 @@ export function DocRail({
       unsubscribe();
       if (timer) clearTimeout(timer);
     };
-  }, [load]);
+  }, [reload]);
 
   const groupedDocs = useMemo(() => {
     const map = new Map<string, DocEntry[]>();
