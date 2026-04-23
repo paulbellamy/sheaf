@@ -1,4 +1,5 @@
 import { getBackend } from "@/lib/mcp/backend/stub";
+import { respondError } from "@/lib/mcp/errors";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -54,7 +55,6 @@ export async function GET(): Promise<Response> {
 
     return Response.json({ docs, drafts });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return Response.json({ error: msg }, { status: 500 });
+    return respondError(e);
   }
 }

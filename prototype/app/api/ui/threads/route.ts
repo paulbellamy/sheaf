@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { getBackend } from "@/lib/mcp/backend/stub";
-import { McpError } from "@/lib/mcp/errors";
+import { respondError } from "@/lib/mcp/errors";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -35,7 +35,7 @@ export async function GET(req: Request): Promise<Response> {
     const threads = await getBackend().listThreads({ path: p, ref });
     return Response.json({ path: p, ref, threads });
   } catch (e) {
-    return errorResponse(e);
+    return respondError(e);
   }
 }
 
@@ -75,20 +75,6 @@ export async function POST(req: Request): Promise<Response> {
     });
     return Response.json({ thread_id: id }, { status: 201 });
   } catch (e) {
-    return errorResponse(e);
+    return respondError(e);
   }
-}
-
-function errorResponse(e: unknown): Response {
-  if (e instanceof McpError) {
-    const status =
-      e.code === "doc_not_found" || e.code === "draft_not_found"
-        ? 404
-        : e.code === "invalid_path" || e.code === "invalid_ref"
-          ? 400
-          : 500;
-    return Response.json({ error: e.message, code: e.code }, { status });
-  }
-  const msg = e instanceof Error ? e.message : String(e);
-  return Response.json({ error: msg }, { status: 500 });
 }
