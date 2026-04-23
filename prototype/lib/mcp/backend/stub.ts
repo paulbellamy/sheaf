@@ -514,6 +514,7 @@ export class StubBackend implements Backend {
   }
 
   merge(draftId: DraftId): Promise<{ commit: string }> {
+    assertDraftId(draftId);
     return this.withLock(async () => {
       const meta = await this.loadDraftMeta(draftId);
       const draftRoot = path.join(this.root, ".drafts", draftId);
@@ -521,7 +522,10 @@ export class StubBackend implements Backend {
       for (const f of draftFiles) {
         const rel = path.relative(draftRoot, f).replace(/\\/g, "/");
         if (!rel.startsWith("workspaces/")) continue;
-        const dest = path.join(this.root, rel);
+        // Re-validate before writing into main: the draft tree is a trust
+        // boundary and a stray symlink or crafted rel path must never escape.
+        assertWorkspacePath(rel);
+        const dest = safeJoin(this.root, rel);
         await this.ensureDir(path.dirname(dest));
         await fs.copyFile(f, dest);
       }
@@ -539,6 +543,7 @@ export class StubBackend implements Backend {
   }
 
   declineDraft(draftId: DraftId): Promise<void> {
+    assertDraftId(draftId);
     return this.withLock(async () => {
       const meta = await this.loadDraftMeta(draftId);
       meta.state = "declined";
@@ -639,6 +644,7 @@ export class StubBackend implements Backend {
   }
 
   private async loadThread(id: ThreadId): Promise<Thread> {
+    assertThreadId(id);
     const files = await this.allThreadFiles();
     for (const f of files) {
       if (path.basename(f) === `${id}.yaml`) {
