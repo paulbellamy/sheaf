@@ -32,6 +32,11 @@ import {
   assertWorkspacePath,
   safeJoin,
 } from "../paths";
+import {
+  draftMetaSchema,
+  opLogSchema,
+  threadOnDiskSchema,
+} from "../persistence-schemas";
 
 /**
  * Filesystem-backed stub backend for the prototype.
@@ -137,12 +142,20 @@ async function walk(root: string): Promise<string[]> {
  * the final path component fails with ELOOP instead of being silently
  * dereferenced into (e.g.) `/etc/passwd`.
  */
+/** Largest file we're willing to read into memory. See MAX_DISK_BYTES in
+ *  persistence-schemas.ts for the matching "structured" cap. */
+const MAX_FILE_BYTES = 4 * 1024 * 1024;
+
 async function readFileNoFollow(abs: string): Promise<string> {
   const fh = await fs.open(
     abs,
     fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
   );
   try {
+    const st = await fh.stat();
+    if (st.size > MAX_FILE_BYTES) {
+      throw err.payloadTooLarge(`file ${abs}`, MAX_FILE_BYTES);
+    }
     const buf = await fh.readFile();
     return buf.toString("utf8");
   } finally {
@@ -250,7 +263,15 @@ export class StubBackend implements Backend {
     if (this.opLogCache) return this.opLogCache;
     try {
       const raw = await readFileNoFollow(this.opLogPath);
-      this.opLogCache = JSON.parse(raw) as OpLog;
+      const parsed = opLogSchema.safeParse(JSON.parse(raw));
+      if (parsed.success) {
+        this.opLogCache = parsed.data as OpLog;
+      } else {
+        // Corrupt or drifted on-disk shape — keep going with an empty log
+        // rather than crashing the whole backend.
+        console.error("[stub] op_log failed schema validation; resetting");
+        this.opLogCache = {};
+      }
     } catch {
       this.opLogCache = {};
     }
@@ -278,12 +299,34 @@ export class StubBackend implements Backend {
 
   private async loadDraftMeta(draftId: DraftId): Promise<DraftMeta> {
     assertDraftId(draftId);
+    let raw: string;
     try {
-      const raw = await readFileNoFollow(this.absDraftMeta(draftId));
-      return JSON.parse(raw) as DraftMeta;
+      raw = await readFileNoFollow(this.absDraftMeta(draftId));
     } catch {
       throw err.draftNotFound(draftId);
     }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw err.draftNotFound(draftId);
+    }
+    const validated = draftMetaSchema.safeParse(parsed);
+    if (!validated.success) throw err.draftNotFound(draftId);
+    // Normalize legacy on-disk shapes: older files may carry `seed_prompt`
+    // or `note`; collapse both onto `intent` (first non-empty wins).
+    const data = validated.data;
+    const intent = data.intent ?? data.seed_prompt ?? data.note;
+    return {
+      draft_id: data.draft_id,
+      base_path: data.base_path,
+      intent,
+      author: data.author,
+      state: data.state,
+      created_at: data.created_at,
+      submitted_at: data.submitted_at,
+      name: data.name,
+    } satisfies DraftMeta;
   }
 
   private async saveDraftMeta(meta: DraftMeta): Promise<void> {
@@ -742,7 +785,9 @@ export class StubBackend implements Backend {
     for (const f of files) {
       if (path.basename(f) === `${id}.yaml`) {
         const raw = await readFileNoFollow(f);
-        const t = yaml.parse(raw) as Thread;
+        const validated = threadOnDiskSchema.safeParse(yaml.parse(raw));
+        if (!validated.success) throw err.threadNotFound(id);
+        const t = validated.data as Thread;
         t.draft_id = this.draftIdFromFilePath(f);
         return t;
       }
@@ -772,7 +817,9 @@ export class StubBackend implements Backend {
     const out: ThreadSummary[] = [];
     for (const f of files) {
       const raw = await readFileNoFollow(f);
-      const t = yaml.parse(raw) as Thread;
+      const validated = threadOnDiskSchema.safeParse(yaml.parse(raw));
+      if (!validated.success) continue; // skip drifted/corrupt sidecar
+      const t = validated.data as Thread;
       const draftId = this.draftIdFromFilePath(f);
       if (opts.thread_id && t.id !== opts.thread_id) continue;
       if (opts.ref !== undefined && draftId !== wantDraftId) continue;
