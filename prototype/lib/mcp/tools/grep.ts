@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { Backend } from "../backend/index";
-import { pathArg, refOptionalArg } from "../schemas";
+import { LIMITS, pathArg, refOptionalArg } from "../schemas";
 import { toToolError } from "../errors";
 
 /**
@@ -16,10 +16,15 @@ export function registerGrep(server: McpServer, backend: Backend): void {
       description:
         "Search sheaf doc content with a regex. Output modes match Claude Code's Grep: files_with_matches (default), content, or count.",
       inputSchema: {
-        pattern: z.string().describe("Regular expression."),
+        pattern: z
+          .string()
+          .min(1)
+          .max(LIMITS.grepPattern)
+          .describe("Regular expression."),
         path: pathArg.optional().describe("Limit to a single doc."),
         glob: z
           .string()
+          .max(LIMITS.glob)
           .optional()
           .describe("Limit to paths matching this glob."),
         output_mode: z

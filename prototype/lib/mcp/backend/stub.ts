@@ -362,6 +362,9 @@ export class StubBackend implements Backend {
       opts.pattern,
       (opts.case_insensitive ? "i" : "") + (opts.multiline ? "s" : ""),
     );
+    // Pre-compile the global variant once for count mode; the previous code
+    // rebuilt it on every iteration.
+    const globalRe = new RegExp(re.source, re.flags + "g");
     let candidates = await this.listAllDocs(ref);
     if (opts.path) candidates = candidates.filter((d) => d.path === opts.path);
     if (opts.glob) {
@@ -372,9 +375,17 @@ export class StubBackend implements Backend {
     const before = Math.max(0, opts.before_context ?? 0);
     const after = Math.max(0, opts.after_context ?? 0);
     const limit = opts.head_limit ?? Infinity;
+    // Soft wall-clock budget to bound catastrophic-backtracking regex input.
+    // A real fix needs `re2-wasm` or a worker-thread abort; this at least
+    // keeps a single malicious pattern from hanging the main loop forever.
+    const deadline = Date.now() + 500;
+    const checkDeadline = () => {
+      if (Date.now() > deadline) throw err.grepTimeout();
+    };
     if (mode === "files_with_matches") {
       const paths: DocPath[] = [];
       for (const d of candidates) {
+        checkDeadline();
         const { md } = await this.readDoc(d.path, ref);
         if (re.test(md)) paths.push(d.path);
         if (paths.length >= limit) break;
@@ -384,8 +395,10 @@ export class StubBackend implements Backend {
     if (mode === "count") {
       const counts: { path: DocPath; count: number }[] = [];
       for (const d of candidates) {
+        checkDeadline();
         const { md } = await this.readDoc(d.path, ref);
-        const m = md.match(new RegExp(re.source, re.flags + "g"));
+        globalRe.lastIndex = 0;
+        const m = md.match(globalRe);
         if (m && m.length > 0)
           counts.push({ path: d.path, count: m.length });
         if (counts.length >= limit) break;
@@ -394,9 +407,11 @@ export class StubBackend implements Backend {
     }
     const matches: GrepMatch[] = [];
     for (const d of candidates) {
+      checkDeadline();
       const { md } = await this.readDoc(d.path, ref);
       const lines = md.split("\n");
       for (let i = 0; i < lines.length; i++) {
+        if (i % 64 === 0) checkDeadline();
         if (re.test(lines[i])) {
           matches.push({
             path: d.path,
@@ -580,6 +595,12 @@ export class StubBackend implements Backend {
     assertDraftId(draftId);
     return this.withLock(async () => {
       const meta = await this.loadDraftMeta(draftId);
+      // Merge must go through Propose first. Otherwise `Fork` + `Write` +
+      // `Merge` lands arbitrary content on main without passing any review
+      // gate. `accepted` is idempotent; anything else is a misuse.
+      if (meta.state !== "submitted" && meta.state !== "accepted") {
+        throw err.draftNotSubmitted(draftId, meta.state);
+      }
       const draftRoot = path.join(this.root, ".drafts", draftId);
       const draftFiles = await walk(draftRoot);
       const mergedPaths: DocPath[] = [];

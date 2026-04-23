@@ -1,8 +1,7 @@
-import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { Backend } from "../backend/index";
-import { opIdArg, pathArg, refArg } from "../schemas";
+import { contentArg, opIdArg, pathArg, refArg } from "../schemas";
 import { toToolError } from "../errors";
 
 /**
@@ -18,7 +17,7 @@ export function registerWrite(server: McpServer, backend: Backend): void {
         "Overwrite a sheaf doc's full markdown on a draft ref. Writing to main is rejected — call Fork first and pass the returned draft_id as ref.",
       inputSchema: {
         file_path: pathArg,
-        content: z.string().describe("Full markdown to write."),
+        content: contentArg,
         ref: refArg,
         op_id: opIdArg,
       },

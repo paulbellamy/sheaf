@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { Backend } from "../backend/index";
-import { authorArg, pathArg } from "../schemas";
+import { authorArg, intentArg, pathArg } from "../schemas";
 import { toToolError } from "../errors";
 
 /**
@@ -26,12 +26,9 @@ export function registerFork(server: McpServer, backend: Backend): void {
           .optional()
           .default(1)
           .describe("How many parallel drafts to create."),
-        intent: z
-          .string()
-          .optional()
-          .describe(
-            "Optional natural-language intent for the draft; persisted with the draft for reviewer context. Editable at Propose time.",
-          ),
+        intent: intentArg.describe(
+          "Optional natural-language intent for the draft; persisted with the draft for reviewer context. Editable at Propose time.",
+        ),
         author: authorArg,
       },
       annotations: { readOnlyHint: false, openWorldHint: false },

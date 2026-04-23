@@ -1,8 +1,7 @@
-import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { Backend } from "../backend/index";
-import { draftIdArg } from "../schemas";
+import { draftIdArg, intentArg, nameArg } from "../schemas";
 import { toToolError } from "../errors";
 
 /**
@@ -20,16 +19,12 @@ export function registerPropose(server: McpServer, backend: Backend): void {
         "Finalize a draft so reviewers can see it. Draft state transitions to 'submitted'. Does not merge to main — use Merge for that.",
       inputSchema: {
         draft_id: draftIdArg,
-        intent: z
-          .string()
-          .optional()
-          .describe(
-            "Natural-language description of the draft's intent for reviewers. Overrides the intent set at Fork time when supplied.",
-          ),
-        name: z
-          .string()
-          .optional()
-          .describe("Human-friendly label shown in the review queue."),
+        intent: intentArg.describe(
+          "Natural-language description of the draft's intent for reviewers. Overrides the intent set at Fork time when supplied.",
+        ),
+        name: nameArg.describe(
+          "Human-friendly label shown in the review queue.",
+        ),
       },
       annotations: { readOnlyHint: false, openWorldHint: false },
     },

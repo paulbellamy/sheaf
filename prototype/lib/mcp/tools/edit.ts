@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { Backend } from "../backend/index";
-import { opIdArg, pathArg, refArg } from "../schemas";
+import { LIMITS, opIdArg, pathArg, refArg } from "../schemas";
 import { toToolError } from "../errors";
 
 /**
@@ -17,9 +17,13 @@ export function registerEdit(server: McpServer, backend: Backend): void {
         "Exact-string replace in a sheaf doc on a draft ref. old_string must occur exactly once unless replace_all is true. Errors when the match is missing or ambiguous so you can read the doc and retry.",
       inputSchema: {
         file_path: pathArg,
-        old_string: z.string().describe("Text to replace (must match exactly)."),
+        old_string: z
+          .string()
+          .max(LIMITS.content)
+          .describe("Text to replace (must match exactly)."),
         new_string: z
           .string()
+          .max(LIMITS.content)
           .describe("Replacement text (must differ from old_string)."),
         replace_all: z
           .boolean()

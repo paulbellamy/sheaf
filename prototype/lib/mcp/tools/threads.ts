@@ -5,6 +5,7 @@ import type { Backend } from "../backend/index";
 import {
   anchorSchema,
   authorArg,
+  messageArg,
   pathArg,
   refOptionalArg,
   threadDraftSchema,
@@ -96,8 +97,9 @@ export function registerThreadTools(
         targets: z
           .array(anchorSchema)
           .min(1)
+          .max(16)
           .describe("Target anchors — one per affected doc."),
-        message: z.string().min(1).describe("First message in the thread."),
+        message: messageArg.describe("First message in the thread."),
         author: authorArg,
         draft: threadDraftSchema.optional(),
         ref: refOptionalArg,
@@ -131,7 +133,7 @@ export function registerThreadTools(
         "Append a message to an existing thread. Optionally attach a draft as a counter-proposal / sub-draft.",
       inputSchema: {
         thread_id: threadIdArg,
-        message: z.string().min(1),
+        message: messageArg,
         author: authorArg,
         draft: threadDraftSchema.optional(),
       },

@@ -8,6 +8,9 @@ export type McpErrorCode =
   | "invalid_path"
   | "invalid_ref"
   | "invalid_thread_id"
+  | "draft_not_submitted"
+  | "grep_timeout"
+  | "payload_too_large"
   | "op_conflict";
 
 export class McpError extends Error {
@@ -57,6 +60,18 @@ export const err = {
       "invalid_thread_id",
       `thread id must match thrd_<uuid>: got ${id}`,
     ),
+  draftNotSubmitted: (id: string, state: string) =>
+    new McpError(
+      "draft_not_submitted",
+      `draft ${id} cannot be merged from state=${state}; call Propose first`,
+    ),
+  grepTimeout: () =>
+    new McpError("grep_timeout", "grep exceeded time budget; tighten the pattern"),
+  payloadTooLarge: (field: string, limit: number) =>
+    new McpError(
+      "payload_too_large",
+      `${field} exceeds ${limit} byte limit`,
+    ),
 };
 
 /**
@@ -64,6 +79,11 @@ export const err = {
  *
  * MCP tool errors are returned in-band (isError: true) rather than as JSON-RPC
  * errors, so the model can see the error text and self-correct.
+ *
+ * Non-McpError exceptions surface as a generic `internal` code with a fixed
+ * message — raw `.message` leaks host FS paths (ENOENT stack traces include
+ * the full path) and noisy implementation details. McpError messages are
+ * considered curated and safe to pass through.
  */
 export function toToolError(e: unknown): {
   content: { type: "text"; text: string }[];
@@ -77,10 +97,16 @@ export function toToolError(e: unknown): {
       structuredContent: { code: e.code, message: e.message },
     };
   }
-  const msg = e instanceof Error ? e.message : String(e);
+  // Log server-side for debugging; never echo the raw message to the client.
+  if (e instanceof Error) {
+    console.error("[mcp] internal error", e);
+  } else {
+    console.error("[mcp] internal error (non-Error thrown)", e);
+  }
+  const safe = "internal server error";
   return {
-    content: [{ type: "text", text: `internal: ${msg}` }],
+    content: [{ type: "text", text: `internal: ${safe}` }],
     isError: true,
-    structuredContent: { code: "internal", message: msg },
+    structuredContent: { code: "internal", message: safe },
   };
 }
