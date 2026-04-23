@@ -9,7 +9,7 @@ type Props = {
   open: boolean;
   onOpen: () => void;
   onClose: () => void;
-  onSubmit: (coverNote: string) => void;
+  onSubmit: (coverNote: string) => void | Promise<void>;
 };
 
 export function ReviewBundle({
@@ -21,6 +21,7 @@ export function ReviewBundle({
   onSubmit,
 }: Props) {
   const [coverNote, setCoverNote] = useState("");
+  const [busy, setBusy] = useState(false);
 
   if (pendingCount === 0 && !open) return null;
 
@@ -82,17 +83,24 @@ export function ReviewBundle({
           </div>
 
           <footer>
-            <button className="review-cancel" onClick={onClose}>
+            <button className="review-cancel" onClick={onClose} disabled={busy}>
               cancel
             </button>
             <button
               className="review-submit"
-              onClick={() => {
-                onSubmit(coverNote);
-                setCoverNote("");
+              disabled={busy}
+              onClick={async () => {
+                if (busy) return;
+                setBusy(true);
+                try {
+                  await onSubmit(coverNote);
+                  setCoverNote("");
+                } finally {
+                  setBusy(false);
+                }
               }}
             >
-              submit
+              {busy ? "submitting…" : "submit"}
             </button>
           </footer>
         </aside>
