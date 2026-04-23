@@ -7,6 +7,7 @@ export type McpErrorCode =
   | "edit_ambiguous"
   | "invalid_path"
   | "invalid_ref"
+  | "invalid_thread_id"
   | "op_conflict";
 
 export class McpError extends Error {
@@ -50,6 +51,11 @@ export const err = {
     new McpError(
       "invalid_ref",
       `ref must be "main" or a draft_<uuid>: got ${ref}`,
+    ),
+  invalidThreadId: (id: string) =>
+    new McpError(
+      "invalid_thread_id",
+      `thread id must match thrd_<uuid>: got ${id}`,
     ),
 };
 

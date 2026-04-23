@@ -25,6 +25,13 @@ import {
   type Workspace,
 } from "./index";
 import { McpError, err } from "../errors";
+import {
+  DRAFT_ID_RE,
+  assertDraftId,
+  assertThreadId,
+  assertWorkspacePath,
+  safeJoin,
+} from "../paths";
 
 /**
  * Filesystem-backed stub backend for the prototype.
@@ -55,17 +62,9 @@ type DraftMeta = {
 
 type OpLog = Record<string, WriteResult>;
 
-const DRAFT_ID_RE = /^draft_[A-Za-z0-9-]+$/;
-
 function assertDraftRef(ref: Ref): asserts ref is DraftId {
   if (ref === "main") throw err.writeToMainForbidden();
-  if (!DRAFT_ID_RE.test(ref)) throw err.invalidRef(ref);
-}
-
-function assertWorkspacePath(p: string): void {
-  if (!p.startsWith("workspaces/") || p.includes("..")) {
-    throw err.invalidPath(p);
-  }
+  assertDraftId(ref);
 }
 
 function titleFromMd(md: string, fallback: string): string {
@@ -167,15 +166,20 @@ export class StubBackend implements Backend {
 
   private absMain(p: DocPath): string {
     assertWorkspacePath(p);
-    return path.join(this.root, p);
+    return safeJoin(this.root, p);
   }
 
   private absDraft(draftId: DraftId, p: DocPath): string {
-    return path.join(this.root, ".drafts", draftId, p);
+    assertDraftId(draftId);
+    assertWorkspacePath(p);
+    const draftRoot = path.join(this.root, ".drafts", draftId);
+    return safeJoin(draftRoot, p);
   }
 
   private absDraftMeta(draftId: DraftId): string {
-    return path.join(this.root, ".drafts", draftId, "meta.json");
+    assertDraftId(draftId);
+    const draftRoot = path.join(this.root, ".drafts", draftId);
+    return safeJoin(draftRoot, "meta.json");
   }
 
   private async ensureDir(p: string): Promise<void> {
@@ -213,7 +217,7 @@ export class StubBackend implements Backend {
   }
 
   private async loadDraftMeta(draftId: DraftId): Promise<DraftMeta> {
-    if (!DRAFT_ID_RE.test(draftId)) throw err.invalidRef(draftId);
+    assertDraftId(draftId);
     try {
       const raw = await fs.readFile(this.absDraftMeta(draftId), "utf8");
       return JSON.parse(raw) as DraftMeta;
@@ -603,12 +607,16 @@ export class StubBackend implements Backend {
   }
 
   private threadSidecarPath(homeDoc: DocPath, t: Thread): string {
+    assertWorkspacePath(homeDoc);
+    assertThreadId(t.id);
     const base = homeDoc.replace(/\.md$/, ".threads");
-    const file = `${t.id}.yaml`;
+    const rel = `${base}/${t.id}.yaml`;
     if (t.draft_id) {
-      return path.join(this.root, ".drafts", t.draft_id, base, file);
+      assertDraftId(t.draft_id);
+      const draftRoot = path.join(this.root, ".drafts", t.draft_id);
+      return safeJoin(draftRoot, rel);
     }
-    return path.join(this.root, base, file);
+    return safeJoin(this.root, rel);
   }
 
   private async allThreadFiles(): Promise<string[]> {
@@ -647,6 +655,8 @@ export class StubBackend implements Backend {
     if (t.targets.length === 0) {
       throw new McpError("invalid_path", "thread has no targets to save");
     }
+    assertWorkspacePath(t.targets[0].path);
+    assertThreadId(t.id);
     const sidecar = this.threadSidecarPath(t.targets[0].path, t);
     await this.ensureDir(path.dirname(sidecar));
     await fs.writeFile(sidecar, yaml.stringify(t), "utf8");
@@ -780,13 +790,9 @@ export class StubBackend implements Backend {
   }
 }
 
-let cachedBackend: Backend | null = null;
-
-export function getBackend(): Backend {
-  if (cachedBackend) return cachedBackend;
-  const root =
-    process.env.SHEAF_DATA_ROOT ??
-    path.join(process.cwd(), "data");
-  cachedBackend = new StubBackend(root);
-  return cachedBackend;
-}
+/**
+ * Deprecated re-export. The factory lives in `./factory.ts` — new consumers
+ * should import from there. This shim keeps existing app/api callers
+ * compiling while migration rolls through.
+ */
+export { getBackend } from "./factory";
