@@ -38,16 +38,13 @@ export function registerRead(server: McpServer, backend: Backend): void {
     },
     async ({ file_path, offset, limit, ref }) => {
       try {
-        const { md, ycrdt_version, head_commit } = await backend.readDoc(
-          file_path,
-          ref,
-        );
+        const { md, version, origin } = await backend.readDoc(file_path, ref);
         return {
           content: [
             { type: "text", text: sliceText(md, offset, limit) },
             {
               type: "text",
-              text: `\n--\nref: ${ref ?? "main"}  version: ${ycrdt_version}  commit: ${head_commit}`,
+              text: `\n--\nref: ${ref ?? "main"}  version: ${version}  origin: ${origin}`,
             },
           ],
         };

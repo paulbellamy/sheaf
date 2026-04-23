@@ -27,13 +27,22 @@ export type DocSummary = {
 
 export type DocContent = {
   md: string;
-  ycrdt_version: string;
-  head_commit: string;
+  /**
+   * Opaque version token. Meaningful only to the backend that emitted it;
+   * callers may round-trip it as a stale-check handle but must not parse it.
+   */
+  version: string;
+  /**
+   * Which tree the bytes actually came from. `readDoc(path, draftId)` falls
+   * through to main when the draft has no override; `origin` tells callers
+   * which tree they're looking at without another round-trip.
+   */
+  origin: "main" | "draft";
 };
 
 export type WriteResult = {
-  commit: string;
-  ycrdt_version: string;
+  /** Opaque version token. Same semantics as DocContent.version. */
+  version: string;
 };
 
 export type GrepMatch = {
@@ -66,12 +75,17 @@ export type GrepResult =
 export type DraftSummary = {
   draft_id: DraftId;
   base_path: DocPath;
-  seed_prompt?: string;
+  /**
+   * Natural-language description of the draft's intent. Set at Fork time,
+   * editable at Propose time. Replaces the previous `seed_prompt`+`note`
+   * split — both were always shown to the same reviewer audience.
+   */
+  intent?: string;
   author: string;
   state: "open" | "submitted" | "accepted" | "declined";
   created_at: number;
   submitted_at?: number;
-  note?: string;
+  /** Human-friendly label shown in the review queue. */
   name?: string;
 };
 
@@ -149,14 +163,14 @@ export interface Backend {
   fork(
     path: DocPath,
     n: number,
-    seedPrompt?: string,
+    intent?: string,
     author?: string,
   ): Promise<DraftId[]>;
 
   propose(
     draftId: DraftId,
-    note?: string,
-    draftName?: string,
+    intent?: string,
+    name?: string,
   ): Promise<{ diff_url: string }>;
 
   merge(draftId: DraftId): Promise<{ commit: string }>;

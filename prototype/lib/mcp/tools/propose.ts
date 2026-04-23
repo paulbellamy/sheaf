@@ -20,22 +20,22 @@ export function registerPropose(server: McpServer, backend: Backend): void {
         "Finalize a draft so reviewers can see it. Draft state transitions to 'submitted'. Does not merge to main — use Merge for that.",
       inputSchema: {
         draft_id: draftIdArg,
-        note: z
+        intent: z
           .string()
           .optional()
           .describe(
-            "Cover note for reviewers explaining the draft's intent and any context they'll need.",
+            "Natural-language description of the draft's intent for reviewers. Overrides the intent set at Fork time when supplied.",
           ),
-        draft_name: z
+        name: z
           .string()
           .optional()
-          .describe("Human-friendly name shown in the review queue."),
+          .describe("Human-friendly label shown in the review queue."),
       },
       annotations: { readOnlyHint: false, openWorldHint: false },
     },
-    async ({ draft_id, note, draft_name }) => {
+    async ({ draft_id, intent, name }) => {
       try {
-        const result = await backend.propose(draft_id, note, draft_name);
+        const result = await backend.propose(draft_id, intent, name);
         return {
           content: [
             {

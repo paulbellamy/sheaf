@@ -1,4 +1,4 @@
-import { promises as fs } from "node:fs";
+import { promises as fs, constants as fsConstants } from "node:fs";
 import * as path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import * as yaml from "yaml";
@@ -51,12 +51,12 @@ import {
 type DraftMeta = {
   draft_id: DraftId;
   base_path: DocPath;
-  seed_prompt?: string;
+  /** Natural-language intent — set at Fork, editable at Propose. */
+  intent?: string;
   author: string;
   state: "open" | "submitted" | "accepted" | "declined";
   created_at: number;
   submitted_at?: number;
-  note?: string;
   name?: string;
 };
 
@@ -121,11 +121,71 @@ async function walk(root: string): Promise<string[]> {
     }
     for (const e of entries) {
       const full = path.join(dir, e.name);
+      // Silently skip symlinks/devices/sockets/FIFOs — `isFile()` /
+      // `isDirectory()` already return false for them, but the explicit
+      // symlink check documents the invariant.
+      if (e.isSymbolicLink()) continue;
       if (e.isDirectory()) stack.push(full);
       else if (e.isFile()) out.push(full);
     }
   }
   return out;
+}
+
+/**
+ * Symlink-hostile file read. Opens with `O_NOFOLLOW` so a symlink planted at
+ * the final path component fails with ELOOP instead of being silently
+ * dereferenced into (e.g.) `/etc/passwd`.
+ */
+async function readFileNoFollow(abs: string): Promise<string> {
+  const fh = await fs.open(
+    abs,
+    fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW,
+  );
+  try {
+    const buf = await fh.readFile();
+    return buf.toString("utf8");
+  } finally {
+    await fh.close();
+  }
+}
+
+/**
+ * Symlink-hostile file write. Rejects pre-existing symlinks up front; then
+ * opens with `O_NOFOLLOW | O_CREAT | O_WRONLY | O_TRUNC` so any race-created
+ * symlink between the lstat and the open still fails.
+ */
+async function writeFileNoFollow(abs: string, content: string): Promise<void> {
+  try {
+    const st = await fs.lstat(abs);
+    if (st.isSymbolicLink()) throw err.invalidPath(abs);
+  } catch (e) {
+    if (e instanceof McpError) throw e;
+    // ENOENT is fine — we're about to create.
+  }
+  const fh = await fs.open(
+    abs,
+    fsConstants.O_WRONLY |
+      fsConstants.O_CREAT |
+      fsConstants.O_TRUNC |
+      fsConstants.O_NOFOLLOW,
+    0o644,
+  );
+  try {
+    await fh.writeFile(content, "utf8");
+  } finally {
+    await fh.close();
+  }
+}
+
+/**
+ * Symlink-hostile copy. Rejects symlinks at both ends.
+ */
+async function copyFileNoFollow(src: string, dest: string): Promise<void> {
+  const srcStat = await fs.lstat(src);
+  if (!srcStat.isFile()) throw err.invalidPath(src);
+  const content = await readFileNoFollow(src);
+  await writeFileNoFollow(dest, content);
 }
 
 export class StubBackend implements Backend {
@@ -362,28 +422,33 @@ export class StubBackend implements Backend {
   async readDoc(p: DocPath, ref: Ref = "main"): Promise<DocContent> {
     assertWorkspacePath(p);
     let abs: string;
+    let origin: "main" | "draft";
     if (ref === "main") {
       abs = this.absMain(p);
+      origin = "main";
     } else {
       await this.loadDraftMeta(ref);
       const draftAbs = this.absDraft(ref, p);
       try {
         await fs.stat(draftAbs);
         abs = draftAbs;
+        origin = "draft";
       } catch {
         abs = this.absMain(p);
+        origin = "main";
       }
     }
     let md: string;
     try {
-      md = await fs.readFile(abs, "utf8");
-    } catch {
+      md = await readFileNoFollow(abs);
+    } catch (e) {
+      if (e instanceof McpError) throw e;
       throw err.docNotFound(p);
     }
     return {
       md,
-      ycrdt_version: `v-${sha(md).slice(0, 12)}`,
-      head_commit: `c-${sha(`${ref}:${p}:${md}`).slice(0, 12)}`,
+      version: `v-${sha(md).slice(0, 12)}`,
+      origin,
     };
   }
 
@@ -400,10 +465,9 @@ export class StubBackend implements Backend {
         await this.loadDraftMeta(ref);
         const abs = this.absDraft(ref, p);
         await this.ensureDir(path.dirname(abs));
-        await fs.writeFile(abs, content, "utf8");
-        const result = {
-          commit: `c-${sha(`${ref}:${p}:${content}:${Date.now()}`).slice(0, 12)}`,
-          ycrdt_version: `v-${sha(content).slice(0, 12)}`,
+        await writeFileNoFollow(abs, content);
+        const result: WriteResult = {
+          version: `v-${sha(content).slice(0, 12)}`,
         };
         this.emit({ kind: "draft_changed", draft_id: ref, path: p });
         return result;
@@ -449,10 +513,9 @@ export class StubBackend implements Backend {
         }
         const abs = this.absDraft(ref, p);
         await this.ensureDir(path.dirname(abs));
-        await fs.writeFile(abs, next, "utf8");
-        const result = {
-          commit: `c-${sha(`${ref}:${p}:${next}:${Date.now()}`).slice(0, 12)}`,
-          ycrdt_version: `v-${sha(next).slice(0, 12)}`,
+        await writeFileNoFollow(abs, next);
+        const result: WriteResult = {
+          version: `v-${sha(next).slice(0, 12)}`,
         };
         this.emit({ kind: "draft_changed", draft_id: ref, path: p });
         return result;
@@ -463,7 +526,7 @@ export class StubBackend implements Backend {
   fork(
     p: DocPath,
     n: number,
-    seedPrompt?: string,
+    intent?: string,
     author = "agent",
   ): Promise<DraftId[]> {
     return this.withLock(async () => {
@@ -475,7 +538,7 @@ export class StubBackend implements Backend {
         const meta: DraftMeta = {
           draft_id: draftId,
           base_path: p,
-          seed_prompt: seedPrompt,
+          intent,
           author,
           state: "open",
           created_at: Date.now(),
@@ -494,15 +557,15 @@ export class StubBackend implements Backend {
 
   propose(
     draftId: DraftId,
-    note?: string,
-    draftName?: string,
+    intent?: string,
+    name?: string,
   ): Promise<{ diff_url: string }> {
     return this.withLock(async () => {
       const meta = await this.loadDraftMeta(draftId);
       meta.state = "submitted";
       meta.submitted_at = Date.now();
-      if (note !== undefined) meta.note = note;
-      if (draftName !== undefined) meta.name = draftName;
+      if (intent !== undefined) meta.intent = intent;
+      if (name !== undefined) meta.name = name;
       await this.saveDraftMeta(meta);
       this.emit({
         kind: "draft_state",
@@ -596,12 +659,11 @@ export class StubBackend implements Backend {
         out.push({
           draft_id: meta.draft_id,
           base_path: meta.base_path,
-          seed_prompt: meta.seed_prompt,
+          intent: meta.intent,
           author: meta.author,
           state: meta.state,
           created_at: meta.created_at,
           submitted_at: meta.submitted_at,
-          note: meta.note,
           name: meta.name,
         });
       } catch {

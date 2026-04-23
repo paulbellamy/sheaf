@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { Backend } from "./backend/index";
-import { getBackend } from "./backend/stub";
+import { getBackend } from "./backend/factory";
 import { registerEdit } from "./tools/edit";
 import { registerFork } from "./tools/fork";
 import { registerGlob } from "./tools/glob";
@@ -18,7 +18,7 @@ import { registerWrite } from "./tools/write";
  *
  * Factory because the Streamable HTTP transport creates a fresh server per
  * request in stateless mode. The Backend itself is module-scoped and shared
- * across requests (see getBackend() in backend/stub.ts).
+ * across requests (see getBackend() in backend/factory.ts).
  */
 export function buildServer(backend: Backend = getBackend()): McpServer {
   const server = new McpServer(

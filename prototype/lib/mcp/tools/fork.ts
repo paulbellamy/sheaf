@@ -26,19 +26,19 @@ export function registerFork(server: McpServer, backend: Backend): void {
           .optional()
           .default(1)
           .describe("How many parallel drafts to create."),
-        seed_prompt: z
+        intent: z
           .string()
           .optional()
           .describe(
-            "Optional natural-language intent for the draft; persisted with the draft for reviewer context.",
+            "Optional natural-language intent for the draft; persisted with the draft for reviewer context. Editable at Propose time.",
           ),
         author: authorArg,
       },
       annotations: { readOnlyHint: false, openWorldHint: false },
     },
-    async ({ path: p, n, seed_prompt, author }) => {
+    async ({ path: p, n, intent, author }) => {
       try {
-        const ids = await backend.fork(p, n ?? 1, seed_prompt, author);
+        const ids = await backend.fork(p, n ?? 1, intent, author);
         return {
           content: [
             {

@@ -31,7 +31,7 @@ export function registerWrite(server: McpServer, backend: Backend): void {
           content: [
             {
               type: "text",
-              text: `wrote ${file_path} @ ${ref}  commit=${result.commit}  version=${result.ycrdt_version}`,
+              text: `wrote ${file_path} @ ${ref}  version=${result.version}`,
             },
           ],
           structuredContent: result,

@@ -56,7 +56,7 @@ export function registerEdit(server: McpServer, backend: Backend): void {
           content: [
             {
               type: "text",
-              text: `edited ${file_path} @ ${ref}  commit=${result.commit}  version=${result.ycrdt_version}`,
+              text: `edited ${file_path} @ ${ref}  version=${result.version}`,
             },
           ],
           structuredContent: result,
