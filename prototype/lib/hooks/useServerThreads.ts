@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import type { Thread } from "@/lib/types";
 import { backendSummaryToUiThread } from "@/lib/threads-adapter";
 import type { ThreadSummary } from "@/lib/mcp/backend";
+import { subscribeBackendEvents } from "./useBackendEvents";
 
 /**
  * Hydrate server threads on mount and whenever doc/ref changes, and re-hydrate
@@ -48,18 +49,12 @@ export function useServerThreads(
     };
     void load();
 
-    const source = new EventSource("/api/ui/drafts/stream");
-    source.onmessage = (msg) => {
-      try {
-        const event = JSON.parse(msg.data) as { kind: string };
-        if (event.kind === "thread_changed") void load();
-      } catch {
-        /* ignore */
-      }
-    };
+    const unsubscribe = subscribeBackendEvents((event) => {
+      if (event.kind === "thread_changed") void load();
+    });
     return () => {
       cancelled = true;
-      source.close();
+      unsubscribe();
     };
   }, [docPath, docRef, setThreads]);
 }

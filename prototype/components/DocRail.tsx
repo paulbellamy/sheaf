@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import type { BackendEvent } from "@/lib/mcp/backend/index";
+import { subscribeBackendEvents } from "@/lib/hooks/useBackendEvents";
 
 type DocEntry = {
   path: string;
@@ -68,7 +68,6 @@ export function DocRail({
   // Debounce bursts (e.g. an agent doing many Edits in a row) with a short
   // trailing timer.
   useEffect(() => {
-    const source = new EventSource("/api/ui/drafts/stream");
     let timer: ReturnType<typeof setTimeout> | null = null;
     const schedule = () => {
       if (timer) return;
@@ -77,22 +76,17 @@ export function DocRail({
         void load();
       }, REFRESH_DEBOUNCE_MS);
     };
-    source.onmessage = (msg) => {
-      try {
-        const event = JSON.parse(msg.data) as BackendEvent;
-        if (
-          event.kind === "draft_created" ||
-          event.kind === "draft_changed" ||
-          event.kind === "draft_state"
-        ) {
-          schedule();
-        }
-      } catch {
-        /* ignore */
+    const unsubscribe = subscribeBackendEvents((event) => {
+      if (
+        event.kind === "draft_created" ||
+        event.kind === "draft_changed" ||
+        event.kind === "draft_state"
+      ) {
+        schedule();
       }
-    };
+    });
     return () => {
-      source.close();
+      unsubscribe();
       if (timer) clearTimeout(timer);
     };
   }, [load]);

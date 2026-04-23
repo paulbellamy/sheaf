@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { marked } from "marked";
 
 import { Manuscript } from "./Manuscript";
-import type { BackendEvent } from "@/lib/mcp/backend/index";
+import { subscribeBackendEvents } from "@/lib/hooks/useBackendEvents";
 
 type Loaded = { md: string; path: string; ref: string };
 
@@ -96,24 +96,15 @@ export function DocView({
 
   useEffect(() => {
     if (!docRef || docRef === "main") return;
-    const source = new EventSource("/api/ui/drafts/stream");
-    source.onmessage = (msg) => {
-      try {
-        const event = JSON.parse(msg.data) as BackendEvent;
-        if (
-          event.kind === "draft_changed" &&
-          event.draft_id === docRef &&
-          event.path === path
-        ) {
-          void load();
-        }
-      } catch {
-        /* ignore */
+    return subscribeBackendEvents((event) => {
+      if (
+        event.kind === "draft_changed" &&
+        event.draft_id === docRef &&
+        event.path === path
+      ) {
+        void load();
       }
-    };
-    return () => {
-      source.close();
-    };
+    });
   }, [path, docRef, load]);
 
   const html = useMemo(
