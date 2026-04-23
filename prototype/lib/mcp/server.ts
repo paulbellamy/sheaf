@@ -2,6 +2,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { Backend } from "./backend/index";
 import { getBackend } from "./backend/factory";
+import { registerDeclineDraft } from "./tools/decline";
 import { registerEdit } from "./tools/edit";
 import { registerFork } from "./tools/fork";
 import { registerGlob } from "./tools/glob";
@@ -41,6 +42,7 @@ export function buildServer(backend: Backend = getBackend()): McpServer {
   registerFork(server, backend);
   registerPropose(server, backend);
   registerMerge(server, backend);
+  registerDeclineDraft(server, backend);
   registerWorkspaceTools(server, backend);
   registerThreadTools(server, backend);
 

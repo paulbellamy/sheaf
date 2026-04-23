@@ -19,3 +19,13 @@ Monitor({
 ```
 
 Each notification is one `BackendEvent` JSON line (`thread_changed`, `draft_changed`, `draft_state`, `draft_created`). On `thread_changed`, call `ListThreads` / `ReadThread` via MCP. Stop with `TaskStop` when done.
+
+# Drafts are agent-originated
+
+Drafts are produced by agents (via `Fork` → `Write`/`Edit` → `Propose`). Human reviewers accept or decline them from the /review UI. The UI has no "new draft" button and is unlikely to grow one; if a human needs to propose a change by hand they write a thread instead.
+
+That asymmetry is intentional:
+- Agent-originated edits are the thing we want to review, so they deserve the heavier flow (draft + diff).
+- Human-originated conversation is the thing we want to keep lightweight, so threads are UI-first.
+
+The MCP tool surface covers the full draft lifecycle — `Fork`, `Write`, `Edit`, `Propose`, `Merge`, `DeclineDraft` — so agents never have to reach into the UI REST endpoints to close out their own drafts.
