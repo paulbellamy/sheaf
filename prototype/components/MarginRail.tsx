@@ -46,17 +46,23 @@ export function MarginRail({
     const rail = railRef.current;
     if (!rail) return;
 
+    // Batch DOM reads: call getAnchorTop once per thread (each coordsAtPos
+    // forces a layout flush), then sort/layout against the memoized values.
+    // Before this, the sort comparator called getAnchorTop N² times.
+    const anchorTopById = new Map<string, number | null>();
+    for (const t of threads) anchorTopById.set(t.id, getAnchorTop(t.id));
+
     const ordered = [...threads].sort((a, b) => {
-      const ta = getAnchorTop(a.id);
-      const tb = getAnchorTop(b.id);
-      if (ta === null || tb === null) return 0;
+      const ta = anchorTopById.get(a.id);
+      const tb = anchorTopById.get(b.id);
+      if (ta == null || tb == null) return 0;
       return ta - tb;
     });
 
     const next: Record<string, number> = {};
     let cursor = 0;
     for (const t of ordered) {
-      const anchorTop = getAnchorTop(t.id);
+      const anchorTop = anchorTopById.get(t.id) ?? null;
       const el = cardRefs.current.get(t.id);
       const h = el ? el.getBoundingClientRect().height : 80;
       const desired = anchorTop ?? cursor;

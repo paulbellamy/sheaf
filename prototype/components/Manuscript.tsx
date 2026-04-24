@@ -2,20 +2,26 @@
 
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
-import { Extension } from "@tiptap/core";
 import { CodeBlockLowlight } from "@tiptap/extension-code-block-lowlight";
 import { TaskList, TaskItem } from "@tiptap/extension-list";
 import { ReactNodeViewRenderer } from "@tiptap/react";
 import { CodeBlockView } from "./CodeBlockView";
-import { TextSelection } from "@tiptap/pm/state";
-import type { EditorState, Transaction } from "@tiptap/pm/state";
-import type { MarkType, Node as PMNode } from "@tiptap/pm/model";
-import { liftListItem, sinkListItem } from "@tiptap/pm/schema-list";
+import type { Node as PMNode } from "@tiptap/pm/model";
 import { common, createLowlight } from "lowlight";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { newId, type Thread } from "@/lib/types";
 import { sampleManuscript } from "@/lib/sampleText";
+import {
+  BlockIndent,
+  findContiguousThreadId,
+  tryIndent,
+} from "@/lib/editor-helpers";
+import { useFormattingDiff } from "@/lib/hooks/useFormattingDiff";
+import { useServerThreads } from "@/lib/hooks/useServerThreads";
+import { useSubmitReview } from "@/lib/hooks/useSubmitReview";
+import { useProposedEditHandlers } from "@/lib/hooks/useProposedEditHandlers";
+import { useThreadOutcome } from "@/lib/hooks/useThreadOutcome";
 import {
   ProposedDeletion,
   findThreadRange,
@@ -38,276 +44,35 @@ type EditContext = {
   lastTime: number;
 };
 
-type MarkdownTrigger =
-  | { kind: "heading"; level: 1 | 2 | 3 | 4 | 5 | 6 }
-  | { kind: "bulletList" }
-  | { kind: "orderedList" }
-  | { kind: "blockquote" }
-  | { kind: "codeBlock"; language: string | null };
-
-function detectMarkdownTrigger(
-  doc: PMNode,
-  from: number,
-  text: string,
-): MarkdownTrigger | null {
-  if (text !== " ") return null;
-
-  const $from = doc.resolve(from);
-  const block = $from.parent;
-  if (block.type.name !== "paragraph") return null;
-
-  const blockStart = $from.start();
-  const before = block.textBetween(0, from - blockStart, "\n", "\n");
-
-  const hashes = before.match(/^(#{1,6})$/);
-  if (hashes) {
-    const level = hashes[1].length as 1 | 2 | 3 | 4 | 5 | 6;
-    return { kind: "heading", level };
-  }
-  if (/^[-*+]$/.test(before)) return { kind: "bulletList" };
-  if (/^\d+\.$/.test(before)) return { kind: "orderedList" };
-  if (/^>$/.test(before)) return { kind: "blockquote" };
-  const code = before.match(/^```([a-z]*)$/i);
-  if (code) {
-    return { kind: "codeBlock", language: code[1] ? code[1].toLowerCase() : null };
-  }
-  return null;
-}
-
-function structuralLabelFor(trigger: MarkdownTrigger): string {
-  switch (trigger.kind) {
-    case "heading":
-      return `¶ → H${trigger.level}`;
-    case "bulletList":
-      return "¶ → bullet list";
-    case "orderedList":
-      return "¶ → numbered list";
-    case "blockquote":
-      return "¶ → blockquote";
-    case "codeBlock":
-      return `¶ → code block${trigger.language ? ` (${trigger.language})` : ""}`;
-  }
-}
-
-// Revert a block-level structural transition labeled "A → B" by applying
-// the command that restores state A. Returns true if a revert was applied.
-function revertBlockTransition(
-  editor: import("@tiptap/react").Editor,
-  label: string,
-  range: { from: number; to: number },
-): boolean {
-  const m = label.match(/^(.+?) → (.+)$/);
-  if (!m) return false;
-  const [, from, to] = m;
-
-  const docSize = editor.state.doc.content.size;
-  const pos = Math.min(Math.max(range.from, 0), docSize);
-  const chain = editor.chain().focus().setTextSelection(pos);
-
-  const headingFrom = from.match(/^H([1-6])$/);
-
-  // Apply the command that produces state `from` from current state `to`.
-  if (headingFrom) {
-    chain.setHeading({
-      level: parseInt(headingFrom[1], 10) as 1 | 2 | 3 | 4 | 5 | 6,
-    });
-  } else if (from === "¶") {
-    if (/^H[1-6]$/.test(to)) chain.setParagraph();
-    else if (to === "bullet list") chain.toggleBulletList();
-    else if (to === "numbered list") chain.toggleOrderedList();
-    else if (to === "task list") chain.toggleTaskList();
-    else if (to === "blockquote") chain.toggleBlockquote();
-    else if (to.startsWith("code block")) chain.toggleCodeBlock();
-    else return false;
-  } else if (from === "bullet list") {
-    chain.toggleBulletList();
-  } else if (from === "numbered list") {
-    chain.toggleOrderedList();
-  } else if (from === "task list") {
-    chain.toggleTaskList();
-  } else if (from === "blockquote") {
-    chain.toggleBlockquote();
-  } else if (from.startsWith("code block")) {
-    chain.toggleCodeBlock();
-  } else {
-    return false;
-  }
-
-  chain.run();
-  return true;
-}
-
-const MAX_INDENT = 6;
-
-const BlockIndent = Extension.create({
-  name: "blockIndent",
-  addGlobalAttributes() {
-    return [
-      {
-        types: ["paragraph", "heading"],
-        attributes: {
-          indent: {
-            default: 0,
-            parseHTML: (el) =>
-              parseInt(el.getAttribute("data-indent") ?? "0", 10) || 0,
-            renderHTML: (attrs) => {
-              const v = (attrs as { indent?: number }).indent ?? 0;
-              return v > 0 ? { "data-indent": String(v) } : {};
-            },
-          },
-        },
-      },
-    ];
-  },
-});
-
-function tryIndent(
-  state: EditorState,
-  dispatch: ((tr: Transaction) => void) | undefined,
-  direction: "in" | "out",
-): boolean {
-  const li = state.schema.nodes.listItem;
-  if (li) {
-    const cmd = direction === "out" ? liftListItem(li) : sinkListItem(li);
-    if (cmd(state, dispatch)) return true;
-  }
-  const $from = state.selection.$from;
-  const block = $from.parent;
-  if (!["paragraph", "heading"].includes(block.type.name)) return false;
-  const current = (block.attrs.indent as number | undefined) ?? 0;
-  const next =
-    direction === "out"
-      ? Math.max(0, current - 1)
-      : Math.min(MAX_INDENT, current + 1);
-  if (next === current) return false;
-  if (dispatch) {
-    const before = $from.before();
-    const tr = state.tr.setNodeMarkup(before, null, {
-      ...block.attrs,
-      indent: next,
-    });
-    dispatch(tr);
-  }
-  return true;
-}
-
-// Walk outward from `pos` in each direction. A mark is "contiguous" if we
-// encounter it before we cross any unmarked text. Block boundaries (closing
-// </p>, opening <li>, etc.) are transparent — they do not break contiguity,
-// so edits spanning adjacent paragraphs or list items collapse into one
-// thread.
-function findContiguousThreadId(
-  doc: PMNode,
-  pos: number,
-  types: MarkType[],
-): string | null {
-  const walk = (direction: -1 | 1): string | null => {
-    let p = pos;
-    const limit = direction === -1 ? 0 : doc.content.size;
-    while (p !== limit) {
-      const $p = doc.resolve(p);
-      const node = direction === -1 ? $p.nodeBefore : $p.nodeAfter;
-      if (node && node.isText) {
-        for (const m of node.marks) {
-          if (types.includes(m.type) && typeof m.attrs.threadId === "string") {
-            return m.attrs.threadId;
-          }
-        }
-        return null;
-      }
-      p += direction;
-    }
-    return null;
-  };
-  return walk(-1) ?? walk(1);
-}
-
-// Formatting marks tracked as structural diffs against the baseline document.
-// Keyed by the mark's schema name; value is the label shown in the margin.
-const TRACKED_FORMATTING_MARKS: Record<string, string> = {
-  bold: "bold",
-  italic: "italic",
-  underline: "underline",
-  strike: "strikethrough",
-  code: "inline code",
+type ManuscriptProps = {
+  initialContent?: string;
+  md?: string;
+  docPath?: string;
+  docRef?: string;
 };
 
-type MarkDiff = { label: string; range: { from: number; to: number } };
-
-// Flatten a doc into a per-character array where each entry carries the set
-// of tracked formatting marks active at that character. When
-// `skipProposedInsertion` is true, characters belonging to a proposedInsertion
-// are dropped entirely — this lets us line up the baseline (original) doc
-// against the current doc even after the user has typed new text: what's left
-// after stripping insertions should have the same length as the baseline.
-function collectFormattingTokens(
-  doc: PMNode,
-  skipProposedInsertion: boolean,
-): Array<Set<string>> {
-  const tokens: Array<Set<string>> = [];
-  doc.descendants((node) => {
-    if (!node.isText) return true;
-    const isProposedIns = node.marks.some(
-      (m) => m.type.name === "proposedInsertion",
-    );
-    if (skipProposedInsertion && isProposedIns) return true;
-    const markSet = new Set<string>();
-    for (const m of node.marks) {
-      if (TRACKED_FORMATTING_MARKS[m.type.name]) markSet.add(m.type.name);
-    }
-    const text = node.text ?? "";
-    for (let i = 0; i < text.length; i++) tokens.push(new Set(markSet));
-    return true;
-  });
-  return tokens;
-}
-
-// Diff two equal-length token streams (baseline vs. current without pending
-// insertions). Ranges are token-index positions; they're used purely to
-// uniquely key the diff for the margin rail, not to anchor to DOM positions.
-function diffFormattingTokens(
-  baseline: Array<Set<string>>,
-  current: Array<Set<string>>,
-): MarkDiff[] {
-  const diffs: MarkDiff[] = [];
-  const len = Math.min(baseline.length, current.length);
-  for (const markName of Object.keys(TRACKED_FORMATTING_MARKS)) {
-    const label = TRACKED_FORMATTING_MARKS[markName];
-    const changed: number[] = [];
-    for (let i = 0; i < len; i++) {
-      if (baseline[i].has(markName) !== current[i].has(markName)) changed.push(i);
-    }
-    let start: number | null = null;
-    let prev: number | null = null;
-    for (const p of changed) {
-      if (start === null) {
-        start = p;
-        prev = p;
-      } else if (p === (prev as number) + 1) {
-        prev = p;
-      } else {
-        diffs.push({ label, range: { from: start, to: (prev as number) + 1 } });
-        start = p;
-        prev = p;
-      }
-    }
-    if (start !== null) {
-      diffs.push({ label, range: { from: start, to: (prev as number) + 1 } });
-    }
-  }
-  return diffs;
-}
-
-export function Manuscript() {
+export function Manuscript({
+  initialContent,
+  md,
+  docPath,
+  docRef = "main",
+}: ManuscriptProps = {}) {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
   const [showReview, setShowReview] = useState(false);
   const [, bumpLayout] = useState(0);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [draftBusy, setDraftBusy] = useState(false);
+  const mdRef = useRef<string>(md ?? "");
+  // Keep mdRef in sync with the prop via effect rather than mutating during
+  // render — avoids surprise if React re-invokes the render before commit.
+  useEffect(() => {
+    mdRef.current = md ?? "";
+  }, [md]);
 
   const editContextRef = useRef<EditContext | null>(null);
   const manuscriptRef = useRef<HTMLDivElement | null>(null);
-  const baselineDocRef = useRef<PMNode | null>(null);
 
   const lowlight = useMemo(() => createLowlight(common), []);
 
@@ -332,7 +97,6 @@ export function Manuscript() {
     [lowlight],
   );
 
-  // Shared helper: decide which thread an edit belongs to.
   const pickThreadId = useCallback(
     (doc: PMNode, pos: number, schema: PMNode["type"]["schema"]): {
       threadId: string;
@@ -340,9 +104,6 @@ export function Manuscript() {
     } => {
       const insType = schema.marks.proposedInsertion;
       const delType = schema.marks.proposedDeletion;
-      // 1. Contiguous with an existing marked range? Reuse that thread —
-      //    this is the primary merge rule, covering edits that span
-      //    paragraph / list-item boundaries.
       const existing = findContiguousThreadId(doc, pos, [insType, delType]);
       if (existing) {
         editContextRef.current = {
@@ -353,11 +114,6 @@ export function Manuscript() {
         return { threadId: existing, isNew: false };
       }
 
-      // 2. Soft fallback: if the user is still in a short idle window
-      //    from their previous edit (e.g. they just pressed Enter into
-      //    an empty block that has no marks yet), keep extending the
-      //    same thread so the very first character of the next block
-      //    joins the previous one.
       const now = Date.now();
       const ctx = editContextRef.current;
       if (ctx && now - ctx.lastTime < THREAD_IDLE_MS) {
@@ -479,20 +235,49 @@ export function Manuscript() {
     [],
   );
 
-  const registerNoteThread = useCallback((threadId: string) => {
-    setThreads((prev) => [
-      ...prev,
-      {
-        id: threadId,
-        kind: "note",
-        note: "",
-        state: "pending",
-        createdAt: Date.now(),
-        autoFocusNote: true,
-      },
-    ]);
-    setActiveThreadId(threadId);
+  const registerNoteThread = useCallback(
+    (threadId: string, anchor?: { from: number; to: number }) => {
+      setThreads((prev) => [
+        ...prev,
+        {
+          id: threadId,
+          kind: "note",
+          note: "",
+          state: "pending",
+          createdAt: Date.now(),
+          anchor,
+          autoFocusNote: true,
+        },
+      ]);
+      setActiveThreadId(threadId);
+    },
+    [],
+  );
+
+  const activateThread = useCallback((id: string | null) => {
+    setActiveThreadId(id);
+    if (id === null) return;
+    setThreads((prev) =>
+      prev.map((t) => (t.id === id && t.collapsed ? { ...t, collapsed: false } : t)),
+    );
   }, []);
+
+  const onEditContext = useCallback((ctx: EditContext) => {
+    editContextRef.current = ctx;
+  }, []);
+
+  const onResetEditContext = useCallback(() => {
+    editContextRef.current = null;
+  }, []);
+
+  const editorProps = useProposedEditHandlers({
+    pickThreadId,
+    registerThread,
+    registerStructuralThread,
+    activateThread,
+    onEditContext,
+    onResetEditContext,
+  });
 
   const editor = useEditor({
     extensions: [
@@ -509,310 +294,63 @@ export function Manuscript() {
         onThreadClick: (id) => activateThread(id),
       }),
     ],
-    content: sampleManuscript,
+    content: initialContent ?? sampleManuscript,
+    autofocus: false,
     immediatelyRender: false,
-    editorProps: {
-      attributes: {
-        class: "ProseMirror manuscript-prose",
-        spellcheck: "false",
-      },
-
-      // Any character typed becomes a proposed insertion — unless it completes
-      // a markdown trigger (e.g. "# " → heading), in which case we let TipTap's
-      // built-in input rules fire and record the transform as a structural thread.
-      handleTextInput(view, from, to, text) {
-        // Inside a code block: no suggestion wrapping, plain editing.
-        const parentType = view.state.doc.resolve(from).parent.type.name;
-        if (parentType === "codeBlock") return false;
-
-        const trigger = detectMarkdownTrigger(view.state.doc, from, text);
-        if (trigger && from === to) {
-          const label = structuralLabelFor(trigger);
-          const triggerPos = from;
-          // Let default behaviour run so input rules fire. Schedule the
-          // structural thread after the transaction settles.
-          queueMicrotask(() =>
-            registerStructuralThread(label, {
-              from: triggerPos,
-              to: triggerPos,
-            }),
-          );
-          return false;
-        }
-
-        const schema = view.state.schema;
-        const insType = schema.marks.proposedInsertion;
-        const delType = schema.marks.proposedDeletion;
-
-        const { threadId, isNew } = pickThreadId(view.state.doc, from, schema);
-
-        const insMark = insType.create({ threadId });
-        const delMark = delType.create({ threadId });
-
-        let tr = view.state.tr;
-
-        if (from !== to) {
-          // Replacement: mark original range as deletion, insert new text after.
-          tr = tr.addMark(from, to, delMark);
-          tr = tr.insert(to, schema.text(text, [insMark]));
-          tr = tr.setSelection(TextSelection.create(tr.doc, to + text.length));
-        } else {
-          // Pure insertion.
-          tr = tr.insert(from, schema.text(text, [insMark]));
-          tr = tr.setSelection(TextSelection.create(tr.doc, from + text.length));
-        }
-
-        editContextRef.current = {
-          threadId,
-          lastPos: (from !== to ? to : from) + text.length,
-          lastTime: Date.now(),
-        };
-
-        view.dispatch(tr);
-        if (isNew) registerThread(threadId);
-        activateThread(threadId);
-        return true;
-      },
-
-      // Backspace / Delete → proposed deletion (unless undoing your own insertion).
-      handleKeyDown(view, event) {
-        if (event.key === "Tab") {
-          tryIndent(view.state, view.dispatch, event.shiftKey ? "out" : "in");
-          event.preventDefault();
-          return true;
-        }
-
-        // In code blocks: fall through to default editing behaviour for all keys.
-        const $selFrom = view.state.selection.$from;
-        if ($selFrom.parent.type.name === "codeBlock") return false;
-
-        if (event.key !== "Backspace" && event.key !== "Delete") return false;
-
-        const { from, to, empty } = view.state.selection;
-
-        // At block boundary with empty selection: let ProseMirror's default join
-        // adjacent blocks instead of trying to mark-as-deletion across the gap.
-        if (empty) {
-          const $from = view.state.selection.$from;
-          const $to = view.state.selection.$to;
-          if (event.key === "Backspace" && $from.parentOffset === 0) {
-            return false;
-          }
-          if (
-            event.key === "Delete" &&
-            $to.parentOffset === $to.parent.content.size
-          ) {
-            return false;
-          }
-        }
-        let delFrom: number;
-        let delTo: number;
-
-        if (!empty) {
-          delFrom = from;
-          delTo = to;
-        } else if (event.key === "Backspace") {
-          if (from === 0) return false;
-          delFrom = from - 1;
-          delTo = from;
-        } else {
-          if (to >= view.state.doc.content.size) return false;
-          delFrom = to;
-          delTo = to + 1;
-        }
-
-        const schema = view.state.schema;
-        const insType = schema.marks.proposedInsertion;
-        const delType = schema.marks.proposedDeletion;
-
-        let sawText = false;
-        let allInsertion = true;
-        let allAlreadyDeleted = true;
-        view.state.doc.nodesBetween(delFrom, delTo, (node) => {
-          if (!node.isText) return true;
-          sawText = true;
-          if (!node.marks.some((m) => m.type === insType)) allInsertion = false;
-          if (!node.marks.some((m) => m.type === delType))
-            allAlreadyDeleted = false;
-          return true;
-        });
-        if (!sawText) {
-          allInsertion = false;
-          allAlreadyDeleted = false;
-        }
-
-        let tr = view.state.tr;
-
-        if (sawText && allInsertion) {
-          // Undoing one's own proposed insertion → actually delete from doc.
-          tr = tr.delete(delFrom, delTo);
-          tr = tr.setSelection(TextSelection.create(tr.doc, delFrom));
-        } else if (sawText && allAlreadyDeleted) {
-          // Already marked for deletion → just move cursor past the strikethrough.
-          const newPos = event.key === "Backspace" ? delFrom : delTo;
-          tr = tr.setSelection(TextSelection.create(view.state.doc, newPos));
-        } else {
-          const { threadId, isNew } = pickThreadId(
-            view.state.doc,
-            delFrom,
-            schema,
-          );
-          tr = tr.addMark(delFrom, delTo, delType.create({ threadId }));
-          const newPos = event.key === "Backspace" ? delFrom : delTo;
-          tr = tr.setSelection(TextSelection.create(tr.doc, newPos));
-
-          editContextRef.current = {
-            threadId,
-            lastPos: delFrom,
-            lastTime: Date.now(),
-          };
-
-          if (isNew) registerThread(threadId);
-          activateThread(threadId);
-        }
-
-        view.dispatch(tr);
-        event.preventDefault();
-        return true;
-      },
-
-      // Paste → convert pasted text into a proposed insertion as well.
-      handlePaste(view, event) {
-        const text = event.clipboardData?.getData("text/plain");
-        if (!text) return false;
-        const { from, to } = view.state.selection;
-        const schema = view.state.schema;
-        const insType = schema.marks.proposedInsertion;
-        const delType = schema.marks.proposedDeletion;
-        const { threadId, isNew } = pickThreadId(view.state.doc, from, schema);
-
-        let tr = view.state.tr;
-        if (from !== to) {
-          tr = tr.addMark(from, to, delType.create({ threadId }));
-          tr = tr.insert(
-            to,
-            schema.text(text, [insType.create({ threadId })]),
-          );
-          tr = tr.setSelection(TextSelection.create(tr.doc, to + text.length));
-        } else {
-          tr = tr.insert(
-            from,
-            schema.text(text, [insType.create({ threadId })]),
-          );
-          tr = tr.setSelection(
-            TextSelection.create(tr.doc, from + text.length),
-          );
-        }
-
-        editContextRef.current = {
-          threadId,
-          lastPos: (from !== to ? to : from) + text.length,
-          lastTime: Date.now(),
-        };
-
-        view.dispatch(tr);
-        if (isNew) registerThread(threadId);
-        activateThread(threadId);
-        event.preventDefault();
-        return true;
-      },
-    },
+    editorProps,
   });
 
-  // Force MarginRail layout recompute whenever the doc changes. Also:
-  //   1) GC redline threads whose marks have been stripped.
-  //   2) Reconcile formatting (bold/italic/underline/strike/code) threads
-  //      against the baseline doc — every transaction replays the full diff,
-  //      so undo/redo, keyboard shortcuts, and the toolbar all stay in sync.
+  const bump = useCallback(() => bumpLayout((n) => n + 1), []);
+  useFormattingDiff(editor, setThreads, bump);
+
+  // When the server-driven initialContent changes, fold the new doc into the
+  // existing editor instead of remounting. This preserves selection, undo
+  // history, and any proposed marks whose threadId is still present.
+  //
+  // Safety: if the user has pending redline/note work against positions that
+  // no longer exist in the new doc, setContent will drop those marks when
+  // re-parsing HTML. We keep the thread objects in state regardless — the
+  // formatting-diff hook will GC stranded entries on the next transaction.
+  const lastAppliedContentRef = useRef<string | null>(null);
   useEffect(() => {
     if (!editor) return;
-    if (!baselineDocRef.current) baselineDocRef.current = editor.state.doc;
-    const trackedLabels = new Set(Object.values(TRACKED_FORMATTING_MARKS));
+    const incoming = initialContent ?? sampleManuscript;
+    if (lastAppliedContentRef.current === null) {
+      lastAppliedContentRef.current = incoming;
+      return;
+    }
+    if (lastAppliedContentRef.current === incoming) return;
+    lastAppliedContentRef.current = incoming;
 
-    const handler = () => {
-      bumpLayout((n) => n + 1);
+    // If the user has in-flight pending edits or the editor is focused,
+    // don't stomp their work. The SSE diff can still flash in DocView.
+    const hasPending = threads.some((t) => t.state === "pending");
+    if (hasPending || editor.isFocused) return;
 
-      const baseline = baselineDocRef.current;
-      const diffs = baseline
-        ? diffFormattingTokens(
-            collectFormattingTokens(baseline, false),
-            collectFormattingTokens(editor.state.doc, true),
-          )
-        : [];
-      const diffKeys = new Set(
-        diffs.map((d) => `${d.label}:${d.range.from}:${d.range.to}`),
-      );
-
-      setThreads((prev) => {
-        let changed = false;
-
-        // 1) Drop redline threads whose underlying marks are gone.
-        const afterRedlineGC = prev.filter((t) => {
-          if (t.kind !== "redline") return true;
-          const hasDel = !!findThreadRange(editor.state.doc, t.id);
-          const hasIns = !!findInsertionRange(editor.state.doc, t.id);
-          if (!hasDel && !hasIns) {
-            changed = true;
-            return false;
-          }
-          return true;
+    const prevSelection = editor.state.selection;
+    const prevFrom = prevSelection.from;
+    const prevTo = prevSelection.to;
+    editor.commands.setContent(incoming, { emitUpdate: false });
+    const size = editor.state.doc.content.size;
+    if (prevFrom <= size && prevTo <= size) {
+      try {
+        editor.commands.setTextSelection({
+          from: Math.min(prevFrom, size),
+          to: Math.min(prevTo, size),
         });
-
-        // 2) Reconcile formatting threads with the current diff set.
-        const isFormattingThread = (t: Thread) =>
-          t.kind === "structural" &&
-          !!t.structural?.range &&
-          trackedLabels.has(t.structural.label);
-
-        const seen = new Set<string>();
-        const afterReconcile: Thread[] = [];
-        for (const t of afterRedlineGC) {
-          if (!isFormattingThread(t)) {
-            afterReconcile.push(t);
-            continue;
-          }
-          const k = `${t.structural!.label}:${t.structural!.range!.from}:${t.structural!.range!.to}`;
-          if (diffKeys.has(k)) {
-            afterReconcile.push(t);
-            seen.add(k);
-          } else if (t.note !== "" || t.state === "submitted") {
-            // Preserve user-annotated or already-submitted threads.
-            afterReconcile.push(t);
-            seen.add(k);
-          } else {
-            changed = true;
-          }
-        }
-        for (const d of diffs) {
-          const k = `${d.label}:${d.range.from}:${d.range.to}`;
-          if (seen.has(k)) continue;
-          afterReconcile.push({
-            id: newId("strc"),
-            kind: "structural",
-            note: "",
-            state: "pending",
-            createdAt: Date.now(),
-            structural: { label: d.label, range: d.range },
-          });
-          changed = true;
-        }
-
-        return changed ? afterReconcile : prev;
-      });
-    };
-    editor.on("transaction", handler);
-    // Fire once on mount to populate from initial doc state.
-    handler();
-    return () => {
-      editor.off("transaction", handler);
-    };
-  }, [editor]);
+      } catch {
+        /* selection drift is non-fatal */
+      }
+    }
+  }, [editor, initialContent, threads]);
 
   useLayoutEffect(() => {
     const onResize = () => bumpLayout((n) => n + 1);
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
+
+  useServerThreads(docPath, docRef, setThreads);
 
   // Global keyboard: "?" toggles help, Esc closes panels.
   useEffect(() => {
@@ -835,19 +373,10 @@ export function Manuscript() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // First-run help.
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (!window.localStorage.getItem("sheaf.seen-help")) {
-      setShowHelp(true);
-    }
-  }, []);
-
+  // Help is always closed on load. Users press `?` (or the fab/kbd button)
+  // to open it. Dismissing just closes — no localStorage, no first-run pop.
   const dismissHelp = useCallback(() => {
     setShowHelp(false);
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem("sheaf.seen-help", "1");
-    }
   }, []);
 
   const getThreadView = useCallback(
@@ -865,8 +394,11 @@ export function Manuscript() {
     (threadId: string): number | null => {
       if (!editor || !manuscriptRef.current) return null;
       const view = getThreadView(threadId);
-      if (!view) return null;
-      const pos = view.del?.from ?? view.ins?.from ?? null;
+      let pos = view?.del?.from ?? view?.ins?.from ?? null;
+      if (pos === null) {
+        const thread = threads.find((t) => t.id === threadId);
+        pos = thread?.anchor?.from ?? null;
+      }
       if (pos === null) return null;
       try {
         const coords = editor.view.coordsAtPos(pos);
@@ -876,7 +408,7 @@ export function Manuscript() {
         return null;
       }
     },
-    [editor, getThreadView],
+    [editor, getThreadView, threads],
   );
 
   const setNote = useCallback((threadId: string, note: string) => {
@@ -898,123 +430,53 @@ export function Manuscript() {
     setThreads((prev) => prev.map((t) => ({ ...t, collapsed })));
   }, []);
 
-  const activateThread = useCallback((id: string | null) => {
-    setActiveThreadId(id);
-    if (id === null) return;
-    setThreads((prev) =>
-      prev.map((t) => (t.id === id && t.collapsed ? { ...t, collapsed: false } : t)),
-    );
+  const onClearContextFor = useCallback((threadId: string) => {
+    if (editContextRef.current?.threadId === threadId) {
+      editContextRef.current = null;
+    }
   }, []);
 
-  const acceptThread = useCallback(
-    (threadId: string) => {
-      if (!editor) return;
-      const target = threads.find((t) => t.id === threadId);
-      if (!target) return;
+  const { acceptThread, declineThread } = useThreadOutcome({
+    editor,
+    threads,
+    getThreadView,
+    setThreads,
+    setActiveThreadId,
+    onClearContextFor,
+  });
 
-      if (target.kind !== "redline") {
-        // Structural + note threads: accept = dismiss card.
-        setThreads((prev) => prev.filter((t) => t.id !== threadId));
-        setActiveThreadId(null);
-        return;
-      }
+  const submitReview = useSubmitReview({
+    editor,
+    docPath,
+    docRef,
+    threads,
+    mdRef,
+    getThreadView,
+    setThreads,
+    setSubmitError,
+    setShowReview,
+  });
 
-      const view = getThreadView(threadId);
-      if (!view) {
-        setThreads((prev) => prev.filter((t) => t.id !== threadId));
-        return;
-      }
-
-      const schema = editor.state.schema;
-      const insType = schema.marks.proposedInsertion;
-
-      // Positions can shift when we delete; do the later op first.
-      const ops: Array<{ kind: "delete" | "unmark"; from: number; to: number }> =
-        [];
-      if (view.del) ops.push({ kind: "delete", from: view.del.from, to: view.del.to });
-      if (view.ins) ops.push({ kind: "unmark", from: view.ins.from, to: view.ins.to });
-      ops.sort((a, b) => b.from - a.from);
-
-      let tr = editor.state.tr;
-      for (const op of ops) {
-        if (op.kind === "delete") tr = tr.delete(op.from, op.to);
-        else tr = tr.removeMark(op.from, op.to, insType);
-      }
-      editor.view.dispatch(tr);
-
-      setThreads((prev) => prev.filter((t) => t.id !== threadId));
-      setActiveThreadId(null);
-      if (editContextRef.current?.threadId === threadId) {
-        editContextRef.current = null;
-      }
-    },
-    [editor, threads, getThreadView],
-  );
-
-  const declineThread = useCallback(
-    (threadId: string) => {
-      if (!editor) return;
-      const target = threads.find((t) => t.id === threadId);
-      if (!target) return;
-
-      if (target.kind !== "redline") {
-        // Dismissing a block-level structural note undoes the transform.
-        if (
-          target.kind === "structural" &&
-          target.structural?.range &&
-          target.structural.label.includes(" → ")
-        ) {
-          revertBlockTransition(
-            editor,
-            target.structural.label,
-            target.structural.range,
-          );
+  const actOnDraft = useCallback(
+    async (kind: "accept" | "decline") => {
+      if (docRef === "main") return;
+      setDraftBusy(true);
+      try {
+        const r = await fetch(`/api/ui/drafts/${docRef}/${kind}`, {
+          method: "POST",
+        });
+        if (!r.ok) {
+          const body = (await r.json().catch(() => ({}))) as { error?: string };
+          setSubmitError(body.error ?? `${kind} failed`);
         }
-        setThreads((prev) => prev.filter((t) => t.id !== threadId));
-        setActiveThreadId(null);
-        return;
-      }
-
-      const view = getThreadView(threadId);
-      if (!view) {
-        setThreads((prev) => prev.filter((t) => t.id !== threadId));
-        return;
-      }
-      const schema = editor.state.schema;
-      const delType = schema.marks.proposedDeletion;
-
-      const ops: Array<{ kind: "unmark" | "delete"; from: number; to: number }> =
-        [];
-      if (view.del) ops.push({ kind: "unmark", from: view.del.from, to: view.del.to });
-      if (view.ins) ops.push({ kind: "delete", from: view.ins.from, to: view.ins.to });
-      ops.sort((a, b) => b.from - a.from);
-
-      let tr = editor.state.tr;
-      for (const op of ops) {
-        if (op.kind === "delete") tr = tr.delete(op.from, op.to);
-        else tr = tr.removeMark(op.from, op.to, delType);
-      }
-      editor.view.dispatch(tr);
-
-      setThreads((prev) => prev.filter((t) => t.id !== threadId));
-      setActiveThreadId(null);
-      if (editContextRef.current?.threadId === threadId) {
-        editContextRef.current = null;
+      } catch (e) {
+        setSubmitError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setDraftBusy(false);
       }
     },
-    [editor, threads, getThreadView],
+    [docRef],
   );
-
-  const submitReview = useCallback((coverNote: string) => {
-    setThreads((prev) =>
-      prev.map((t) => {
-        if (t.state !== "pending") return t;
-        const note = coverNote && !t.note ? coverNote : t.note;
-        return { ...t, state: "submitted", note };
-      }),
-    );
-    setShowReview(false);
-  }, []);
 
   const pendingThreads = useMemo(
     () => threads.filter((t) => t.state === "pending"),
@@ -1025,35 +487,65 @@ export function Manuscript() {
     if (!editor) return;
     const { from, to } = editor.state.selection;
     if (from === to) return;
-    const schema = editor.state.schema;
     const threadId = newId("note");
-    const delType = schema.marks.proposedDeletion;
-    // We don't want the range to look deleted, so instead we use an
-    // insertion-over-nothing trick: add a zero-width marker? Simpler for v0.2:
-    // record the selected text range via an insertion mark on a shadow char.
-    // For now, just register a note-thread without text anchoring — the user
-    // can refer to the selection via their note.
-    void delType;
-    registerNoteThread(threadId);
+    registerNoteThread(threadId, { from, to });
+    editor.commands.setTextSelection(to);
   }, [editor, registerNoteThread]);
 
   return (
     <>
       <header className="page-header">
-        <span className="title">sheaf · redline prototype</span>
-        <span>
-          edit anywhere — your changes become suggestions. press{" "}
-          <button
-            type="button"
-            className="help-key-btn"
-            onClick={() => setShowHelp(true)}
-            aria-label="open help"
-          >
-            <kbd>?</kbd>
-          </button>{" "}
-          for help.
+        <span className="title">
+          {docRef !== "main" ? `draft · ${docPath ?? ""}` : "sheaf · redline prototype"}
+        </span>
+        <span className="page-header-right">
+          {docRef !== "main" ? (
+            <>
+              <button
+                type="button"
+                className="draft-accept"
+                disabled={draftBusy}
+                onClick={() => void actOnDraft("accept")}
+              >
+                accept draft
+              </button>
+              <button
+                type="button"
+                className="draft-decline"
+                disabled={draftBusy}
+                onClick={() => void actOnDraft("decline")}
+              >
+                decline draft
+              </button>
+            </>
+          ) : (
+            <>
+              edit anywhere — your changes become suggestions. press{" "}
+              <button
+                type="button"
+                className="help-key-btn"
+                onClick={() => setShowHelp(true)}
+                aria-label="open help"
+              >
+                <kbd>?</kbd>
+              </button>{" "}
+              for help.
+            </>
+          )}
         </span>
       </header>
+      {submitError ? (
+        <div className="submit-error" role="alert">
+          {submitError}
+          <button
+            type="button"
+            onClick={() => setSubmitError(null)}
+            aria-label="dismiss"
+          >
+            ×
+          </button>
+        </div>
+      ) : null}
       <div className="layout">
         <div className="manuscript-wrap" ref={manuscriptRef}>
           <div className="manuscript">

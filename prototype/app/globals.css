@@ -1047,6 +1047,7 @@ body {
   box-shadow: 0 6px 18px -8px rgba(0, 0, 0, 0.2);
   padding: 0.15rem 0.25rem;
   display: inline-flex;
+  z-index: 20;
 }
 
 .bubble-row {
@@ -1107,4 +1108,323 @@ body {
 
 .link-row {
   padding: 0 0.15rem;
+}
+
+/* ------------------------------------------------------------------ */
+/* doc rail — shared list of docs + drafts                             */
+/* ------------------------------------------------------------------ */
+
+.review-rail {
+  border-right: 1px solid var(--rule);
+  padding: 1.5rem 1.25rem;
+  overflow-y: auto;
+  max-height: 100vh;
+  position: sticky;
+  top: 0;
+}
+
+.review-rail header {
+  margin-bottom: 1rem;
+}
+
+.review-rail h2 {
+  font-size: 1.4rem;
+  margin: 0;
+}
+
+.review-rail .muted {
+  color: var(--muted);
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.review-rail h3 {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin: 1.2rem 0 0.5rem;
+}
+
+.review-rail ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.review-rail li {
+  margin-bottom: 0.35rem;
+}
+
+.review-rail li.selected button {
+  background: var(--card);
+  border-color: var(--accent);
+}
+
+.review-rail li button {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--rule);
+  background: transparent;
+  border-radius: 4px;
+  padding: 0.55rem 0.7rem;
+  cursor: pointer;
+  font-family: inherit;
+  color: var(--ink);
+}
+
+.review-rail li button:hover {
+  border-color: var(--accent);
+}
+
+.review-rail .title {
+  font-weight: 600;
+}
+
+.review-rail .meta,
+.review-rail .hint {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.review-rail .hint {
+  font-style: italic;
+  margin-top: 0.2rem;
+}
+
+.review-err {
+  background: var(--redline-bg);
+  color: var(--redline);
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--redline);
+  border-radius: 4px;
+  margin-bottom: 0.8rem;
+  font-size: 0.8rem;
+}
+
+/* ------------------------------------------------------------------ */
+/* doc shell — rail + main                                             */
+/* ------------------------------------------------------------------ */
+
+.doc-shell {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  min-height: 100vh;
+  font-size: 14px;
+  position: relative;
+}
+
+.doc-shell.collapsed {
+  grid-template-columns: 40px 1fr;
+}
+
+.doc-rail-wrap {
+  position: sticky;
+  top: 0;
+  max-height: 100vh;
+  border-right: 1px solid var(--rule);
+  display: flex;
+  flex-direction: column;
+  background: var(--paper);
+  z-index: 10;
+}
+
+.doc-shell.collapsed .doc-rail-wrap {
+  align-items: center;
+}
+
+@media (max-width: 1023px) {
+  .doc-shell,
+  .doc-shell.collapsed {
+    grid-template-columns: 1fr;
+  }
+
+  .doc-rail-wrap {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 40px;
+    max-height: 100vh;
+  }
+
+  .doc-shell:not(.collapsed) .doc-rail-wrap {
+    width: 280px;
+    box-shadow: 2px 0 12px rgba(0, 0, 0, 0.08);
+  }
+
+  .doc-main {
+    margin-left: 40px;
+  }
+}
+
+.doc-rail-wrap .review-rail {
+  border-right: none;
+  flex: 1;
+  min-height: 0;
+}
+
+.rail-toggle {
+  align-self: flex-end;
+  margin: 0.5rem 0.5rem 0;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.rail-toggle:hover {
+  border-color: var(--accent);
+  color: var(--ink);
+}
+
+.doc-shell.collapsed .rail-toggle {
+  align-self: center;
+}
+
+.doc-main {
+  padding: 3rem 2rem 5rem;
+  min-width: 0;
+}
+
+.doc-loading,
+.doc-error {
+  padding: 3rem 0;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.doc-error {
+  color: var(--redline);
+  font-style: normal;
+}
+
+.review-rail a {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--rule);
+  background: transparent;
+  border-radius: 4px;
+  padding: 0.55rem 0.7rem;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.review-rail a:hover {
+  border-color: var(--accent);
+}
+
+.review-rail li.selected a {
+  background: var(--card);
+  border-color: var(--accent);
+}
+
+/* ------------------------------------------------------------------ */
+/* dashboard                                                           */
+/* ------------------------------------------------------------------ */
+
+.dashboard {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.dashboard header {
+  margin-bottom: 2rem;
+}
+
+.dashboard header h1 {
+  font-size: 2rem;
+  margin: 0;
+}
+
+.dashboard header .muted {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin: 0.25rem 0 0;
+}
+
+.dashboard-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.dashboard-list li a {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.25rem 1rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.dashboard-list li a:hover {
+  border-color: var(--accent);
+  background: var(--card);
+}
+
+.dashboard-list .title {
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.dashboard-list .meta {
+  color: var(--muted);
+  font-size: 0.82rem;
+  justify-self: end;
+}
+
+.dashboard-list .path {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  grid-column: 1 / -1;
+}
+
+.dashboard-section {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin: 1.6rem 0 0.6rem;
+  font-weight: 600;
+}
+
+.dashboard-list .title .pill {
+  display: inline-block;
+  margin-left: 0.5rem;
+  padding: 0.08rem 0.45rem;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border: 1px solid var(--rule);
+  color: var(--muted);
+  vertical-align: middle;
+}
+
+.dashboard-list .pill-submitted {
+  color: var(--accent);
+  border-color: var(--accent);
 }
