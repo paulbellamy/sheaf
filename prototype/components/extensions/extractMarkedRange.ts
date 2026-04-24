@@ -9,12 +9,14 @@ export function extractMarkedRange(
   let to: number | null = null;
   const lines: string[] = [];
   let currentLine = "";
+  let lineHasMark = false;
   let pendingMarker: string | null = null;
   const listStack: Array<{ kind: "bullet" | "ordered"; n: number }> = [];
 
   const pushLine = () => {
-    if (currentLine.trim().length > 0) lines.push(currentLine);
+    if (lineHasMark) lines.push(currentLine);
     currentLine = "";
+    lineHasMark = false;
   };
 
   const walk = (node: PMNode, basePos: number) => {
@@ -28,6 +30,7 @@ export function extractMarkedRange(
         if (from === null) from = basePos;
         to = basePos + node.nodeSize;
         currentLine += node.text ?? "";
+        lineHasMark = true;
       }
       return;
     }
