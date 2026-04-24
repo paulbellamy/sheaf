@@ -16,7 +16,12 @@ export function getBackend(): Backend {
   if (cachedBackend) return cachedBackend;
   const root =
     process.env.SHEAF_DATA_ROOT ?? path.join(process.cwd(), "data");
-  cachedBackend = new StubBackend(root);
+  // Plugin root holds `.claude-plugin/` at the repo root. In dev the server
+  // runs from `prototype/`, so `..` resolves correctly. Override via
+  // SHEAF_PLUGIN_ROOT for other deploys.
+  const pluginRoot =
+    process.env.SHEAF_PLUGIN_ROOT ?? path.resolve(process.cwd(), "..");
+  cachedBackend = new StubBackend(root, pluginRoot);
   return cachedBackend;
 }
 

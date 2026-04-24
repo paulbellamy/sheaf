@@ -27,9 +27,12 @@ import {
 import { McpError, err } from "../errors";
 import {
   DRAFT_ID_RE,
+  PLUGIN_PATH_PREFIX,
   assertDraftId,
+  assertReadablePath,
   assertThreadId,
   assertWorkspacePath,
+  isPluginPath,
   safeJoin,
 } from "../paths";
 import {
@@ -203,13 +206,20 @@ async function copyFileNoFollow(src: string, dest: string): Promise<void> {
 
 export class StubBackend implements Backend {
   private root: string;
+  /**
+   * Repo-root dir that holds `.claude-plugin/`. Exposed read-only so remote
+   * agents can discover the bundled skills + scripts through `Read`/`Glob`/
+   * `Grep` without installing the plugin locally.
+   */
+  private pluginRoot: string;
   private opLogPath: string;
   private opLogCache: OpLog | null = null;
   private lockChain: Promise<unknown> = Promise.resolve();
   private subscribers = new Set<(event: BackendEvent) => void>();
 
-  constructor(root: string) {
+  constructor(root: string, pluginRoot?: string) {
     this.root = root;
+    this.pluginRoot = pluginRoot ?? path.resolve(root, "..");
     this.opLogPath = path.join(root, ".op_log.json");
   }
 
@@ -379,7 +389,8 @@ export class StubBackend implements Backend {
       const docs = await this.listDocs(ws.name);
       for (const d of docs) main.push(d);
     }
-    if (ref === "main") return main;
+    const plugin = await this.listPluginFiles();
+    if (ref === "main") return [...main, ...plugin];
     const meta = await this.loadDraftMeta(ref);
     const draftBase = path.join(this.root, ".drafts", meta.draft_id);
     const draftFiles = await walk(draftBase);
@@ -396,7 +407,39 @@ export class StubBackend implements Backend {
         updated_at: stat.mtimeMs,
       });
     }
-    return main.map((d) => overridden.get(d.path) ?? d);
+    return [...main.map((d) => overridden.get(d.path) ?? d), ...plugin];
+  }
+
+  /**
+   * Walk the repo-root `.claude-plugin/` tree and return one entry per file.
+   * No extension filter — plugin bundles include `.md`, `.mjs`, `.json`, etc.
+   * Always served as `origin: main`; drafts never shadow these paths.
+   */
+  private async listPluginFiles(): Promise<DocSummary[]> {
+    const base = path.join(this.pluginRoot, PLUGIN_PATH_PREFIX);
+    let files: string[];
+    try {
+      files = await walk(base);
+    } catch {
+      return [];
+    }
+    const results: DocSummary[] = [];
+    for (const f of files) {
+      const rel = path.relative(this.pluginRoot, f).replace(/\\/g, "/");
+      if (!rel.startsWith(PLUGIN_PATH_PREFIX)) continue;
+      let stat: import("node:fs").Stats;
+      try {
+        stat = await fs.lstat(f);
+      } catch {
+        continue;
+      }
+      results.push({
+        path: rel,
+        title: path.basename(rel),
+        updated_at: stat.mtimeMs,
+      });
+    }
+    return results.sort((a, b) => a.path.localeCompare(b.path));
   }
 
   async grep(opts: GrepOptions): Promise<GrepResult> {
@@ -478,10 +521,14 @@ export class StubBackend implements Backend {
   }
 
   async readDoc(p: DocPath, ref: Ref = "main"): Promise<DocContent> {
-    assertWorkspacePath(p);
+    assertReadablePath(p);
     let abs: string;
     let origin: "main" | "draft";
-    if (ref === "main") {
+    if (isPluginPath(p)) {
+      // Plugin tree is main-only: drafts never shadow it.
+      abs = safeJoin(this.pluginRoot, p);
+      origin = "main";
+    } else if (ref === "main") {
       abs = this.absMain(p);
       origin = "main";
     } else {

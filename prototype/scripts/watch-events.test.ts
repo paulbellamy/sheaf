@@ -1,4 +1,5 @@
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { type ChildProcessByStdio, spawn } from "node:child_process";
+import type { Readable } from "node:stream";
 import { once } from "node:events";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -13,7 +14,7 @@ const SCRIPT = path.resolve(
 );
 
 async function collectLines(
-  child: ChildProcessWithoutNullStreams,
+  child: ChildProcessByStdio<null, Readable, Readable>,
   minCount: number,
   timeoutMs: number,
 ): Promise<string[]> {
@@ -41,7 +42,7 @@ describe("watch-events.mjs", () => {
   let server: Server;
   let connections: Connection[];
   let port: number;
-  let child: ChildProcessWithoutNullStreams | null = null;
+  let child: ChildProcessByStdio<null, Readable, Readable> | null = null;
 
   beforeEach(async () => {
     connections = [];
@@ -71,7 +72,7 @@ describe("watch-events.mjs", () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
 
-  async function startWatcher(): Promise<ChildProcessWithoutNullStreams> {
+  async function startWatcher(): Promise<ChildProcessByStdio<null, Readable, Readable>> {
     child = spawn("node", [SCRIPT], {
       env: { ...process.env, SHEAF_STREAM_URL: `http://127.0.0.1:${port}/` },
       stdio: ["ignore", "pipe", "pipe"],

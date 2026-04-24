@@ -12,12 +12,12 @@ All sheaf state lives in a single git repo, rooted at the working copy:
 
 ```
 workspaces/<ws>/docs/<name>.md                 # authored markdown, on main
-workspaces/<ws>/docs/<name>.ycrdt              # paired yjs state vector
+workspaces/<ws>/docs/<name>.ycrdt.jsonl        # paired yjs op log, one op per line
 workspaces/<ws>/docs/<name>.threads/           # per-doc threads
   thrd_<id>.yaml
 ```
 
-The md file is the source of truth for humans. The `.ycrdt` file is the source of truth for concurrent agent edits and is what case-2 sync (design §4.2) diffs against. They are always committed together — never one without the other — so `HEAD` is internally consistent.
+The md file is the source of truth for humans. The `.ycrdt.jsonl` file is the source of truth for concurrent agent edits and is what case-2 sync (design §4.2) diffs against: one yjs op per line, append-only within a commit, so `git log -p` on it stays legible even though the payload is opaque. Md and ycrdt are always committed together — never one without the other — so `HEAD` is internally consistent.
 
 Threads are anchored yaml files next to the doc. Anchoring uses `{rel_pos, content_hash, anchored_text, context_before, context_after}` (see `ThreadTarget` in `backend/index.ts`); the backend re-resolves anchors on read against the current md.
 
@@ -41,7 +41,7 @@ No file changes yet — the draft is just a named ref.
 ### Write/Edit(path, ref=draft_id, content)
 
 1. Write md to the working tree under the draft branch.
-2. Regenerate the paired `.ycrdt` via case-2 sync (diff md → yjs ops → verify render matches md).
+2. Regenerate the paired `.ycrdt.jsonl` via case-2 sync (diff md → yjs ops → append one line per op → verify render matches md).
 3. Commit both files in one commit on the draft branch. Commit message: `write(<path>)` or `edit(<path>)`.
 4. Emit `draft_changed`.
 
@@ -65,7 +65,7 @@ Thread writes (`addThread`, `replyThread`, `resolveThread`) commit yaml files to
 
 ## Why pair md + ycrdt in every commit
 
-A commit that has only md loses concurrent-agent state. A commit with only ycrdt is unreadable by humans and by git diff. Pairing them makes HEAD a valid sheaf state for any consumer — the md works for `git log -p`, grep, and GitHub; the ycrdt works for agents joining mid-session.
+A commit that has only md loses concurrent-agent state. A commit with only ycrdt is unreadable by humans and by git diff. Pairing them makes HEAD a valid sheaf state for any consumer — the md works for `git log -p`, grep, and GitHub; the ycrdt works for agents joining mid-session. Jsonl keeps the ycrdt side append-friendly and line-diffable without paying pretty-json's size cost.
 
 Case-2 sync (design §4.2) is the adapter: it takes a human's markdown edit and derives the equivalent yjs operation list, rendering the result back to md to verify no drift. If verification fails, the write is rejected at the backend layer before a commit exists.
 
@@ -83,5 +83,4 @@ Case-2 sync (design §4.2) is the adapter: it takes a human's markdown edit and 
 ## Unresolved
 
 - Squash vs. merge commit on `Merge`. Squash loses conversational authorship; merge bloats main history with agent ping-pong.
-- Whether `.ycrdt` files should be binary (compact) or json (diffable). Binary wins on size; json wins on `git log -p` legibility for debugging.
 - GC policy for declined drafts. A week? A month? Configurable per-workspace?

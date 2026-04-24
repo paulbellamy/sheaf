@@ -52,13 +52,40 @@ export function safeJoin(rootAbs: string, rel: string): string {
  * This check is invariant-only — it does not touch the filesystem.
  */
 export function assertWorkspacePath(p: string): void {
+  assertPathWithPrefixes(p, ["workspaces/"]);
+}
+
+/**
+ * Plugin paths live at the repo root (not under the data root) and are
+ * served read-only. They carry the bundled skills and scripts so agents can
+ * discover how to use the MCP without installing the plugin locally.
+ */
+export const PLUGIN_PATH_PREFIX = ".claude-plugin/";
+
+export function isPluginPath(p: string): boolean {
+  if (typeof p !== "string") return false;
+  return path.posix.normalize(p).startsWith(PLUGIN_PATH_PREFIX);
+}
+
+/**
+ * Assert a path is readable via the MCP. Accepts either a workspace doc
+ * path or a plugin-tree path. Use for read-only tool inputs; mutations must
+ * still call `assertWorkspacePath` so they cannot target the plugin tree.
+ */
+export function assertReadablePath(p: string): void {
+  assertPathWithPrefixes(p, ["workspaces/", PLUGIN_PATH_PREFIX]);
+}
+
+function assertPathWithPrefixes(p: string, prefixes: string[]): void {
   if (typeof p !== "string" || p.length === 0) throw err.invalidPath(p);
   if (p.includes("\0")) throw err.invalidPath(p);
   // Normalize using posix-style rules; we store paths with forward slashes.
   const normalized = path.posix.normalize(p);
+  const matched = prefixes.find((prefix) => normalized.startsWith(prefix));
   if (
-    !normalized.startsWith("workspaces/") ||
-    normalized === "workspaces/.." ||
+    !matched ||
+    // A bare `<prefix>..` normalizes to the prefix's parent — reject it.
+    normalized === matched.slice(0, -1) + "/.." ||
     normalized.split("/").some((seg) => seg === "..")
   ) {
     throw err.invalidPath(p);
