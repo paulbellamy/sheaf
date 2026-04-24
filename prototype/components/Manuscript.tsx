@@ -303,7 +303,7 @@ export function Manuscript({
   });
 
   const bump = useCallback(() => bumpLayout((n) => n + 1), []);
-  useFormattingDiff(editor, setThreads, bump);
+  const { resetBaseline } = useFormattingDiff(editor, setThreads, bump);
 
   // When the server-driven initialContent changes, fold the new doc into the
   // existing editor instead of remounting. This preserves selection, undo
@@ -333,6 +333,7 @@ export function Manuscript({
     const prevFrom = prevSelection.from;
     const prevTo = prevSelection.to;
     editor.commands.setContent(incoming, { emitUpdate: false });
+    resetBaseline();
     const size = editor.state.doc.content.size;
     if (prevFrom <= size && prevTo <= size) {
       try {
@@ -344,7 +345,7 @@ export function Manuscript({
         /* selection drift is non-fatal */
       }
     }
-  }, [editor, initialContent, threads]);
+  }, [editor, initialContent, threads, resetBaseline]);
 
   useLayoutEffect(() => {
     const onResize = () => bumpLayout((n) => n + 1);
