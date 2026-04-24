@@ -61,6 +61,8 @@ export function useServerThreads(
               note: local.note,
               collapsed: local.collapsed ?? s.collapsed,
               autoFocusNote: local.autoFocusNote,
+              anchor: local.anchor,
+              structural: local.structural,
             };
           });
           const merged = [

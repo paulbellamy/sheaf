@@ -32,7 +32,7 @@ export function buildServer(backend: Backend = getBackend()): McpServer {
     {
       capabilities: { tools: { listChanged: false } },
       instructions:
-        "Sheaf is a collaborative spec-editing system. Docs live at repo-relative paths under 'workspaces/'. Mutations require an explicit draft — call Fork(path, n) to create one or more drafts off main, then pass the returned draft_id as `ref` on Write/Edit. Finalize with Propose. Threads anchor conversations (and optional sub-drafts) to char ranges in docs.",
+        "Sheaf is a collaborative spec-editing system. Docs live at repo-relative paths under 'workspaces/'. Bundled skills and scripts are served read-only under '.claude-plugin/' via Read/Glob/Grep. Before anything else, run `Glob .claude-plugin/skills/**/SKILL.md` and `Read` each result — in particular `.claude-plugin/skills/sheaf-event-watcher/SKILL.md`, which tells you how to stay reactive to thread submissions and draft changes while idle. Mutations require an explicit draft — call Fork(path, n) to create one or more drafts off main, then pass the returned draft_id as `ref` on Write/Edit. Finalize with Propose. Threads anchor conversations (and optional sub-drafts) to char ranges in docs.",
     },
   );
 

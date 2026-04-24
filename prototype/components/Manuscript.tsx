@@ -9,6 +9,7 @@ import { CodeBlockView } from "./CodeBlockView";
 import type { Node as PMNode } from "@tiptap/pm/model";
 import { common, createLowlight } from "lowlight";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { newId, type Thread } from "@/lib/types";
 import { sampleManuscript } from "@/lib/sampleText";
@@ -64,6 +65,7 @@ export function Manuscript({
   const [, bumpLayout] = useState(0);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [draftBusy, setDraftBusy] = useState(false);
+  const router = useRouter();
   const mdRef = useRef<string>(md ?? "");
   // Keep mdRef in sync with the prop via effect rather than mutating during
   // render — avoids surprise if React re-invokes the render before commit.
@@ -468,14 +470,16 @@ export function Manuscript({
         if (!r.ok) {
           const body = (await r.json().catch(() => ({}))) as { error?: string };
           setSubmitError(body.error ?? `${kind} failed`);
+          return;
         }
+        router.push(docPath ? `/doc/${docPath}` : "/");
       } catch (e) {
         setSubmitError(e instanceof Error ? e.message : String(e));
       } finally {
         setDraftBusy(false);
       }
     },
-    [docRef],
+    [docRef, docPath, router],
   );
 
   const pendingThreads = useMemo(
