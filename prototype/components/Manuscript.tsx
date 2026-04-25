@@ -420,6 +420,30 @@ export function Manuscript({
     );
   }, []);
 
+  const replyToThread = useCallback(
+    async (threadId: string, message: string): Promise<void> => {
+      try {
+        const r = await fetch(
+          `/api/ui/threads/${encodeURIComponent(threadId)}/reply`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ message }),
+          },
+        );
+        if (!r.ok) {
+          const body = (await r.json().catch(() => ({}))) as { error?: string };
+          setSubmitError(body.error ?? `reply failed (HTTP ${r.status})`);
+          throw new Error(body.error ?? `HTTP ${r.status}`);
+        }
+      } catch (e) {
+        setSubmitError(e instanceof Error ? e.message : String(e));
+        throw e;
+      }
+    },
+    [],
+  );
+
   const setThreadCollapsed = useCallback(
     (threadId: string, collapsed: boolean) => {
       setThreads((prev) =>
@@ -564,6 +588,7 @@ export function Manuscript({
           getThreadView={getThreadView}
           onActivate={activateThread}
           onSetNote={setNote}
+          onReply={replyToThread}
           onAccept={acceptThread}
           onDecline={declineThread}
           onToggleCollapsed={setThreadCollapsed}

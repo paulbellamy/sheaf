@@ -1,3 +1,7 @@
+import type { ThreadMessage } from "@/lib/mcp/backend";
+
+export type { ThreadMessage };
+
 export type ThreadKind = "redline" | "structural" | "note";
 
 export type ThreadState = "pending" | "submitted" | "accepted" | "declined";
@@ -12,6 +16,11 @@ export type Thread = {
   anchor?: { from: number; to: number };
   autoFocusNote?: boolean;
   collapsed?: boolean;
+  /**
+   * Server-side message history. Populated for submitted/accepted threads
+   * hydrated from the backend; absent on pending local threads.
+   */
+  messages?: ThreadMessage[];
 };
 
 export function newId(prefix: string): string {
