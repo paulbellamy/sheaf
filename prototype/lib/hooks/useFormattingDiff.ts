@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import type { Editor } from "@tiptap/react";
 import type { Node as PMNode } from "@tiptap/pm/model";
 
@@ -28,10 +28,33 @@ export function useFormattingDiff(
   onBump: () => void,
 ) {
   const baselineDocRef = useRef<PMNode | null>(null);
-  // Baseline doc is immutable after mount, so tokenize it once and reuse
-  // on every transaction. That halves per-keystroke work and eliminates
-  // ~O(n) allocations of baseline tokens per keystroke.
+  // Baseline tokens are stable between full-doc replacements, so tokenize
+  // once and reuse on every transaction. That halves per-keystroke work
+  // and eliminates ~O(n) allocations of baseline tokens per keystroke.
   const baselineTokensRef = useRef<Uint8Array>(EMPTY_TOKENS);
+  const trackedLabels = useRef(new Set(Object.values(TRACKED_FORMATTING_MARKS)));
+
+  // Re-baseline against the current editor doc. Call after a full-doc
+  // replacement (e.g. async content load via setContent with emitUpdate
+  // suppressed) — otherwise the first post-load transaction would diff
+  // the new doc against a stale baseline and spawn a structural thread
+  // for every formatting mark in the loaded content.
+  const resetBaseline = useCallback(() => {
+    if (!editor) return;
+    baselineDocRef.current = editor.state.doc;
+    baselineTokensRef.current = collectFormattingTokens(editor.state.doc, false);
+    // Drop pending formatting-kind structural threads whose ranges were
+    // anchored to the previous doc and are now meaningless.
+    setThreads((prev) => {
+      const filtered = prev.filter((t) => {
+        if (t.kind !== "structural") return true;
+        if (!t.structural?.range) return true;
+        if (!trackedLabels.current.has(t.structural.label)) return true;
+        return t.note !== "" || t.state === "submitted";
+      });
+      return filtered.length === prev.length ? prev : filtered;
+    });
+  }, [editor, setThreads]);
 
   useEffect(() => {
     if (!editor) return;
@@ -42,7 +65,6 @@ export function useFormattingDiff(
         false,
       );
     }
-    const trackedLabels = new Set(Object.values(TRACKED_FORMATTING_MARKS));
 
     const handler = () => {
       onBump();
@@ -77,7 +99,7 @@ export function useFormattingDiff(
         const isFormattingThread = (t: Thread) =>
           t.kind === "structural" &&
           !!t.structural?.range &&
-          trackedLabels.has(t.structural.label);
+          trackedLabels.current.has(t.structural.label);
 
         const seen = new Set<string>();
         const afterReconcile: Thread[] = [];
@@ -121,5 +143,5 @@ export function useFormattingDiff(
     };
   }, [editor, setThreads, onBump]);
 
-  return baselineDocRef;
+  return { baselineDocRef, resetBaseline };
 }

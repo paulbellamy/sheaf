@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Thread } from "@/lib/types";
+import { formatRelative } from "@/lib/time";
 
 export type ThreadView = {
   del: { from: number; to: number; text: string } | null;
@@ -14,6 +15,7 @@ type Props = {
   active: boolean;
   onActivate: () => void;
   onSetNote: (note: string) => void;
+  onReply: (message: string) => Promise<void>;
   onAccept: () => void;
   onDecline: () => void;
   onToggleCollapsed: () => void;
@@ -47,6 +49,7 @@ export function ThreadCard({
   active,
   onActivate,
   onSetNote,
+  onReply,
   onAccept,
   onDecline,
   onToggleCollapsed,
@@ -56,7 +59,24 @@ export function ThreadCard({
   const submitted = thread.state === "submitted";
   const kind = thread.kind;
   const collapsed = !!thread.collapsed;
+  const messages = thread.messages ?? [];
+  const hasMessages = messages.length > 0;
   const hasNote = thread.note !== "";
+  const [replying, setReplying] = useState(false);
+
+  const submitReply = async () => {
+    const body = thread.note.trim();
+    if (!body || replying) return;
+    setReplying(true);
+    try {
+      await onReply(body);
+      onSetNote("");
+    } catch {
+      // Caller surfaces the error; preserve composer text so the user can retry.
+    } finally {
+      setReplying(false);
+    }
+  };
 
   return (
     <div
@@ -115,19 +135,37 @@ export function ThreadCard({
 
       {!collapsed && (
         <>
+          {hasMessages && (
+            <ul className="thread-messages">
+              {messages.map((m, i) => (
+                <li key={i} className="thread-message">
+                  <div className="thread-message-meta">
+                    <span className="author">{m.author}</span>
+                    <span className="ts">{formatRelative(m.ts)}</span>
+                  </div>
+                  <div className="thread-message-body">{m.body}</div>
+                </li>
+              ))}
+            </ul>
+          )}
+
           <AutoGrowTextarea
             className="note"
             placeholder={
-              kind === "structural"
-                ? "＋ add a note explaining this structural change"
-                : kind === "note"
-                  ? "＋ write your comment"
-                  : "＋ add a note alongside this change"
+              submitted
+                ? "＋ reply"
+                : kind === "structural"
+                  ? "＋ add a note explaining this structural change"
+                  : kind === "note"
+                    ? "＋ write your comment"
+                    : "＋ add a note alongside this change"
             }
             value={thread.note}
             onChange={onSetNote}
             autoFocus={!!thread.autoFocusNote}
             submitOnEnter
+            onSubmit={submitted ? submitReply : undefined}
+            disabled={replying}
           />
 
           <div className="actions">
@@ -159,6 +197,8 @@ function AutoGrowTextarea({
   className,
   autoFocus,
   submitOnEnter,
+  onSubmit,
+  disabled,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -166,6 +206,8 @@ function AutoGrowTextarea({
   className?: string;
   autoFocus?: boolean;
   submitOnEnter?: boolean;
+  onSubmit?: () => void;
+  disabled?: boolean;
 }) {
   const ref = useRef<HTMLTextAreaElement | null>(null);
 
@@ -191,13 +233,15 @@ function AutoGrowTextarea({
       placeholder={placeholder}
       value={value}
       rows={1}
+      disabled={disabled}
       onChange={(e) => onChange(e.target.value)}
       onMouseDown={(e) => e.stopPropagation()}
       onKeyDown={(e) => {
         e.stopPropagation();
         if (submitOnEnter && e.key === "Enter" && !e.shiftKey) {
           e.preventDefault();
-          ref.current?.blur();
+          if (onSubmit) onSubmit();
+          else ref.current?.blur();
         }
       }}
     />

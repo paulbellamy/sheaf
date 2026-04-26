@@ -11,6 +11,7 @@ type Props = {
   getThreadView: (threadId: string) => ThreadView | null;
   onActivate: (id: string) => void;
   onSetNote: (threadId: string, note: string) => void;
+  onReply: (threadId: string, message: string) => Promise<void>;
   onAccept: (threadId: string) => void;
   onDecline: (threadId: string) => void;
   onToggleCollapsed: (threadId: string, collapsed: boolean) => void;
@@ -26,6 +27,7 @@ export function MarginRail({
   getThreadView,
   onActivate,
   onSetNote,
+  onReply,
   onAccept,
   onDecline,
   onToggleCollapsed,
@@ -118,6 +120,7 @@ export function MarginRail({
             active={t.id === activeThreadId}
             onActivate={() => onActivate(t.id)}
             onSetNote={(note) => onSetNote(t.id, note)}
+            onReply={(message) => onReply(t.id, message)}
             onAccept={() => onAccept(t.id)}
             onDecline={() => onDecline(t.id)}
             onToggleCollapsed={() => onToggleCollapsed(t.id, !t.collapsed)}

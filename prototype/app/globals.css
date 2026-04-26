@@ -254,6 +254,48 @@ body {
   opacity: 0.55;
 }
 
+.thread-card .thread-messages {
+  list-style: none;
+  margin: 0.35rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border-top: 1px dashed var(--rule);
+  padding-top: 0.45rem;
+}
+
+.thread-card .thread-message {
+  font-size: 0.85rem;
+}
+
+.thread-card .thread-message-meta {
+  display: flex;
+  gap: 0.4rem;
+  font-size: 0.7rem;
+  color: var(--muted);
+  margin-bottom: 0.1rem;
+}
+
+.thread-card .thread-message-meta .author {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.thread-card .thread-message-body {
+  white-space: pre-wrap;
+  color: var(--ink);
+}
+
+.thread-card .thread-messages + textarea.note {
+  border-top: 1px dashed var(--rule);
+}
+
+.thread-card textarea.note:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
 .thread-card .actions {
   display: flex;
   gap: 0.5rem;

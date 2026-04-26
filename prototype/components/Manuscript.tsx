@@ -303,7 +303,7 @@ export function Manuscript({
   });
 
   const bump = useCallback(() => bumpLayout((n) => n + 1), []);
-  useFormattingDiff(editor, setThreads, bump);
+  const { resetBaseline } = useFormattingDiff(editor, setThreads, bump);
 
   // When the server-driven initialContent changes, fold the new doc into the
   // existing editor instead of remounting. This preserves selection, undo
@@ -333,6 +333,7 @@ export function Manuscript({
     const prevFrom = prevSelection.from;
     const prevTo = prevSelection.to;
     editor.commands.setContent(incoming, { emitUpdate: false });
+    resetBaseline();
     const size = editor.state.doc.content.size;
     if (prevFrom <= size && prevTo <= size) {
       try {
@@ -344,7 +345,7 @@ export function Manuscript({
         /* selection drift is non-fatal */
       }
     }
-  }, [editor, initialContent, threads]);
+  }, [editor, initialContent, threads, resetBaseline]);
 
   useLayoutEffect(() => {
     const onResize = () => bumpLayout((n) => n + 1);
@@ -418,6 +419,30 @@ export function Manuscript({
       prev.map((t) => (t.id === threadId ? { ...t, note } : t)),
     );
   }, []);
+
+  const replyToThread = useCallback(
+    async (threadId: string, message: string): Promise<void> => {
+      try {
+        const r = await fetch(
+          `/api/ui/threads/${encodeURIComponent(threadId)}/reply`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ message }),
+          },
+        );
+        if (!r.ok) {
+          const body = (await r.json().catch(() => ({}))) as { error?: string };
+          setSubmitError(body.error ?? `reply failed (HTTP ${r.status})`);
+          throw new Error(body.error ?? `HTTP ${r.status}`);
+        }
+      } catch (e) {
+        setSubmitError(e instanceof Error ? e.message : String(e));
+        throw e;
+      }
+    },
+    [],
+  );
 
   const setThreadCollapsed = useCallback(
     (threadId: string, collapsed: boolean) => {
@@ -563,6 +588,7 @@ export function Manuscript({
           getThreadView={getThreadView}
           onActivate={activateThread}
           onSetNote={setNote}
+          onReply={replyToThread}
           onAccept={acceptThread}
           onDecline={declineThread}
           onToggleCollapsed={setThreadCollapsed}

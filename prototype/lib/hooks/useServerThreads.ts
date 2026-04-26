@@ -1,21 +1,22 @@
 import { useEffect, useRef } from "react";
 
 import type { Thread } from "@/lib/types";
-import type { ThreadSummary } from "@/lib/mcp/backend";
+import type { Thread as BackendThread } from "@/lib/mcp/backend";
 import { subscribeBackendEvents } from "./useBackendEvents";
 
-function backendSummaryToUiThread(s: ThreadSummary): Thread {
+function backendThreadToUiThread(t: BackendThread): Thread {
   return {
-    id: s.id,
+    id: t.id,
     kind: "note",
-    note: s.last_message_preview,
+    note: "",
     state:
-      s.status === "accepted" || s.status === "archived"
+      t.status === "accepted" || t.status === "archived"
         ? "accepted"
-        : s.status === "declined"
+        : t.status === "declined"
           ? "declined"
           : "submitted",
-    createdAt: s.created,
+    createdAt: t.created,
+    messages: t.messages,
   };
 }
 
@@ -40,19 +41,19 @@ export function useServerThreads(
           { cache: "no-store" },
         );
         if (!r.ok) return;
-        const body = (await r.json()) as { threads: ThreadSummary[] };
+        const body = (await r.json()) as { threads: BackendThread[] };
         if (mySeq !== seqRef.current) return;
         const server = body.threads
           .filter((t) => t.status === "open")
-          .map(backendSummaryToUiThread);
+          .map(backendThreadToUiThread);
         const serverIds = new Set(server.map((t) => t.id));
         setThreads((prev) => {
           const prevById = new Map(prev.map((t) => [t.id, t]));
           // For each server thread, if we already have a local copy, only
-          // take the server's server-owned fields (id, kind, state, createdAt)
-          // and keep any locally-edited UI fields (note, collapsed, autoFocus)
-          // — otherwise the user's in-progress typing would snap back to the
-          // server value mid-keystroke when a concurrent thread_changed fires.
+          // take the server's server-owned fields (id, kind, state, createdAt,
+          // messages) and keep any locally-edited UI fields (note, collapsed,
+          // autoFocus) — otherwise the user's in-progress typing would snap
+          // back mid-keystroke when a concurrent thread_changed fires.
           const reconciled = server.map((s) => {
             const local = prevById.get(s.id);
             if (!local) return s;

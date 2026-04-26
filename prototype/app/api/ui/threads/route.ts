@@ -46,7 +46,11 @@ export async function GET(req: Request): Promise<Response> {
   const p = url.searchParams.get("path") ?? undefined;
   const ref = url.searchParams.get("ref") ?? "main";
   try {
-    const threads = await getBackend().listThreads({ path: p, ref });
+    const backend = getBackend();
+    const summaries = await backend.listThreads({ path: p, ref });
+    const threads = await Promise.all(
+      summaries.map((s) => backend.readThread(s.id)),
+    );
     return Response.json({ path: p, ref, threads });
   } catch (e) {
     return respondError(e);
