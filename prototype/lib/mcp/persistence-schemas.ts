@@ -23,6 +23,10 @@ export const draftMetaSchema = z.object({
   display_name: z.string().max(264).optional(),
   touches: z.array(z.string().min(1).max(512)).max(64).optional(),
   base_version: z.number().int().nonnegative().optional(),
+  parent_draft_id: z
+    .string()
+    .regex(/^draft_[A-Za-z0-9]{6,64}(?:-[A-Za-z0-9]{1,64}){0,8}$/)
+    .optional(),
   // seed_prompt / note kept for backward compatibility with on-disk files
   // written before the intent rename.
   seed_prompt: z.string().max(2048).optional(),

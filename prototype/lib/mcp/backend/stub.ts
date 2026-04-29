@@ -69,6 +69,7 @@ type DraftMeta = {
   display_name?: string;
   touches?: DocPath[];
   base_version?: number;
+  parent_draft_id?: DraftId;
 };
 
 type OpLog = Record<string, WriteResult>;
@@ -405,6 +406,7 @@ export class StubBackend implements Backend {
       display_name: data.display_name,
       touches: data.touches,
       base_version: data.base_version,
+      parent_draft_id: data.parent_draft_id,
     } satisfies DraftMeta;
   }
 
@@ -711,11 +713,35 @@ export class StubBackend implements Backend {
     n: number,
     intent?: string,
     author = "agent",
+    parent?: DraftId,
   ): Promise<DraftId[]> {
     return this.withLock(async () => {
       assertWorkspacePath(p);
-      await this.readDoc(p, "main");
-      const baseVersion = this.versionCounters.get(p) ?? 1;
+      let parentMeta: DraftMeta | undefined;
+      let seedContent: string | undefined;
+      if (parent !== undefined) {
+        assertDraftId(parent);
+        parentMeta = await this.loadDraftMeta(parent);
+        // Sub-drafts inherit the parent's doc identity. The plan calls out
+        // `base_path = parent.base_path`; the explicit `path` arg is kept
+        // for parity with the existing one-arg signature but must agree
+        // with the parent's base_path so we don't accidentally seed a
+        // sub-draft with content from a different doc.
+        if (parentMeta.base_path !== p) {
+          throw err.invalidPayload(
+            `fork(parent=${parent}) path mismatch: parent.base_path is ${parentMeta.base_path}, got ${p}`,
+          );
+        }
+        // Seed from the parent's current view of the doc (override if it
+        // exists, otherwise main). readDoc(p, parent) walks that fall-through
+        // for us so the sub-draft sees the parent's edits.
+        const parentView = await this.readDoc(p, parent);
+        seedContent = parentView.md;
+      } else {
+        await this.readDoc(p, "main");
+      }
+      const baseVersion =
+        parentMeta?.base_version ?? this.versionCounters.get(p) ?? 1;
       const ids: DraftId[] = [];
       for (let i = 0; i < n; i++) {
         const draftId = `draft_${randomUUID()}`;
@@ -728,8 +754,17 @@ export class StubBackend implements Backend {
           created_at: Date.now(),
           touches: [p],
           base_version: baseVersion,
+          parent_draft_id: parent,
         };
         await this.saveDraftMeta(meta);
+        // Materialize the parent's current bytes into the sub-draft's
+        // override tree so its working ycrdt is independent of the parent.
+        // No write for top-level drafts (they fall through to main on read).
+        if (seedContent !== undefined) {
+          const abs = this.absDraft(draftId, p);
+          await this.ensureDir(path.dirname(abs));
+          await writeFileNoFollow(abs, seedContent);
+        }
         this.emit({
           kind: "draft_created",
           draft_id: draftId,
@@ -739,6 +774,30 @@ export class StubBackend implements Backend {
       }
       return ids;
     });
+  }
+
+  /**
+   * Cascade-decline all sub-drafts of `parentDraftId` that aren't already
+   * accepted. Used by Phase I's `merge()` to tombstone unaccepted siblings
+   * when the parent draft is merged. Declined sub-draft refs persist in
+   * git history per the resolved-decision on rejected-alternatives storage.
+   *
+   * Exposed as a public method so Phase I can wire it into the merge flow
+   * without re-deriving the predicate. Intentionally not part of the
+   * `Backend` interface — this is a stub-internal helper.
+   */
+  async _cascadeDeclineSubDrafts(parentDraftId: DraftId): Promise<DraftId[]> {
+    assertDraftId(parentDraftId);
+    const all = await this.listDrafts();
+    const declined: DraftId[] = [];
+    for (const d of all) {
+      if (d.parent_draft_id !== parentDraftId) continue;
+      if (d.state === "accepted") continue;
+      if (d.state === "declined") continue;
+      await this.declineDraft(d.draft_id);
+      declined.push(d.draft_id);
+    }
+    return declined;
   }
 
   async forkAndAttachThreads(opts: {
@@ -940,6 +999,7 @@ export class StubBackend implements Backend {
           display_name: meta.display_name,
           touches,
           base_version: baseVersion,
+          parent_draft_id: meta.parent_draft_id,
         });
       } catch {
         continue;

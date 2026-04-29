@@ -109,6 +109,16 @@ export type DraftSummary = {
    * "based on v<base_version>" in the draft-mode banner.
    */
   base_version: number;
+  /**
+   * When set, this draft was forked off another draft (a sub-draft used for
+   * multi-option exploration; Phase G). Sub-drafts share lineage with their
+   * parent all the way back to main: `base_version` still tracks main, not
+   * the parent. On parent merge (Phase I), all sub-drafts where
+   * `parent_draft_id === parent` and `state !== "accepted"` are
+   * cascade-declined; declined sub-draft refs persist in git history per the
+   * resolved decision on rejected-alternatives storage.
+   */
+  parent_draft_id?: DraftId;
 };
 
 export type ThreadAnchor = {
@@ -197,11 +207,28 @@ export interface Backend {
     opId?: OpId,
   ): Promise<WriteResult>;
 
+  /**
+   * Fork the doc at `path` into `n` parallel drafts.
+   *
+   * When `parent` is omitted, each new draft branches off `main` with
+   * `parent_draft_id` unset. When `parent` is set (Phase G: multi-option
+   * exploration), each new draft is a sub-draft branched off the parent's
+   * current draft content for that path — the parent's edits are visible
+   * to the sub-draft as its starting point. `base_path` is inherited from
+   * the parent (same doc identity); `base_version` is inherited too, so
+   * sub-drafts share lineage with the parent all the way back to main.
+   *
+   * Acceptance lifecycle: on parent merge (Phase I), all sub-drafts where
+   * `parent_draft_id === parent` and `state !== "accepted"` are
+   * cascade-declined. Phase G exposes `_cascadeDeclineSubDrafts` for that
+   * call; Phase I wires it into `merge()`.
+   */
   fork(
     path: DocPath,
     n: number,
     intent?: string,
     author?: string,
+    parent?: DraftId,
   ): Promise<DraftId[]>;
 
   /**

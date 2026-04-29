@@ -845,3 +845,132 @@ describe("POST /api/ui/threads/[id]/payload (Phase F)", () => {
     expect(res.status).toBe(400);
   });
 });
+
+describe("backend.fork(parent=...) sub-drafts (Phase G)", () => {
+  let root: string;
+  let backend: StubBackend;
+  const DOC = "workspaces/ws/docs/a.md";
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
+    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "# title\n\nbody one\n",
+    );
+    backend = new StubBackend(root);
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("backwards compat: fork(path, n) without parent leaves parent_draft_id undefined", async () => {
+    const [id] = await backend.fork(DOC, 1);
+    const drafts = await backend.listDrafts();
+    const created = drafts.find((d) => d.draft_id === id);
+    expect(created).toBeDefined();
+    expect(created!.parent_draft_id).toBeUndefined();
+  });
+
+  it("fork with parent returns sub-drafts whose parent_draft_id matches", async () => {
+    const [parentId] = await backend.fork(DOC, 1);
+    const subIds = await backend.fork(DOC, 2, undefined, undefined, parentId);
+    expect(subIds).toHaveLength(2);
+
+    const drafts = await backend.listDrafts();
+    for (const subId of subIds) {
+      const sub = drafts.find((d) => d.draft_id === subId);
+      expect(sub).toBeDefined();
+      expect(sub!.parent_draft_id).toBe(parentId);
+      expect(sub!.base_path).toBe(DOC);
+    }
+  });
+
+  it("a sub-draft sees the parent's edits, not main", async () => {
+    const [parentId] = await backend.fork(DOC, 1);
+    await backend.writeDoc(DOC, parentId, "# title\n\nparent edit\n");
+
+    const [subId] = await backend.fork(DOC, 1, undefined, undefined, parentId);
+    const subView = await backend.readDoc(DOC, subId);
+    expect(subView.md).toBe("# title\n\nparent edit\n");
+
+    // Main is unchanged.
+    const mainView = await backend.readDoc(DOC, "main");
+    expect(mainView.md).toBe("# title\n\nbody one\n");
+  });
+
+  it("a sub-draft's working copy is independent of the parent after fork", async () => {
+    const [parentId] = await backend.fork(DOC, 1);
+    await backend.writeDoc(DOC, parentId, "# title\n\nparent v1\n");
+    const [subId] = await backend.fork(DOC, 1, undefined, undefined, parentId);
+
+    // Edit the parent again; the sub-draft should keep its snapshot.
+    await backend.writeDoc(DOC, parentId, "# title\n\nparent v2\n");
+    const subView = await backend.readDoc(DOC, subId);
+    expect(subView.md).toBe("# title\n\nparent v1\n");
+
+    // Edit only the sub-draft; the parent should be unaffected.
+    await backend.writeDoc(DOC, subId, "# title\n\nsub edit\n");
+    const parentView = await backend.readDoc(DOC, parentId);
+    expect(parentView.md).toBe("# title\n\nparent v2\n");
+  });
+
+  it("sub-draft inherits base_version from the parent (lineage back to main)", async () => {
+    const [parentId] = await backend.fork(DOC, 1);
+    const [parentSummary] = (await backend.listDrafts()).filter(
+      (d) => d.draft_id === parentId,
+    );
+    const [subId] = await backend.fork(DOC, 1, undefined, undefined, parentId);
+    const drafts = await backend.listDrafts();
+    const sub = drafts.find((d) => d.draft_id === subId);
+    expect(sub!.base_version).toBe(parentSummary.base_version);
+  });
+
+  it("rejects fork(parent=...) when path differs from the parent's base_path", async () => {
+    await fs.writeFile(
+      path.join(root, "workspaces", "ws", "docs", "b.md"),
+      "# b\n",
+    );
+    const OTHER = "workspaces/ws/docs/b.md";
+    const [parentId] = await backend.fork(DOC, 1);
+    await expect(
+      backend.fork(OTHER, 1, undefined, undefined, parentId),
+    ).rejects.toThrow();
+  });
+
+  it("_cascadeDeclineSubDrafts declines all unaccepted sub-drafts of the parent", async () => {
+    const [parentId] = await backend.fork(DOC, 1);
+    const [a, b, c] = await backend.fork(
+      DOC,
+      3,
+      undefined,
+      undefined,
+      parentId,
+    );
+    // Mark one sub-draft accepted: it must not be touched.
+    await backend.propose(a);
+    await backend.merge(a);
+    // Independent draft (different parent, no parent at all): must not be touched.
+    const [other] = await backend.fork(DOC, 1);
+
+    const declined = await backend._cascadeDeclineSubDrafts(parentId);
+    expect(new Set(declined)).toEqual(new Set([b, c]));
+
+    const drafts = await backend.listDrafts();
+    const get = (id: string) => drafts.find((d) => d.draft_id === id)!;
+    expect(get(a).state).toBe("accepted");
+    expect(get(b).state).toBe("declined");
+    expect(get(c).state).toBe("declined");
+    expect(get(other).state).toBe("open");
+    expect(get(parentId).state).toBe("open");
+  });
+
+  it("_cascadeDeclineSubDrafts is a no-op when the parent has no sub-drafts", async () => {
+    const [parentId] = await backend.fork(DOC, 1);
+    const declined = await backend._cascadeDeclineSubDrafts(parentId);
+    expect(declined).toEqual([]);
+  });
+});
