@@ -6,10 +6,27 @@
 // Usage:
 //   node scripts/watch-events.mjs
 // Endpoint override: SHEAF_STREAM_URL (default http://localhost:3000/api/ui/drafts/stream).
+//
+// We append `role=agent` to the URL so the backend counts this watcher
+// toward `agent_presence` (Phase E). The default for the SSE route is
+// `role=ui`, which is what plain browser tabs use.
 
-const url =
+const baseUrl =
   process.env.SHEAF_STREAM_URL ??
   "http://localhost:3000/api/ui/drafts/stream";
+
+const url = (() => {
+  try {
+    const u = new URL(baseUrl);
+    if (!u.searchParams.has("role")) u.searchParams.set("role", "agent");
+    return u.toString();
+  } catch {
+    // Non-absolute override (rare); fall back to a string append.
+    return baseUrl.includes("?")
+      ? `${baseUrl}&role=agent`
+      : `${baseUrl}?role=agent`;
+  }
+})();
 
 let backoffMs = 500;
 const maxBackoffMs = 15_000;

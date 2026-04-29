@@ -399,6 +399,42 @@ body {
   margin-right: 0.5rem;
 }
 
+.page-header-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.agent-dock {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-variant: small-caps;
+  letter-spacing: 0.04em;
+  font-size: 0.72rem;
+  color: var(--muted);
+  cursor: default;
+}
+
+.agent-dock-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--rule);
+  display: inline-block;
+  flex: 0 0 auto;
+  transition: background 120ms ease;
+}
+
+.agent-dock-dot[data-connected="true"] {
+  background: #2e7d32;
+}
+
+.agent-dock-label {
+  font-variant: small-caps;
+  letter-spacing: 0.04em;
+}
+
 .layout {
   max-width: 1200px;
   margin: 0 auto;
@@ -1524,6 +1560,13 @@ body {
 
 .dashboard header {
   margin-bottom: 2rem;
+}
+
+.dashboard-header-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
 }
 
 .dashboard header h1 {

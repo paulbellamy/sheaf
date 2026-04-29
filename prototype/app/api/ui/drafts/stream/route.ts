@@ -11,6 +11,17 @@ export const runtime = "nodejs";
  * Events are plain JSON matching `BackendEvent` from backend/index.ts.
  * A keep-alive `: ping` comment goes out every 20s to survive idle
  * proxy closes.
+ *
+ * Query params:
+ *   role=ui    (default) — passive observer, e.g. a browser tab. Does
+ *              NOT count toward `agent_presence`. Receives a synthetic
+ *              `agent_presence` frame on subscribe so the UI dock
+ *              indicator resolves immediately.
+ *   role=agent — the MCP/event-watcher session
+ *              (`.claude-plugin/scripts/watch-events.mjs` should append
+ *              `?role=agent`). Counted toward `agent_presence`; the
+ *              backend emits `agent_presence{connected:true}` on the
+ *              0→1 transition and `{connected:false,last_seen}` on 1→0.
  */
 
 /**
@@ -32,6 +43,9 @@ export async function GET(req: Request): Promise<Response> {
   }
   const backend = getBackend();
   const encoder = new TextEncoder();
+  const url = new URL(req.url);
+  const roleParam = url.searchParams.get("role");
+  const role: "ui" | "agent" = roleParam === "agent" ? "agent" : "ui";
 
   let queued = 0;
   activeClients += 1;
@@ -76,7 +90,7 @@ export async function GET(req: Request): Promise<Response> {
       // prime the stream so the client resolves immediately
       controller.enqueue(encoder.encode(`: connected\n\n`));
 
-      const unsubscribe = backend.subscribe(send);
+      const unsubscribe = backend.subscribe(send, { role });
 
       const ping = setInterval(() => {
         if (closed) return;

@@ -37,6 +37,7 @@ import { HelpModal } from "./HelpModal";
 import { StartDraftPanel } from "./StartDraftPanel";
 import { SelectionBubble } from "./SelectionBubble";
 import { DraftBanner } from "./DraftBanner";
+import { AgentDock } from "./AgentDock";
 
 const THREAD_IDLE_MS = 4000;
 
@@ -521,6 +522,7 @@ export function Manuscript({
               v{versionCounter}
             </span>
           ) : null}
+          <AgentDock />
           {!isDraftRef ? (
             <>
               edit anywhere — your changes become suggestions. press{" "}

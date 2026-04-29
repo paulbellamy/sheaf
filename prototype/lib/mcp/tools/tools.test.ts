@@ -518,3 +518,86 @@ describe("backend open_count derivation (Phase D)", () => {
     expect(afterOpen).toBe(1);
   });
 });
+
+describe("backend.subscribe agent_presence (Phase E)", () => {
+  let root: string;
+  let backend: StubBackend;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
+    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
+      recursive: true,
+    });
+    backend = new StubBackend(root);
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("emits agent_presence{connected:true} to all subscribers when the first agent subscribes", () => {
+    const uiEvents: BackendEvent[] = [];
+    backend.subscribe((e) => uiEvents.push(e), { role: "ui" });
+    // The synthetic-on-connect frame above goes first; clear it so we just
+    // assert on what arrives after the agent shows up.
+    uiEvents.length = 0;
+
+    const agentEvents: BackendEvent[] = [];
+    backend.subscribe((e) => agentEvents.push(e), { role: "agent" });
+
+    expect(uiEvents).toContainEqual({
+      kind: "agent_presence",
+      connected: true,
+    });
+    expect(agentEvents).toContainEqual({
+      kind: "agent_presence",
+      connected: true,
+    });
+  });
+
+  it("emits agent_presence{connected:false,last_seen} when the last agent unsubscribes", () => {
+    const uiEvents: BackendEvent[] = [];
+    backend.subscribe((e) => uiEvents.push(e), { role: "ui" });
+    const unsub = backend.subscribe(() => {}, { role: "agent" });
+
+    uiEvents.length = 0;
+    const t0 = Date.now();
+    unsub();
+
+    const presenceEvents = uiEvents.filter(
+      (e) => e.kind === "agent_presence",
+    );
+    expect(presenceEvents).toHaveLength(1);
+    const evt = presenceEvents[0];
+    if (evt.kind !== "agent_presence")
+      throw new Error("unreachable: filtered above");
+    expect(evt.connected).toBe(false);
+    expect(typeof evt.last_seen).toBe("number");
+    // last_seen should be roughly "now"; allow a generous window for slow CI.
+    expect(evt.last_seen!).toBeGreaterThanOrEqual(t0 - 1);
+  });
+
+  it("replays current presence to a new UI subscriber when no agent is connected", () => {
+    const events: BackendEvent[] = [];
+    backend.subscribe((e) => events.push(e), { role: "ui" });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      kind: "agent_presence",
+      connected: false,
+    });
+  });
+
+  it("does not double-fire when a second agent subscribes (still connected)", () => {
+    backend.subscribe(() => {}, { role: "agent" });
+
+    const uiEvents: BackendEvent[] = [];
+    backend.subscribe((e) => uiEvents.push(e), { role: "ui" });
+    // After the synthetic replay, only the next transition should arrive.
+    uiEvents.length = 0;
+
+    backend.subscribe(() => {}, { role: "agent" });
+    const presence = uiEvents.filter((e) => e.kind === "agent_presence");
+    expect(presence).toHaveLength(0);
+  });
+});

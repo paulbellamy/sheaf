@@ -262,8 +262,16 @@ export interface Backend {
    * Used by the SSE route to push live updates to the /doc browser UI.
    * Emitted from any mutation that changes what a reviewer would see:
    * Fork, Write, Edit, Propose, Merge, declineDraft.
+   *
+   * `role` distinguishes UI subscribers (passive observers, the default)
+   * from agent subscribers (the MCP/event-watcher session). Only `"agent"`
+   * subscribers count toward `agent_presence`; otherwise a single browser
+   * tab would mark itself as a connected agent.
    */
-  subscribe(listener: (event: BackendEvent) => void): () => void;
+  subscribe(
+    listener: (event: BackendEvent) => void,
+    opts?: { role?: "ui" | "agent" },
+  ): () => void;
 }
 
 import { z } from "zod";
@@ -306,6 +314,17 @@ export const backendEventSchema = z.discriminatedUnion("kind", [
     thread_id: z.string(),
     /** Docs the thread anchors onto; consumers scope refetches by these. */
     target_paths: z.array(z.string()),
+  }),
+  z.object({
+    kind: z.literal("agent_presence"),
+    /** True when at least one `role: "agent"` subscriber is active. */
+    connected: z.boolean(),
+    /**
+     * Unix-ms timestamp of the most recent moment the agent was connected.
+     * Set on the disconnect transition (and replayed to UI subscribers on
+     * connect so they render "last seen" without waiting for a transition).
+     */
+    last_seen: z.number().optional(),
   }),
 ]);
 

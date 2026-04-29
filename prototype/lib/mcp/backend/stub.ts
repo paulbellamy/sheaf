@@ -232,6 +232,14 @@ export class StubBackend implements Backend {
   private lockChain: Promise<unknown> = Promise.resolve();
   private subscribers = new Set<(event: BackendEvent) => void>();
   /**
+   * Subset of `subscribers` registered with `role: "agent"`. Tracked so the
+   * `agent_presence` event reflects watcher/MCP sessions only — UI tabs
+   * don't mark themselves as connected agents.
+   */
+  private agentSubscribers = new Set<(event: BackendEvent) => void>();
+  /** Unix-ms of the last moment an agent subscriber was registered. */
+  private agentLastSeen: number | undefined;
+  /**
    * Per-doc monotonic version counter. Initialized to 1 the first time a doc
    * with prose is read on main; bumped on draft accept (Phase I wires the
    * bump). In-memory only — production will derive from accept-commit
@@ -245,10 +253,46 @@ export class StubBackend implements Backend {
     this.opLogPath = path.join(root, ".op_log.json");
   }
 
-  subscribe(listener: (event: BackendEvent) => void): () => void {
+  subscribe(
+    listener: (event: BackendEvent) => void,
+    opts?: { role?: "ui" | "agent" },
+  ): () => void {
+    const role = opts?.role ?? "ui";
     this.subscribers.add(listener);
+    if (role === "agent") {
+      const wasEmpty = this.agentSubscribers.size === 0;
+      this.agentSubscribers.add(listener);
+      if (wasEmpty) {
+        // 0 -> 1 transition: notify everyone (including this fresh listener).
+        this.emit({ kind: "agent_presence", connected: true });
+      }
+    } else {
+      // Replay current presence to the new UI listener so the dock indicator
+      // resolves on connect rather than waiting for the next transition.
+      try {
+        listener({
+          kind: "agent_presence",
+          connected: this.agentSubscribers.size > 0,
+          last_seen: this.agentLastSeen,
+        });
+      } catch {
+        /* listener errors must not break callers */
+      }
+    }
     return () => {
       this.subscribers.delete(listener);
+      if (role === "agent") {
+        this.agentSubscribers.delete(listener);
+        if (this.agentSubscribers.size === 0) {
+          this.agentLastSeen = Date.now();
+          // 1 -> 0 transition: tell remaining (UI) subscribers the agent left.
+          this.emit({
+            kind: "agent_presence",
+            connected: false,
+            last_seen: this.agentLastSeen,
+          });
+        }
+      }
     };
   }
 
