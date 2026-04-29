@@ -16,6 +16,12 @@ export type SheafErrorCode =
   | "grep_timeout"
   | "payload_too_large";
 
+export type MergeConflictDetail = {
+  path: string;
+  base_version: number;
+  main_version: number;
+};
+
 /**
  * Thrown by the sheaf backend and tool layer. Surfaces through MCP
  * `toToolError` to agents and through `respondError` to UI route handlers.
@@ -25,11 +31,22 @@ export type SheafErrorCode =
  */
 export class SheafError extends Error {
   code: SheafErrorCode;
+  /**
+   * Phase I: populated only on `merge_conflict`. Lists the touched paths
+   * whose main has advanced past the draft's `base_version`, so callers can
+   * render a per-path conflict banner without re-querying.
+   */
+  conflicts?: MergeConflictDetail[];
 
-  constructor(code: SheafErrorCode, message: string) {
+  constructor(
+    code: SheafErrorCode,
+    message: string,
+    extras?: { conflicts?: MergeConflictDetail[] },
+  ) {
     super(message);
     this.name = "SheafError";
     this.code = code;
+    if (extras?.conflicts) this.conflicts = extras.conflicts;
   }
 }
 
@@ -90,11 +107,27 @@ export const err = {
       "draft_already_submitted",
       `draft ${id} is already submitted`,
     ),
-  mergeConflict: (path: string) =>
-    new SheafError(
+  mergeConflict: (
+    conflicts: MergeConflictDetail[] | string,
+  ): SheafError => {
+    if (typeof conflicts === "string") {
+      return new SheafError(
+        "merge_conflict",
+        `conflict merging ${conflicts}; re-fork off latest main and retry`,
+      );
+    }
+    const summary = conflicts
+      .map(
+        (c) =>
+          `${c.path}: main is at v${c.main_version}, draft based on v${c.base_version}`,
+      )
+      .join("; ");
+    return new SheafError(
       "merge_conflict",
-      `conflict merging ${path}; re-fork off latest main and retry`,
-    ),
+      `conflict on ${conflicts.length} path${conflicts.length === 1 ? "" : "s"} (${summary}); re-fork off latest main and retry`,
+      { conflicts },
+    );
+  },
   anchorOrphaned: (threadId: string) =>
     new SheafError(
       "anchor_orphaned",
@@ -153,10 +186,9 @@ export function statusForCode(code: SheafErrorCode): number {
  */
 export function respondError(e: unknown): Response {
   if (e instanceof SheafError) {
-    return Response.json(
-      { error: e.message, code: e.code },
-      { status: statusForCode(e.code) },
-    );
+    const body: Record<string, unknown> = { error: e.message, code: e.code };
+    if (e.conflicts) body.conflicts = e.conflicts;
+    return Response.json(body, { status: statusForCode(e.code) });
   }
   if (e instanceof Error) {
     console.error("[ui] internal error", e);

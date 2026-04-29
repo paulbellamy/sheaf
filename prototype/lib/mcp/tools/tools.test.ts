@@ -10,6 +10,7 @@ import {
 } from "../../../app/api/ui/threads/route";
 import { POST as draftsPOST } from "../../../app/api/ui/drafts/route";
 import { GET as draftIdGET } from "../../../app/api/ui/drafts/[id]/route";
+import { POST as acceptPOST } from "../../../app/api/ui/drafts/[id]/accept/route";
 import { POST as payloadPOST } from "../../../app/api/ui/threads/[id]/payload/route";
 import { setBackend } from "../backend/factory";
 import type { BackendEvent } from "../backend";
@@ -1091,5 +1092,218 @@ describe("backend cross-cutting drafts (Phase H)", () => {
     const bEntry = changes.find((c) => c.path === DOC_B)!;
     expect(bEntry.main_md).toBe("# b\nbody\n");
     expect(bEntry.draft_md).toBe("# b v2\n");
+  });
+});
+
+describe("backend.merge atomic accept (Phase I)", () => {
+  let root: string;
+  let backend: StubBackend;
+  const DOC_A = "workspaces/ws/docs/a.md";
+  const DOC_B = "workspaces/ws/docs/b.md";
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
+    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "# a\nbody\n",
+    );
+    await fs.writeFile(
+      path.join(root, "workspaces", "ws", "docs", "b.md"),
+      "# b\nbody\n",
+    );
+    backend = new StubBackend(root);
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("single-doc merge: bumps version, lands content, accepts state, emits versions", async () => {
+    // Read once so the counter for DOC_A is initialized to 1.
+    await backend.readDoc(DOC_A);
+    const [draftId] = await backend.fork(DOC_A, 1);
+    await backend.writeDoc(DOC_A, draftId, "# a v2\nbody v2\n");
+    await backend.propose(draftId);
+
+    const events: BackendEvent[] = [];
+    backend.subscribe((e) => events.push(e));
+
+    const result = await backend.merge(draftId);
+    expect(result.versions).toEqual([{ path: DOC_A, from: 1, to: 2 }]);
+    expect(result.commit).toMatch(/^c-/);
+
+    const main = await backend.readDoc(DOC_A);
+    expect(main.md).toBe("# a v2\nbody v2\n");
+    expect(main.version_counter).toBe(2);
+
+    const drafts = await backend.listDrafts();
+    expect(drafts.find((d) => d.draft_id === draftId)!.state).toBe("accepted");
+
+    const merged = events.filter((e) => e.kind === "draft_merged");
+    expect(merged).toHaveLength(1);
+    const evt = merged[0];
+    if (evt.kind !== "draft_merged") throw new Error("unreachable");
+    expect(evt.versions).toEqual([{ path: DOC_A, from: 1, to: 2 }]);
+    expect(evt.target_paths).toEqual([DOC_A]);
+  });
+
+  it("cross-cutting merge: bumps every touched path atomically", async () => {
+    await backend.readDoc(DOC_A);
+    await backend.readDoc(DOC_B);
+    const [draftId] = await backend.fork(DOC_A, 1);
+    await backend.writeDoc(DOC_A, draftId, "# a v2\nbody\n");
+    await backend.writeDoc(DOC_B, draftId, "# b v2\nbody\n");
+    await backend.propose(draftId);
+
+    const result = await backend.merge(draftId);
+    expect(result.versions).toHaveLength(2);
+    const byPath = new Map(result.versions.map((v) => [v.path, v]));
+    expect(byPath.get(DOC_A)).toEqual({ path: DOC_A, from: 1, to: 2 });
+    expect(byPath.get(DOC_B)).toEqual({ path: DOC_B, from: 1, to: 2 });
+
+    const a = await backend.readDoc(DOC_A);
+    const b = await backend.readDoc(DOC_B);
+    expect(a.md).toBe("# a v2\nbody\n");
+    expect(b.md).toBe("# b v2\nbody\n");
+    expect(a.version_counter).toBe(2);
+    expect(b.version_counter).toBe(2);
+  });
+
+  it("conflict: throws merge_conflict, leaves main untouched, draft state unchanged", async () => {
+    await backend.readDoc(DOC_A);
+    const [draftId] = await backend.fork(DOC_A, 1);
+    await backend.writeDoc(DOC_A, draftId, "# a v2\nbody\n");
+    await backend.propose(draftId);
+
+    // Simulate a competing accept landing on main: another draft bumps the
+    // counter for DOC_A past the draft's base_version.
+    const [other] = await backend.fork(DOC_A, 1);
+    await backend.writeDoc(DOC_A, other, "# a other\nbody\n");
+    await backend.propose(other);
+    await backend.merge(other);
+
+    const events: BackendEvent[] = [];
+    backend.subscribe((e) => events.push(e));
+
+    let thrown: unknown;
+    try {
+      await backend.merge(draftId);
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeDefined();
+    expect((thrown as { code?: string }).code).toBe("merge_conflict");
+    expect((thrown as { conflicts?: unknown[] }).conflicts).toEqual([
+      { path: DOC_A, base_version: 1, main_version: 2 },
+    ]);
+
+    // Main reflects the *other* draft, not this one. No new merge events.
+    const main = await backend.readDoc(DOC_A);
+    expect(main.md).toBe("# a other\nbody\n");
+    expect(main.version_counter).toBe(2);
+
+    const drafts = await backend.listDrafts();
+    const meta = drafts.find((d) => d.draft_id === draftId)!;
+    expect(meta.state).toBe("submitted");
+
+    expect(events.filter((e) => e.kind === "draft_merged")).toHaveLength(0);
+  });
+
+  it("cascades-decline unaccepted sub-drafts on parent merge", async () => {
+    await backend.readDoc(DOC_A);
+    const [parentId] = await backend.fork(DOC_A, 1);
+    const [subA, subB] = await backend.fork(
+      DOC_A,
+      2,
+      undefined,
+      undefined,
+      parentId,
+    );
+    await backend.writeDoc(DOC_A, parentId, "# a v2\nbody\n");
+    await backend.propose(parentId);
+
+    await backend.merge(parentId);
+
+    const drafts = await backend.listDrafts();
+    expect(drafts.find((d) => d.draft_id === subA)!.state).toBe("declined");
+    expect(drafts.find((d) => d.draft_id === subB)!.state).toBe("declined");
+  });
+});
+
+describe("POST /api/ui/drafts/[id]/accept (Phase I)", () => {
+  let root: string;
+  let backend: StubBackend;
+  const DOC = "workspaces/ws/docs/a.md";
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
+    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "# a\nbody\n",
+    );
+    backend = new StubBackend(root);
+    setBackend(backend);
+  });
+
+  afterEach(async () => {
+    setBackend(null);
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("returns 200 with {commit, versions} on success", async () => {
+    await backend.readDoc(DOC);
+    const [draftId] = await backend.fork(DOC, 1);
+    await backend.writeDoc(DOC, draftId, "# a v2\nbody\n");
+
+    const req = new Request(
+      `http://localhost/api/ui/drafts/${draftId}/accept`,
+      { method: "POST" },
+    );
+    const res = await acceptPOST(req, {
+      params: Promise.resolve({ id: draftId }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      ok: boolean;
+      commit: string;
+      versions: { path: string; from: number; to: number }[];
+    };
+    expect(body.ok).toBe(true);
+    expect(body.commit).toMatch(/^c-/);
+    expect(body.versions).toEqual([{ path: DOC, from: 1, to: 2 }]);
+  });
+
+  it("returns 409 with {conflicts} when main has advanced past base_version", async () => {
+    await backend.readDoc(DOC);
+    const [draftId] = await backend.fork(DOC, 1);
+    await backend.writeDoc(DOC, draftId, "# a v2\nbody\n");
+
+    const [other] = await backend.fork(DOC, 1);
+    await backend.writeDoc(DOC, other, "# a other\nbody\n");
+    await backend.propose(other);
+    await backend.merge(other);
+
+    const req = new Request(
+      `http://localhost/api/ui/drafts/${draftId}/accept`,
+      { method: "POST" },
+    );
+    const res = await acceptPOST(req, {
+      params: Promise.resolve({ id: draftId }),
+    });
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as {
+      code: string;
+      conflicts: { path: string; base_version: number; main_version: number }[];
+    };
+    expect(body.code).toBe("merge_conflict");
+    expect(body.conflicts).toEqual([
+      { path: DOC, base_version: 1, main_version: 2 },
+    ]);
   });
 });

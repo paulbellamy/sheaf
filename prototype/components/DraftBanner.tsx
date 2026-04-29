@@ -13,17 +13,26 @@ type Props = {
 };
 
 const COPIED_VISIBLE_MS = 1500;
+const SUCCESS_VISIBLE_MS = 1800;
+
+type AcceptVersion = { path: string; from: number; to: number };
+
+type ConflictDetail = {
+  path: string;
+  base_version: number;
+  main_version: number;
+};
 
 /**
- * Phase D: top banner shown when the editor's ref is a draft id.
+ * Phase D + I: top banner shown when the editor's ref is a draft id.
  *
- * Server-derived `open_count` gates the Accept button. Discard +
- * Accept go through confirm modals because both are destructive
- * (Discard deletes the draft; Accept lands prose on main).
+ * Server-derived `open_count` gates the Accept button. The Accept modal
+ * lists every touched path's predicted vN to vN+1 bump pre-click; on
+ * success, the banner briefly shows the per-path actual transitions
+ * (Phase I `versions` payload) before the parent navigates to main.
  *
- * Display falls back to the bare draft id if the server hasn't yet
- * populated `display_name` on legacy drafts (created via the bare
- * MCP `Fork` path before Phase C).
+ * Conflict (HTTP 409): the merge is atomic, so nothing landed. The banner
+ * stays in draft mode and surfaces the conflicting paths.
  */
 export function DraftBanner({
   docPath,
@@ -36,12 +45,17 @@ export function DraftBanner({
   const [copied, setCopied] = useState(false);
   const [confirm, setConfirm] = useState<"discard" | "accept" | null>(null);
   const [busy, setBusy] = useState(false);
+  const [success, setSuccess] = useState<AcceptVersion[] | null>(null);
+  const [conflicts, setConflicts] = useState<ConflictDetail[] | null>(null);
   const copiedTimerRef = useRef<number | null>(null);
+  const successTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     return () => {
       if (copiedTimerRef.current !== null)
         window.clearTimeout(copiedTimerRef.current);
+      if (successTimerRef.current !== null)
+        window.clearTimeout(successTimerRef.current);
     };
   }, []);
 
@@ -87,20 +101,35 @@ export function DraftBanner({
 
   const doAccept = useCallback(async () => {
     setBusy(true);
+    setConflicts(null);
     try {
       const r = await fetch(
         `/api/ui/drafts/${encodeURIComponent(docRef)}/accept`,
         { method: "POST" },
       );
+      const body = (await r.json().catch(() => ({}))) as {
+        error?: string;
+        versions?: AcceptVersion[];
+        conflicts?: ConflictDetail[];
+      };
+      if (r.status === 409 && body.conflicts && body.conflicts.length > 0) {
+        setConflicts(body.conflicts);
+        setConfirm(null);
+        return;
+      }
       if (!r.ok) {
-        const body = (await r.json().catch(() => ({}))) as {
-          error?: string;
-        };
         onError?.(body.error ?? `accept failed (HTTP ${r.status})`);
         return;
       }
       setConfirm(null);
-      onAccepted?.();
+      const versions = body.versions ?? [];
+      setSuccess(versions);
+      if (successTimerRef.current !== null)
+        window.clearTimeout(successTimerRef.current);
+      successTimerRef.current = window.setTimeout(() => {
+        setSuccess(null);
+        onAccepted?.();
+      }, SUCCESS_VISIBLE_MS);
     } catch (e) {
       onError?.(e instanceof Error ? e.message : String(e));
     } finally {
@@ -113,12 +142,31 @@ export function DraftBanner({
   const displayName = data?.display_name ?? docRef;
   const baseVersion = data?.base_version;
   const openCount = data?.open_count ?? 0;
-  const touchesCount = data?.touches.length ?? 0;
-  const acceptDisabled = busy || isLoading || openCount > 0 || !data;
+  const touches = data?.touches ?? [];
+  const touchesCount = touches.length;
+  const acceptDisabled =
+    busy || isLoading || openCount > 0 || !data || success !== null;
   const acceptLabel =
     baseVersion !== undefined
       ? `Accept as v${baseVersion + 1}`
       : "Accept";
+
+  if (success) {
+    return (
+      <div className="draft-banner draft-banner-success" role="status">
+        <div className="draft-banner-left">
+          <span className="draft-banner-name">accepted</span>
+          {success.length > 0 ? (
+            <span className="draft-banner-success-list">
+              {success
+                .map((v) => `${v.path}: v${v.from} → v${v.to}`)
+                .join(" · ")}
+            </span>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="draft-banner" role="status">
@@ -135,7 +183,7 @@ export function DraftBanner({
         {touchesCount > 1 ? (
           <span
             className="draft-banner-chip"
-            title={data?.touches.join("\n")}
+            title={touches.join("\n")}
           >
             cross-cutting · {touchesCount} docs
           </span>
@@ -177,6 +225,12 @@ export function DraftBanner({
           {acceptLabel}
         </button>
       </div>
+      {conflicts ? (
+        <ConflictBanner
+          conflicts={conflicts}
+          onDismiss={() => setConflicts(null)}
+        />
+      ) : null}
       {confirm === "discard" ? (
         <ConfirmModal
           title="discard draft?"
@@ -188,14 +242,10 @@ export function DraftBanner({
         />
       ) : null}
       {confirm === "accept" ? (
-        <ConfirmModal
+        <AcceptConfirmModal
           title={acceptLabel}
-          body={
-            data
-              ? `bumps ${touchesSummary(data.touches)} from v${data.base_version} to v${data.base_version + 1}.`
-              : ""
-          }
-          confirmLabel="accept"
+          touches={touches}
+          baseVersion={baseVersion}
           busy={busy}
           onCancel={() => setConfirm(null)}
           onConfirm={() => void doAccept()}
@@ -205,10 +255,104 @@ export function DraftBanner({
   );
 }
 
-function touchesSummary(touches: string[]): string {
-  if (touches.length === 0) return "this draft";
-  if (touches.length === 1) return touches[0];
-  return `${touches.length} docs`;
+function AcceptConfirmModal({
+  title,
+  touches,
+  baseVersion,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  title: string;
+  touches: string[];
+  baseVersion: number | undefined;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="draft-banner-modal-overlay" role="dialog" aria-modal="true">
+      <div className="draft-banner-modal">
+        <div className="draft-banner-modal-title">{title}</div>
+        <div className="draft-banner-modal-body">
+          {touches.length === 0 ? (
+            <span>nothing to bump.</span>
+          ) : (
+            <>
+              <div>
+                bumps {touches.length} doc{touches.length === 1 ? "" : "s"} to
+                its next version:
+              </div>
+              <ul className="draft-banner-bump-list">
+                {touches.map((p) => (
+                  <li key={p}>
+                    <code>{p}</code>
+                    {baseVersion !== undefined ? (
+                      <>
+                        {" "}
+                        v{baseVersion} → v{baseVersion + 1}
+                      </>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+        <div className="draft-banner-modal-actions">
+          <button
+            type="button"
+            className="review-cancel"
+            onClick={onCancel}
+            disabled={busy}
+          >
+            cancel
+          </button>
+          <button
+            type="button"
+            className="review-submit"
+            onClick={onConfirm}
+            disabled={busy}
+          >
+            {busy ? "…" : "accept"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ConflictBanner({
+  conflicts,
+  onDismiss,
+}: {
+  conflicts: ConflictDetail[];
+  onDismiss: () => void;
+}) {
+  return (
+    <div className="draft-banner-conflict" role="alert">
+      <div className="draft-banner-conflict-title">
+        accept blocked: {conflicts.length} conflict
+        {conflicts.length === 1 ? "" : "s"}
+      </div>
+      <ul className="draft-banner-conflict-list">
+        {conflicts.map((c) => (
+          <li key={c.path}>
+            <code>{c.path}</code>: main is at v{c.main_version}, draft based
+            on v{c.base_version}
+          </li>
+        ))}
+      </ul>
+      <button
+        type="button"
+        className="draft-banner-btn"
+        onClick={onDismiss}
+        aria-label="dismiss conflict"
+      >
+        dismiss
+      </button>
+    </div>
+  );
 }
 
 function ConfirmModal({

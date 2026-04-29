@@ -1261,6 +1261,65 @@ body {
   cursor: pointer;
 }
 
+.draft-banner-bump-list {
+  margin: 0.5rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.82rem;
+  color: var(--ink);
+}
+
+.draft-banner-bump-list code {
+  font-size: 0.78rem;
+  background: var(--card, #f6f3e6);
+  padding: 0 0.25rem;
+  border-radius: 2px;
+}
+
+.draft-banner-success {
+  background: #e6f3ec;
+  border-color: #b9d8c4;
+}
+
+.draft-banner-success-list {
+  font-size: 0.82rem;
+  color: var(--ink);
+}
+
+.draft-banner-conflict {
+  flex-basis: 100%;
+  margin-top: 0.6rem;
+  padding: 0.6rem 0.8rem;
+  background: #fbeded;
+  border: 1px solid #d6a3a3;
+  border-radius: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.draft-banner-conflict-title {
+  font-weight: 500;
+  font-size: 0.85rem;
+  color: var(--ink);
+}
+
+.draft-banner-conflict-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.82rem;
+}
+
+.draft-banner-conflict-list code {
+  font-size: 0.78rem;
+  background: var(--paper);
+  padding: 0 0.25rem;
+  border-radius: 2px;
+}
+
+.draft-banner-conflict .draft-banner-btn {
+  align-self: flex-start;
+}
+
 /* ------------------------------------------------------------------ */
 /* selection bubble                                                    */
 /* ------------------------------------------------------------------ */

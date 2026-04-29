@@ -24,7 +24,7 @@ import {
   type WriteResult,
   type Workspace,
 } from "./index";
-import { McpError, err } from "../errors";
+import { McpError, err, type MergeConflictDetail } from "../errors";
 import {
   DRAFT_ID_RE,
   PLUGIN_PATH_PREFIX,
@@ -917,9 +917,12 @@ export class StubBackend implements Backend {
     });
   }
 
-  merge(draftId: DraftId): Promise<{ commit: string }> {
+  async merge(draftId: DraftId): Promise<{
+    commit: string;
+    versions: { path: DocPath; from: number; to: number }[];
+  }> {
     assertDraftId(draftId);
-    return this.withLock(async () => {
+    const result = await this.withLock(async () => {
       const meta = await this.loadDraftMeta(draftId);
       // Merge must go through Propose first. Otherwise `Fork` + `Write` +
       // `Merge` lands arbitrary content on main without passing any review
@@ -927,20 +930,65 @@ export class StubBackend implements Backend {
       if (meta.state !== "submitted" && meta.state !== "accepted") {
         throw err.draftNotSubmitted(draftId, meta.state);
       }
+      const baseVersion = meta.base_version ?? 1;
+      const touches = meta.touches ?? [meta.base_path];
       const draftRoot = path.join(this.root, ".drafts", draftId);
+
+      // Plan a copy for every touched path that has an override on disk.
+      // Collect plans first so a conflict on any path aborts the whole batch
+      // before any write to main.
+      const plans: { rel: DocPath; src: string; dest: string }[] = [];
+      const seen = new Set<DocPath>();
+      const considerPath = async (rel: DocPath): Promise<void> => {
+        if (seen.has(rel)) return;
+        seen.add(rel);
+        if (!rel.startsWith("workspaces/") || !rel.endsWith(".md")) return;
+        assertWorkspacePath(rel);
+        const src = this.absDraft(draftId, rel);
+        try {
+          const stat = await fs.lstat(src);
+          if (!stat.isFile()) return;
+        } catch {
+          return;
+        }
+        plans.push({ rel, src, dest: safeJoin(this.root, rel) });
+      };
+      for (const rel of touches) await considerPath(rel);
+      // Cover legacy drafts whose `touches` may be missing override files
+      // landed under the draft tree (defensive against drift).
       const draftFiles = await walk(draftRoot);
-      const mergedPaths: DocPath[] = [];
       for (const f of draftFiles) {
         const rel = path.relative(draftRoot, f).replace(/\\/g, "/");
-        if (!rel.startsWith("workspaces/")) continue;
-        // Re-validate before writing into main: the draft tree is a trust
-        // boundary and a stray symlink or crafted rel path must never escape.
-        assertWorkspacePath(rel);
-        const dest = safeJoin(this.root, rel);
-        await this.ensureDir(path.dirname(dest));
-        await copyFileNoFollow(f, dest);
-        if (rel.endsWith(".md")) mergedPaths.push(rel);
+        await considerPath(rel);
       }
+
+      // Conflict check: any planned path whose main counter has advanced
+      // past the draft's base_version is treated as overlapping. Stub-grade
+      // heuristic per the plan; production will use real yjs op metadata.
+      const conflicts: MergeConflictDetail[] = [];
+      for (const plan of plans) {
+        const mainCounter = this.versionCounters.get(plan.rel);
+        if (mainCounter !== undefined && mainCounter > baseVersion) {
+          conflicts.push({
+            path: plan.rel,
+            base_version: baseVersion,
+            main_version: mainCounter,
+          });
+        }
+      }
+      if (conflicts.length > 0) throw err.mergeConflict(conflicts);
+
+      // No conflicts: stage every planned write, then bump counters.
+      const versions: { path: DocPath; from: number; to: number }[] = [];
+      for (const plan of plans) {
+        await this.ensureDir(path.dirname(plan.dest));
+        await copyFileNoFollow(plan.src, plan.dest);
+        const from = this.versionCounters.get(plan.rel) ?? baseVersion;
+        const to = from + 1;
+        this.versionCounters.set(plan.rel, to);
+        versions.push({ path: plan.rel, from, to });
+      }
+
       meta.state = "accepted";
       await this.saveDraftMeta(meta);
       this.emit({
@@ -954,12 +1002,20 @@ export class StubBackend implements Backend {
       this.emit({
         kind: "draft_merged",
         draft_id: draftId,
-        target_paths: mergedPaths,
+        target_paths: versions.map((v) => v.path),
+        versions,
       });
       return {
         commit: `c-${sha(`merge:${draftId}:${Date.now()}`).slice(0, 12)}`,
+        versions,
       };
     });
+    // Cascade-decline any unaccepted sub-drafts after releasing the merge
+    // lock — `_cascadeDeclineSubDrafts` calls `declineDraft` which itself
+    // takes the lock, so this must run outside `withLock` to avoid a
+    // self-chained deadlock (same pattern as `forkAndAttachThreads`).
+    await this._cascadeDeclineSubDrafts(draftId);
+    return result;
   }
 
   declineDraft(draftId: DraftId): Promise<void> {

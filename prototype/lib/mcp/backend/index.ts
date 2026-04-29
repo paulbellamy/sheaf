@@ -263,7 +263,23 @@ export interface Backend {
     name?: string,
   ): Promise<{ diff_url: string }>;
 
-  merge(draftId: DraftId): Promise<{ commit: string }>;
+  /**
+   * Atomic accept of every path in the draft's `touches`. On success, every
+   * touched path's `version_counter` is bumped by one and a single
+   * `draft_merged` event is emitted carrying the per-path `{from, to}`
+   * versions. Returns the resulting `commit` (pseudo id in the stub) plus
+   * the per-path version transitions.
+   *
+   * Atomic on conflict: if any touched path has overlapping changes (Phase I
+   * stub heuristic: main's `version_counter[path]` has advanced past the
+   * draft's `base_version`), the call throws a `merge_conflict` SheafError
+   * with per-path details and *nothing* is committed — no main writes, no
+   * version bumps, no events.
+   */
+  merge(draftId: DraftId): Promise<{
+    commit: string;
+    versions: { path: DocPath; from: number; to: number }[];
+  }>;
 
   declineDraft(draftId: DraftId): Promise<void>;
 
@@ -369,6 +385,17 @@ export const backendEventSchema = z.discriminatedUnion("kind", [
     draft_id: z.string(),
     /** Paths merged into main. */
     target_paths: z.array(z.string()),
+    /**
+     * Per-path version transitions. Phase I: `from` is main's pre-merge
+     * counter, `to` is `from + 1`. Same length and order as `target_paths`.
+     */
+    versions: z.array(
+      z.object({
+        path: z.string(),
+        from: z.number(),
+        to: z.number(),
+      }),
+    ),
   }),
   z.object({
     kind: z.literal("thread_changed"),
