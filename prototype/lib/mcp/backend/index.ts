@@ -119,6 +119,13 @@ export type DraftSummary = {
    * resolved decision on rejected-alternatives storage.
    */
   parent_draft_id?: DraftId;
+  /**
+   * Phase J: how many `vN` bumps `base_path` has accumulated on main since
+   * this draft was forked. Computed at read time from
+   * `version_counter[base_path] - base_version`, clamped to ≥ 0. Surfaced as
+   * the "main has advanced N versions" pill in the draft-mode banner.
+   */
+  versions_behind: number;
 };
 
 export type ThreadAnchor = {
@@ -332,6 +339,17 @@ export interface Backend {
       author?: string;
     },
   ): Promise<void>;
+
+  /**
+   * Phase J: reopen an accepted (or archived) thread. Flips status back to
+   * `open` and appends a system-style message carrying a `current` leaf — a
+   * snapshot of the current draft prose for the thread's primary target. The
+   * reviewer can then attach further options via `attachDraftPayload`.
+   *
+   * Throws `invalid_payload` if the thread is already open (no-op signal) or
+   * if it is `declined` (declined threads cannot be reopened).
+   */
+  reopenThread(id: ThreadId): Promise<void>;
 
   /**
    * Subscribe to mutation events. Returns an unsubscribe function.

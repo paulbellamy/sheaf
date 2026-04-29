@@ -930,6 +930,16 @@ export class StubBackend implements Backend {
       if (meta.state !== "submitted" && meta.state !== "accepted") {
         throw err.draftNotSubmitted(draftId, meta.state);
       }
+      // Phase J: server-side Accept gating. The UI button is disabled while
+      // any thread on the draft is open, but agents (and direct API callers)
+      // can bypass that — refuse the merge unless every thread is terminal.
+      // `accepted` is idempotent above; skip the gate so re-accepts don't
+      // require re-resolving (the threads are already terminal anyway).
+      if (meta.state === "submitted") {
+        const threads = await this.listThreads({ ref: draftId });
+        const openCount = threads.filter((t) => t.status === "open").length;
+        if (openCount > 0) throw err.acceptBlocked(openCount);
+      }
       const baseVersion = meta.base_version ?? 1;
       const touches = meta.touches ?? [meta.base_path];
       const draftRoot = path.join(this.root, ".drafts", draftId);
@@ -1076,6 +1086,8 @@ export class StubBackend implements Backend {
         if (p && meta.base_path !== p) continue;
         const touches = meta.touches ?? [meta.base_path];
         const baseVersion = meta.base_version ?? 1;
+        const mainCounter = this.versionCounters.get(meta.base_path) ?? baseVersion;
+        const versionsBehind = Math.max(0, mainCounter - baseVersion);
         out.push({
           draft_id: meta.draft_id,
           base_path: meta.base_path,
@@ -1089,6 +1101,7 @@ export class StubBackend implements Backend {
           touches,
           base_version: baseVersion,
           parent_draft_id: meta.parent_draft_id,
+          versions_behind: versionsBehind,
         });
       } catch {
         continue;
@@ -1298,6 +1311,54 @@ export class StubBackend implements Backend {
       this.emit({
         kind: "thread_changed",
         thread_id: id,
+        target_paths: thread.targets.map((t) => t.path),
+      });
+    });
+  }
+
+  reopenThread(threadId: ThreadId): Promise<void> {
+    return this.withLock(async () => {
+      const thread = await this.loadThread(threadId);
+      if (thread.status === "open") {
+        throw err.invalidPayload(
+          `thread ${threadId} is already open`,
+        );
+      }
+      if (thread.status === "declined") {
+        throw err.invalidPayload(
+          `thread ${threadId} is declined; declined threads cannot be reopened`,
+        );
+      }
+      // Snapshot the current draft prose for the thread's primary target so
+      // reviewers can compare past options against current state. v0 uses
+      // target[0] only; multi-target snapshots are deferred polish.
+      const target = thread.targets[0];
+      let currentMd = target.anchor.anchored_text;
+      if (thread.draft_id) {
+        try {
+          const view = await this.readDoc(target.path, thread.draft_id);
+          const decoded = JSON.parse(
+            Buffer.from(target.anchor.rel_pos, "base64").toString("utf8"),
+          ) as { from: number; to: number };
+          const from = Math.max(0, Math.min(decoded.from, view.md.length));
+          const to = Math.max(from, Math.min(decoded.to, view.md.length));
+          currentMd = view.md.slice(from, to);
+        } catch {
+          // Fall back to the anchored text if rel_pos drifted; the leaf is
+          // still useful as the historical snapshot of what reviewers saw.
+        }
+      }
+      thread.status = "open";
+      thread.messages.push({
+        author: "system",
+        ts: Date.now(),
+        body: "reopened",
+        draft_options: [{ name: "current", new_md: currentMd }],
+      });
+      await this.saveThread(thread);
+      this.emit({
+        kind: "thread_changed",
+        thread_id: threadId,
         target_paths: thread.targets.map((t) => t.path),
       });
     });

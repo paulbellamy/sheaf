@@ -23,6 +23,8 @@ type ConflictDetail = {
   main_version: number;
 };
 
+type AcceptBlocked = { open_count: number };
+
 /**
  * Phase D + I: top banner shown when the editor's ref is a draft id.
  *
@@ -47,6 +49,7 @@ export function DraftBanner({
   const [busy, setBusy] = useState(false);
   const [success, setSuccess] = useState<AcceptVersion[] | null>(null);
   const [conflicts, setConflicts] = useState<ConflictDetail[] | null>(null);
+  const [blocked, setBlocked] = useState<AcceptBlocked | null>(null);
   const copiedTimerRef = useRef<number | null>(null);
   const successTimerRef = useRef<number | null>(null);
 
@@ -102,6 +105,7 @@ export function DraftBanner({
   const doAccept = useCallback(async () => {
     setBusy(true);
     setConflicts(null);
+    setBlocked(null);
     try {
       const r = await fetch(
         `/api/ui/drafts/${encodeURIComponent(docRef)}/accept`,
@@ -111,9 +115,20 @@ export function DraftBanner({
         error?: string;
         versions?: AcceptVersion[];
         conflicts?: ConflictDetail[];
+        open_count?: number;
+        code?: string;
       };
       if (r.status === 409 && body.conflicts && body.conflicts.length > 0) {
         setConflicts(body.conflicts);
+        setConfirm(null);
+        return;
+      }
+      if (
+        r.status === 422 &&
+        body.code === "accept_blocked" &&
+        typeof body.open_count === "number"
+      ) {
+        setBlocked({ open_count: body.open_count });
         setConfirm(null);
         return;
       }
@@ -144,6 +159,7 @@ export function DraftBanner({
   const openCount = data?.open_count ?? 0;
   const touches = data?.touches ?? [];
   const touchesCount = touches.length;
+  const versionsBehind = data?.versions_behind ?? 0;
   const acceptDisabled =
     busy || isLoading || openCount > 0 || !data || success !== null;
   const acceptLabel =
@@ -188,6 +204,16 @@ export function DraftBanner({
             cross-cutting · {touchesCount} docs
           </span>
         ) : null}
+        {versionsBehind > 0 ? (
+          <span
+            className="draft-banner-chip draft-banner-stale"
+            role="status"
+            title="main has advanced since this draft was forked"
+          >
+            main has advanced {versionsBehind} version
+            {versionsBehind === 1 ? "" : "s"} since this draft started
+          </span>
+        ) : null}
       </div>
       <div className="draft-banner-right">
         <button
@@ -230,6 +256,22 @@ export function DraftBanner({
           conflicts={conflicts}
           onDismiss={() => setConflicts(null)}
         />
+      ) : null}
+      {blocked ? (
+        <div className="draft-banner-conflict" role="alert">
+          <div className="draft-banner-conflict-title">
+            {blocked.open_count} thread
+            {blocked.open_count === 1 ? "" : "s"} still open · cannot accept
+          </div>
+          <button
+            type="button"
+            className="draft-banner-btn"
+            onClick={() => setBlocked(null)}
+            aria-label="dismiss"
+          >
+            dismiss
+          </button>
+        </div>
       ) : null}
       {confirm === "discard" ? (
         <ConfirmModal

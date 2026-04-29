@@ -16,6 +16,12 @@ type Props = {
   onDecline: (threadId: string) => void;
   onToggleCollapsed: (threadId: string, collapsed: boolean) => void;
   onSetAllCollapsed: (collapsed: boolean) => void;
+  onRemix?: (threadId: string) => Promise<void>;
+  onAddOption?: (
+    threadId: string,
+    name: string,
+    newMd: string,
+  ) => Promise<void>;
 };
 
 const CARD_GAP = 12;
@@ -32,6 +38,8 @@ export function MarginRail({
   onDecline,
   onToggleCollapsed,
   onSetAllCollapsed,
+  onRemix,
+  onAddOption,
 }: Props) {
   const railRef = useRef<HTMLDivElement | null>(null);
   const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -124,6 +132,12 @@ export function MarginRail({
             onAccept={(optionIndex) => onAccept(t.id, optionIndex)}
             onDecline={() => onDecline(t.id)}
             onToggleCollapsed={() => onToggleCollapsed(t.id, !t.collapsed)}
+            onRemix={onRemix ? () => onRemix(t.id) : undefined}
+            onAddOption={
+              onAddOption
+                ? (name, newMd) => onAddOption(t.id, name, newMd)
+                : undefined
+            }
           />
         </div>
       ))}

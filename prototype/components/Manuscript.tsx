@@ -447,6 +447,57 @@ export function Manuscript({
     [],
   );
 
+  const remixThread = useCallback(
+    async (threadId: string): Promise<void> => {
+      try {
+        const r = await fetch(
+          `/api/ui/threads/${encodeURIComponent(threadId)}/reopen`,
+          { method: "POST" },
+        );
+        if (!r.ok) {
+          const body = (await r.json().catch(() => ({}))) as { error?: string };
+          setSubmitError(body.error ?? `remix failed (HTTP ${r.status})`);
+          throw new Error(body.error ?? `HTTP ${r.status}`);
+        }
+      } catch (e) {
+        setSubmitError(e instanceof Error ? e.message : String(e));
+        throw e;
+      }
+    },
+    [],
+  );
+
+  const addOption = useCallback(
+    async (threadId: string, name: string, newMd: string): Promise<void> => {
+      try {
+        // To append a leaf "without disturbing prior leaves" we merge with
+        // whatever the thread's `draftOptions` already exposes and resubmit
+        // the union. The local UI state mirrors the server's latest options
+        // message, so reading from it avoids a second fetch.
+        const t = threads.find((x) => x.id === threadId);
+        const existing = t?.draftOptions ?? [];
+        const merged = [...existing, { name, new_md: newMd }];
+        const r = await fetch(
+          `/api/ui/threads/${encodeURIComponent(threadId)}/payload`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ draft_options: merged }),
+          },
+        );
+        if (!r.ok) {
+          const body = (await r.json().catch(() => ({}))) as { error?: string };
+          setSubmitError(body.error ?? `add option failed (HTTP ${r.status})`);
+          throw new Error(body.error ?? `HTTP ${r.status}`);
+        }
+      } catch (e) {
+        setSubmitError(e instanceof Error ? e.message : String(e));
+        throw e;
+      }
+    },
+    [threads],
+  );
+
   const setThreadCollapsed = useCallback(
     (threadId: string, collapsed: boolean) => {
       setThreads((prev) =>
@@ -579,6 +630,8 @@ export function Manuscript({
             onDecline={declineThread}
             onToggleCollapsed={setThreadCollapsed}
             onSetAllCollapsed={setAllCollapsed}
+            onRemix={remixThread}
+            onAddOption={addOption}
           />
         ) : null}
       </div>

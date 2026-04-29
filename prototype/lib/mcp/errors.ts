@@ -12,6 +12,7 @@ export type SheafErrorCode =
   | "draft_not_submitted"
   | "draft_already_submitted"
   | "merge_conflict"
+  | "accept_blocked"
   | "anchor_orphaned"
   | "grep_timeout"
   | "payload_too_large";
@@ -37,16 +38,23 @@ export class SheafError extends Error {
    * render a per-path conflict banner without re-querying.
    */
   conflicts?: MergeConflictDetail[];
+  /**
+   * Phase J: populated only on `accept_blocked`. Number of open threads on
+   * the draft at the moment Accept was attempted, so callers can render
+   * `<N> threads still open · cannot accept` without re-querying.
+   */
+  open_count?: number;
 
   constructor(
     code: SheafErrorCode,
     message: string,
-    extras?: { conflicts?: MergeConflictDetail[] },
+    extras?: { conflicts?: MergeConflictDetail[]; open_count?: number },
   ) {
     super(message);
     this.name = "SheafError";
     this.code = code;
     if (extras?.conflicts) this.conflicts = extras.conflicts;
+    if (extras?.open_count !== undefined) this.open_count = extras.open_count;
   }
 }
 
@@ -106,6 +114,12 @@ export const err = {
     new SheafError(
       "draft_already_submitted",
       `draft ${id} is already submitted`,
+    ),
+  acceptBlocked: (openCount: number): SheafError =>
+    new SheafError(
+      "accept_blocked",
+      `accept blocked: ${openCount} open thread${openCount === 1 ? "" : "s"} on the draft; resolve before accepting`,
+      { open_count: openCount },
     ),
   mergeConflict: (
     conflicts: MergeConflictDetail[] | string,
@@ -169,6 +183,8 @@ export function statusForCode(code: SheafErrorCode): number {
     case "merge_conflict":
     case "anchor_orphaned":
       return 409;
+    case "accept_blocked":
+      return 422;
     case "grep_timeout":
       return 504;
     default: {
@@ -188,6 +204,7 @@ export function respondError(e: unknown): Response {
   if (e instanceof SheafError) {
     const body: Record<string, unknown> = { error: e.message, code: e.code };
     if (e.conflicts) body.conflicts = e.conflicts;
+    if (e.open_count !== undefined) body.open_count = e.open_count;
     return Response.json(body, { status: statusForCode(e.code) });
   }
   if (e instanceof Error) {

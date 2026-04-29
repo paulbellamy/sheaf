@@ -12,6 +12,7 @@ import { POST as draftsPOST } from "../../../app/api/ui/drafts/route";
 import { GET as draftIdGET } from "../../../app/api/ui/drafts/[id]/route";
 import { POST as acceptPOST } from "../../../app/api/ui/drafts/[id]/accept/route";
 import { POST as payloadPOST } from "../../../app/api/ui/threads/[id]/payload/route";
+import { POST as reopenPOST } from "../../../app/api/ui/threads/[id]/reopen/route";
 import { setBackend } from "../backend/factory";
 import type { BackendEvent } from "../backend";
 
@@ -1305,5 +1306,270 @@ describe("POST /api/ui/drafts/[id]/accept (Phase I)", () => {
     expect(body.conflicts).toEqual([
       { path: DOC, base_version: 1, main_version: 2 },
     ]);
+  });
+});
+
+describe("backend versions_behind on DraftSummary (Phase J)", () => {
+  let root: string;
+  let backend: StubBackend;
+  const DOC = "workspaces/ws/docs/a.md";
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
+    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "# a\nbody\n",
+    );
+    backend = new StubBackend(root);
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("is 0 for a fresh draft pinned to current main", async () => {
+    await backend.readDoc(DOC);
+    const [draftId] = await backend.fork(DOC, 1);
+    const drafts = await backend.listDrafts();
+    expect(drafts.find((d) => d.draft_id === draftId)!.versions_behind).toBe(
+      0,
+    );
+  });
+
+  it("advances when a sibling draft accepts to main", async () => {
+    await backend.readDoc(DOC);
+    const [draftId] = await backend.fork(DOC, 1);
+
+    const [other] = await backend.fork(DOC, 1);
+    await backend.writeDoc(DOC, other, "# a v2\nbody\n");
+    await backend.propose(other);
+    await backend.merge(other);
+
+    const drafts = await backend.listDrafts();
+    expect(drafts.find((d) => d.draft_id === draftId)!.versions_behind).toBe(
+      1,
+    );
+  });
+
+  it("clamps to 0 when the main counter has not advanced", async () => {
+    const [draftId] = await backend.fork(DOC, 1);
+    // No reads on main, no merges. main counter is unset; versions_behind
+    // must not go negative.
+    const drafts = await backend.listDrafts();
+    expect(drafts.find((d) => d.draft_id === draftId)!.versions_behind).toBe(
+      0,
+    );
+  });
+});
+
+describe("backend.reopenThread (Phase J)", () => {
+  let root: string;
+  let backend: StubBackend;
+  const DOC = "workspaces/ws/docs/a.md";
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
+    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "# title\n\nbody one\n\nbody two\n",
+    );
+    backend = new StubBackend(root);
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("flips an accepted thread to open and appends a `current` leaf", async () => {
+    const { draft_id } = await backend.forkAndAttachThreads({
+      base_path: DOC,
+      base_version: 1,
+      name: "v2",
+      initial_threads: [
+        {
+          targets: [{ path: DOC, char_range: { from: 9, to: 17 } }],
+          message: "tighten",
+        },
+      ],
+    });
+    const [t] = await backend.listThreads({ ref: draft_id });
+    await backend.resolveThread(t.id);
+
+    const events: BackendEvent[] = [];
+    backend.subscribe((e) => events.push(e), { role: "ui" });
+    events.length = 0;
+
+    await backend.reopenThread(t.id);
+
+    const after = await backend.readThread(t.id);
+    expect(after.status).toBe("open");
+    const last = after.messages[after.messages.length - 1];
+    expect(last.author).toBe("system");
+    expect(last.draft_options).toBeDefined();
+    expect(last.draft_options).toHaveLength(1);
+    expect(last.draft_options![0].name).toBe("current");
+    expect(typeof last.draft_options![0].new_md).toBe("string");
+
+    const changed = events.filter((e) => e.kind === "thread_changed");
+    expect(changed).toHaveLength(1);
+  });
+
+  it("rejects reopening an already-open thread", async () => {
+    const { draft_id } = await backend.forkAndAttachThreads({
+      base_path: DOC,
+      base_version: 1,
+      name: "v2",
+      initial_threads: [
+        {
+          targets: [{ path: DOC, char_range: { from: 9, to: 17 } }],
+          message: "tighten",
+        },
+      ],
+    });
+    const [t] = await backend.listThreads({ ref: draft_id });
+    await expect(backend.reopenThread(t.id)).rejects.toThrow();
+  });
+});
+
+describe("backend.merge accept_blocked gating (Phase J)", () => {
+  let root: string;
+  let backend: StubBackend;
+  const DOC = "workspaces/ws/docs/a.md";
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
+    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "# a\nbody\n",
+    );
+    backend = new StubBackend(root);
+    setBackend(backend);
+  });
+
+  afterEach(async () => {
+    setBackend(null);
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("merge throws accept_blocked when an open thread remains", async () => {
+    const { draft_id } = await backend.forkAndAttachThreads({
+      base_path: DOC,
+      base_version: 1,
+      name: "v2",
+      initial_threads: [
+        {
+          targets: [{ path: DOC, char_range: { from: 0, to: 3 } }],
+          message: "scope",
+        },
+      ],
+    });
+    await backend.propose(draft_id);
+
+    let thrown: unknown;
+    try {
+      await backend.merge(draft_id);
+    } catch (e) {
+      thrown = e;
+    }
+    expect((thrown as { code?: string }).code).toBe("accept_blocked");
+    expect((thrown as { open_count?: number }).open_count).toBe(1);
+  });
+
+  it("accept route returns 422 with open_count when the gate trips", async () => {
+    const { draft_id } = await backend.forkAndAttachThreads({
+      base_path: DOC,
+      base_version: 1,
+      name: "v2",
+      initial_threads: [
+        {
+          targets: [{ path: DOC, char_range: { from: 0, to: 3 } }],
+          message: "scope",
+        },
+      ],
+    });
+
+    const req = new Request(
+      `http://localhost/api/ui/drafts/${draft_id}/accept`,
+      { method: "POST" },
+    );
+    const res = await acceptPOST(req, {
+      params: Promise.resolve({ id: draft_id }),
+    });
+    expect(res.status).toBe(422);
+    const body = (await res.json()) as {
+      code: string;
+      open_count: number;
+    };
+    expect(body.code).toBe("accept_blocked");
+    expect(body.open_count).toBe(1);
+  });
+});
+
+describe("POST /api/ui/threads/[id]/reopen (Phase J)", () => {
+  let root: string;
+  let backend: StubBackend;
+  const DOC = "workspaces/ws/docs/a.md";
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
+    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "# title\n\nbody one\n",
+    );
+    backend = new StubBackend(root);
+    setBackend(backend);
+  });
+
+  afterEach(async () => {
+    setBackend(null);
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("returns 200 on success", async () => {
+    const { draft_id } = await backend.forkAndAttachThreads({
+      base_path: DOC,
+      base_version: 1,
+      name: "v2",
+      initial_threads: [
+        {
+          targets: [{ path: DOC, char_range: { from: 0, to: 3 } }],
+          message: "scope",
+        },
+      ],
+    });
+    const [t] = await backend.listThreads({ ref: draft_id });
+    await backend.resolveThread(t.id);
+
+    const req = new Request(
+      `http://localhost/api/ui/threads/${t.id}/reopen`,
+      { method: "POST" },
+    );
+    const res = await reopenPOST(req, {
+      params: Promise.resolve({ id: t.id }),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("returns 404 on missing thread", async () => {
+    const id = "thrd_doesnotexist";
+    const req = new Request(`http://localhost/api/ui/threads/${id}/reopen`, {
+      method: "POST",
+    });
+    const res = await reopenPOST(req, {
+      params: Promise.resolve({ id }),
+    });
+    expect(res.status).toBe(404);
   });
 });

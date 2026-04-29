@@ -73,8 +73,10 @@ export function useServerThreads(
         if (!r.ok) return;
         const body = (await r.json()) as { threads: BackendThread[] };
         if (mySeq !== seqRef.current) return;
+        // Phase J: include accepted threads too so the remix action is
+        // reachable. Declined and archived threads stay hidden.
         const server = body.threads
-          .filter((t) => t.status === "open")
+          .filter((t) => t.status === "open" || t.status === "accepted")
           .map(backendThreadToUiThread);
         const serverIds = new Set(server.map((t) => t.id));
         setThreads((prev) => {

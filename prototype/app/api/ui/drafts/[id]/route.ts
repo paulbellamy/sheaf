@@ -37,6 +37,7 @@ export async function GET(_req: Request, ctx: Ctx): Promise<Response> {
       touches: meta.touches,
       open_count,
       state: meta.state,
+      versions_behind: meta.versions_behind,
       meta,
       changes,
     });

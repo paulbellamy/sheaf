@@ -19,6 +19,8 @@ type Props = {
   onAccept: (optionIndex?: number) => void;
   onDecline: () => void;
   onToggleCollapsed: () => void;
+  onRemix?: () => Promise<void>;
+  onAddOption?: (name: string, newMd: string) => Promise<void>;
 };
 
 function Chevron({ collapsed }: { collapsed: boolean }) {
@@ -53,6 +55,8 @@ export function ThreadCard({
   onAccept,
   onDecline,
   onToggleCollapsed,
+  onRemix,
+  onAddOption,
 }: Props) {
   const delText = view?.del?.text ?? "";
   const insText = view?.ins?.text ?? "";
@@ -76,6 +80,43 @@ export function ThreadCard({
       setFocusedOption(0);
     }
   }, [draftOptions.length, focusedOption]);
+
+  const accepted = thread.state === "accepted";
+  const [remixing, setRemixing] = useState(false);
+  const [addingOption, setAddingOption] = useState(false);
+  const [optionName, setOptionName] = useState("");
+  const [optionMd, setOptionMd] = useState("");
+  const [optionBusy, setOptionBusy] = useState(false);
+
+  const handleRemix = async () => {
+    if (!onRemix || remixing) return;
+    setRemixing(true);
+    try {
+      await onRemix();
+    } catch {
+      /* caller surfaces the error */
+    } finally {
+      setRemixing(false);
+    }
+  };
+
+  const submitOption = async () => {
+    if (!onAddOption || optionBusy) return;
+    const name = optionName.trim();
+    const md = optionMd;
+    if (!name || md.length === 0) return;
+    setOptionBusy(true);
+    try {
+      await onAddOption(name, md);
+      setAddingOption(false);
+      setOptionName("");
+      setOptionMd("");
+    } catch {
+      /* caller surfaces the error; keep the form so the user can retry */
+    } finally {
+      setOptionBusy(false);
+    }
+  };
 
   const submitReply = async () => {
     const body = thread.note.trim();
@@ -228,12 +269,78 @@ export function ThreadCard({
                   decline
                 </button>
               </>
+            ) : accepted && onRemix ? (
+              <button
+                className="remix"
+                onClick={handleRemix}
+                disabled={remixing}
+              >
+                {remixing ? "…" : "remix"}
+              </button>
             ) : (
               <button className="decline" onClick={onDecline}>
                 {kind === "redline" ? "discard" : "dismiss"}
               </button>
             )}
+            {submitted && onAddOption && !addingOption ? (
+              <button
+                type="button"
+                className="add-option"
+                onClick={() => setAddingOption(true)}
+              >
+                add option
+              </button>
+            ) : null}
           </div>
+
+          {addingOption && onAddOption ? (
+            <div className="thread-add-option">
+              <input
+                type="text"
+                className="thread-add-option-name"
+                placeholder="option name (e.g. bob's counter)"
+                value={optionName}
+                onChange={(e) => setOptionName(e.target.value)}
+                onMouseDown={(e) => e.stopPropagation()}
+                disabled={optionBusy}
+              />
+              <textarea
+                className="thread-add-option-md"
+                placeholder="proposed new_md for this anchor range"
+                value={optionMd}
+                rows={3}
+                onChange={(e) => setOptionMd(e.target.value)}
+                onMouseDown={(e) => e.stopPropagation()}
+                disabled={optionBusy}
+              />
+              <div className="actions">
+                <button
+                  type="button"
+                  className="accept"
+                  onClick={() => void submitOption()}
+                  disabled={
+                    optionBusy ||
+                    optionName.trim().length === 0 ||
+                    optionMd.length === 0
+                  }
+                >
+                  {optionBusy ? "…" : "submit option"}
+                </button>
+                <button
+                  type="button"
+                  className="decline"
+                  onClick={() => {
+                    setAddingOption(false);
+                    setOptionName("");
+                    setOptionMd("");
+                  }}
+                  disabled={optionBusy}
+                >
+                  cancel
+                </button>
+              </div>
+            </div>
+          ) : null}
         </>
       )}
     </div>

@@ -11,6 +11,7 @@ export type DraftMeta = {
   touches: string[];
   open_count: number;
   state: "open" | "submitted" | "accepted" | "declined";
+  versions_behind: number;
 };
 
 /**
@@ -63,6 +64,7 @@ export function useDraftMeta(docRef: string | undefined): {
         touches: body.touches,
         open_count: body.open_count,
         state: body.state,
+        versions_behind: body.versions_behind ?? 0,
       });
     } catch (e) {
       if (mySeq !== seqRef.current) return;
@@ -86,6 +88,10 @@ export function useDraftMeta(docRef: string | undefined): {
         event.kind === "draft_state" &&
         event.draft_id === docRef
       ) {
+        void load();
+      } else if (event.kind === "draft_merged") {
+        // Another draft just landed on main; recompute `versions_behind`
+        // for this still-open draft.
         void load();
       }
     });
