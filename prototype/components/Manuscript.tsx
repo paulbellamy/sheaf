@@ -631,7 +631,7 @@ export function Manuscript({
             <EditorContent editor={editor} />
           </div>
         </div>
-        {isDraftRef ? (
+        {isDraftRef || pendingThreads.length > 0 ? (
           <MarginRail
             threads={threads}
             activeThreadId={activeThreadId}
