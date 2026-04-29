@@ -1092,6 +1092,130 @@ body {
 }
 
 /* ------------------------------------------------------------------ */
+/* draft mode banner (Phase D)                                         */
+/* ------------------------------------------------------------------ */
+
+.draft-banner {
+  max-width: 1200px;
+  margin: 0 auto 1.4rem;
+  padding: 0.55rem 0.9rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.8rem;
+  background: var(--card, #f6f3e6);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  font-size: 0.85rem;
+  color: var(--ink);
+}
+
+.draft-banner-left {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.draft-banner-name {
+  font-weight: 500;
+}
+
+.draft-banner-sep {
+  color: var(--muted);
+}
+
+.draft-banner-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.draft-banner-btn {
+  font: inherit;
+  font-size: 0.82rem;
+  padding: 0.28rem 0.7rem;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  cursor: pointer;
+  color: var(--ink);
+}
+
+.draft-banner-btn:hover:not(:disabled) {
+  border-color: var(--ink);
+}
+
+.draft-banner-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.draft-banner-accept:not(:disabled) {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+
+.draft-banner-accept:not(:disabled):hover {
+  background: #000;
+}
+
+.draft-banner-copied {
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.draft-banner-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+}
+
+.draft-banner-modal {
+  background: var(--paper);
+  border: 1px solid var(--ink);
+  border-radius: 3px;
+  padding: 1.1rem 1.3rem;
+  min-width: 22rem;
+  max-width: 30rem;
+  box-shadow: 0 12px 36px -12px rgba(0, 0, 0, 0.35);
+}
+
+.draft-banner-modal-title {
+  font-size: 0.95rem;
+  font-weight: 500;
+  margin-bottom: 0.5rem;
+}
+
+.draft-banner-modal-body {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: 1rem;
+  line-height: 1.4;
+}
+
+.draft-banner-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.draft-banner-modal-actions button {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.35rem 0.9rem;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+/* ------------------------------------------------------------------ */
 /* selection bubble                                                    */
 /* ------------------------------------------------------------------ */
 

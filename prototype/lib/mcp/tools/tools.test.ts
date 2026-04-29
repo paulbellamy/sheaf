@@ -9,6 +9,7 @@ import {
   POST as threadsPOST,
 } from "../../../app/api/ui/threads/route";
 import { POST as draftsPOST } from "../../../app/api/ui/drafts/route";
+import { GET as draftIdGET } from "../../../app/api/ui/drafts/[id]/route";
 import { setBackend } from "../backend/factory";
 import type { BackendEvent } from "../backend";
 
@@ -390,5 +391,130 @@ describe("POST /api/ui/drafts (Phase C)", () => {
     });
     const res = await draftsPOST(req);
     expect(res.status).toBe(400);
+  });
+});
+
+describe("GET /api/ui/drafts/[id] (Phase D)", () => {
+  let root: string;
+  let backend: StubBackend;
+  const DOC = "workspaces/ws/docs/a.md";
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
+    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "# title\n\nbody one\n\nbody two\n",
+    );
+    backend = new StubBackend(root);
+    setBackend(backend);
+  });
+
+  afterEach(async () => {
+    setBackend(null);
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("returns the banner shape: display_name, base_version, touches, open_count, state", async () => {
+    const created = await backend.forkAndAttachThreads({
+      base_path: DOC,
+      base_version: 1,
+      name: "v2",
+      author: "alice",
+      initial_threads: [
+        {
+          targets: [{ path: DOC, char_range: { from: 0, to: 7 } }],
+          message: "scope",
+        },
+        {
+          targets: [{ path: DOC, char_range: { from: 9, to: 17 } }],
+          message: "tighten",
+        },
+      ],
+    });
+
+    const req = new Request(
+      `http://localhost/api/ui/drafts/${created.draft_id}`,
+    );
+    const res = await draftIdGET(req, {
+      params: Promise.resolve({ id: created.draft_id }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      draft_id: string;
+      display_name: string;
+      base_version: number;
+      touches: string[];
+      open_count: number;
+      state: string;
+    };
+    expect(body.draft_id).toBe(created.draft_id);
+    expect(body.display_name).toBe(created.display_name);
+    expect(body.base_version).toBe(1);
+    expect(body.touches).toEqual([DOC]);
+    expect(body.open_count).toBe(2);
+    expect(body.state).toBe("open");
+  });
+
+  it("returns 404 for a non-existent draft", async () => {
+    const id = "draft_doesnotexist";
+    const req = new Request(`http://localhost/api/ui/drafts/${id}`);
+    const res = await draftIdGET(req, {
+      params: Promise.resolve({ id }),
+    });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("backend open_count derivation (Phase D)", () => {
+  let root: string;
+  let backend: StubBackend;
+  const DOC = "workspaces/ws/docs/a.md";
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
+    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "# title\n\nbody one\n\nbody two\n",
+    );
+    backend = new StubBackend(root);
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("open_count drops when a thread is resolved", async () => {
+    const { draft_id } = await backend.forkAndAttachThreads({
+      base_path: DOC,
+      base_version: 1,
+      name: "v2",
+      initial_threads: [
+        {
+          targets: [{ path: DOC, char_range: { from: 0, to: 7 } }],
+          message: "a",
+        },
+        {
+          targets: [{ path: DOC, char_range: { from: 9, to: 17 } }],
+          message: "b",
+        },
+      ],
+    });
+
+    const before = await backend.listThreads({ ref: draft_id });
+    const beforeOpen = before.filter((t) => t.status === "open").length;
+    expect(beforeOpen).toBe(2);
+
+    const firstId = before[0].id;
+    await backend.resolveThread(firstId);
+
+    const after = await backend.listThreads({ ref: draft_id });
+    const afterOpen = after.filter((t) => t.status === "open").length;
+    expect(afterOpen).toBe(1);
   });
 });

@@ -36,6 +36,7 @@ import { MarginRail } from "./MarginRail";
 import { HelpModal } from "./HelpModal";
 import { StartDraftPanel } from "./StartDraftPanel";
 import { SelectionBubble } from "./SelectionBubble";
+import { DraftBanner } from "./DraftBanner";
 
 const THREAD_IDLE_MS = 4000;
 
@@ -66,7 +67,6 @@ export function Manuscript({
   const [showReview, setShowReview] = useState(false);
   const [, bumpLayout] = useState(0);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [draftBusy, setDraftBusy] = useState(false);
   const router = useRouter();
   const mdRef = useRef<string>(md ?? "");
   // Keep mdRef in sync with the prop via effect rather than mutating during
@@ -487,28 +487,12 @@ export function Manuscript({
     setShowReview,
   });
 
-  const actOnDraft = useCallback(
-    async (kind: "accept" | "decline") => {
-      if (docRef === "main") return;
-      setDraftBusy(true);
-      try {
-        const r = await fetch(`/api/ui/drafts/${docRef}/${kind}`, {
-          method: "POST",
-        });
-        if (!r.ok) {
-          const body = (await r.json().catch(() => ({}))) as { error?: string };
-          setSubmitError(body.error ?? `${kind} failed`);
-          return;
-        }
-        router.push(docPath ? `/doc/${docPath}` : "/");
-      } catch (e) {
-        setSubmitError(e instanceof Error ? e.message : String(e));
-      } finally {
-        setDraftBusy(false);
-      }
-    },
-    [docRef, docPath, router],
-  );
+  // Phase D: Accept/Discard now live on the draft banner. The banner
+  // calls the same accept/decline routes and navigates back to main on
+  // success; this helper just centralizes the navigation target.
+  const navigateToMain = useCallback(() => {
+    router.push(docPath ? `/doc/${docPath}` : "/");
+  }, [docPath, router]);
 
   const pendingThreads = useMemo(
     () => threads.filter((t) => t.state === "pending"),
@@ -524,11 +508,12 @@ export function Manuscript({
     editor.commands.setTextSelection(to);
   }, [editor, registerNoteThread]);
 
+  const isDraftRef = docRef.startsWith("draft_");
   return (
     <>
       <header className="page-header">
         <span className="title">
-          {docRef !== "main" ? `draft · ${docPath ?? ""}` : "sheaf · redline prototype"}
+          {isDraftRef ? `draft · ${docPath ?? ""}` : "sheaf · redline prototype"}
         </span>
         <span className="page-header-right">
           {versionCounter !== undefined && versionCounter > 0 ? (
@@ -536,26 +521,7 @@ export function Manuscript({
               v{versionCounter}
             </span>
           ) : null}
-          {docRef !== "main" ? (
-            <>
-              <button
-                type="button"
-                className="draft-accept"
-                disabled={draftBusy}
-                onClick={() => void actOnDraft("accept")}
-              >
-                accept draft
-              </button>
-              <button
-                type="button"
-                className="draft-decline"
-                disabled={draftBusy}
-                onClick={() => void actOnDraft("decline")}
-              >
-                decline draft
-              </button>
-            </>
-          ) : (
+          {!isDraftRef ? (
             <>
               edit anywhere — your changes become suggestions. press{" "}
               <button
@@ -568,9 +534,18 @@ export function Manuscript({
               </button>{" "}
               for help.
             </>
-          )}
+          ) : null}
         </span>
       </header>
+      {isDraftRef && docPath ? (
+        <DraftBanner
+          docPath={docPath}
+          docRef={docRef}
+          onDiscarded={navigateToMain}
+          onAccepted={navigateToMain}
+          onError={setSubmitError}
+        />
+      ) : null}
       {submitError ? (
         <div className="submit-error" role="alert">
           {submitError}
@@ -589,7 +564,7 @@ export function Manuscript({
             <EditorContent editor={editor} />
           </div>
         </div>
-        {docRef !== "main" ? (
+        {isDraftRef ? (
           <MarginRail
             threads={threads}
             activeThreadId={activeThreadId}
