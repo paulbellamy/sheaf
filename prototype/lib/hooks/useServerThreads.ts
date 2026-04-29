@@ -33,6 +33,9 @@ export function useServerThreads(
   const seqRef = useRef(0);
   useEffect(() => {
     if (!docPath) return;
+    // Threads only live on drafts. Skip the fetch and SSE subscription on main
+    // so the margin rail stays empty and no listThreads(ref=main) ever fires.
+    if (docRef === "main") return;
     const load = async () => {
       const mySeq = ++seqRef.current;
       try {

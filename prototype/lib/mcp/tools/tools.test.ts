@@ -4,6 +4,10 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { StubBackend } from "../backend/stub";
+import {
+  GET as threadsGET,
+  POST as threadsPOST,
+} from "../../../app/api/ui/threads/route";
 
 describe("backend.draftChanges on an empty draft", () => {
   let root: string;
@@ -115,6 +119,35 @@ describe("backend serves .claude-plugin/ read-only", () => {
     await expect(
       backend.readDoc(".claude-plugin/../etc/passwd"),
     ).rejects.toThrow();
+  });
+});
+
+describe("threads route refuses ref=main", () => {
+  it("POST returns 400 with a clear error", async () => {
+    const req = new Request("http://localhost/api/ui/threads?ref=main", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        path: "workspaces/ws/docs/a.md",
+        targets: [{ char_range: { from: 0, to: 1 } }],
+        message: "hi",
+      }),
+    });
+    const res = await threadsPOST(req);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: string };
+    expect(body.error).toMatch(/start a draft first/);
+  });
+
+  it("GET returns an empty thread list without hitting the backend", async () => {
+    const req = new Request(
+      "http://localhost/api/ui/threads?path=workspaces/ws/docs/a.md&ref=main",
+    );
+    const res = await threadsGET(req);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { ref: string; threads: unknown[] };
+    expect(body.ref).toBe("main");
+    expect(body.threads).toEqual([]);
   });
 });
 

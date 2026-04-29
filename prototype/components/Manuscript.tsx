@@ -581,19 +581,21 @@ export function Manuscript({
             <EditorContent editor={editor} />
           </div>
         </div>
-        <MarginRail
-          threads={threads}
-          activeThreadId={activeThreadId}
-          getAnchorTop={getAnchorTop}
-          getThreadView={getThreadView}
-          onActivate={activateThread}
-          onSetNote={setNote}
-          onReply={replyToThread}
-          onAccept={acceptThread}
-          onDecline={declineThread}
-          onToggleCollapsed={setThreadCollapsed}
-          onSetAllCollapsed={setAllCollapsed}
-        />
+        {docRef !== "main" ? (
+          <MarginRail
+            threads={threads}
+            activeThreadId={activeThreadId}
+            getAnchorTop={getAnchorTop}
+            getThreadView={getThreadView}
+            onActivate={activateThread}
+            onSetNote={setNote}
+            onReply={replyToThread}
+            onAccept={acceptThread}
+            onDecline={declineThread}
+            onToggleCollapsed={setThreadCollapsed}
+            onSetAllCollapsed={setAllCollapsed}
+          />
+        ) : null}
       </div>
       <SelectionBubble
         editor={editor}
