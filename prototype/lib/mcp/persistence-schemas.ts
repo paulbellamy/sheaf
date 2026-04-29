@@ -20,6 +20,9 @@ export const draftMetaSchema = z.object({
   created_at: z.number().int(),
   submitted_at: z.number().int().optional(),
   name: z.string().max(256).optional(),
+  display_name: z.string().max(264).optional(),
+  touches: z.array(z.string().min(1).max(512)).max(64).optional(),
+  base_version: z.number().int().nonnegative().optional(),
   // seed_prompt / note kept for backward compatibility with on-disk files
   // written before the intent rename.
   seed_prompt: z.string().max(2048).optional(),

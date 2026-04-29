@@ -8,6 +8,9 @@ import {
   GET as threadsGET,
   POST as threadsPOST,
 } from "../../../app/api/ui/threads/route";
+import { POST as draftsPOST } from "../../../app/api/ui/drafts/route";
+import { setBackend } from "../backend/factory";
+import type { BackendEvent } from "../backend";
 
 describe("backend.draftChanges on an empty draft", () => {
   let root: string;
@@ -237,5 +240,155 @@ describe("backend.listDocs workspace filter", () => {
     expect(betaDocs.map((d) => d.path)).toEqual([
       "workspaces/beta/docs/x.md",
     ]);
+  });
+});
+
+describe("backend.forkAndAttachThreads (Phase C)", () => {
+  let root: string;
+  let backend: StubBackend;
+  const DOC = "workspaces/ws/docs/a.md";
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
+    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "# title\n\nbody one\n\nbody two\n",
+    );
+    backend = new StubBackend(root);
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("creates the draft, persists threads, and emits one draft_created + N thread_changed", async () => {
+    const events: BackendEvent[] = [];
+    backend.subscribe((e) => events.push(e));
+
+    const result = await backend.forkAndAttachThreads({
+      base_path: DOC,
+      base_version: 1,
+      name: "v2 depth-first",
+      author: "alice",
+      initial_threads: [
+        {
+          targets: [{ path: DOC, char_range: { from: 0, to: 7 } }],
+          message: "scope",
+        },
+        {
+          targets: [{ path: DOC, char_range: { from: 9, to: 17 } }],
+          message: "tighten",
+        },
+      ],
+    });
+
+    expect(result.draft_id).toMatch(/^draft_/);
+    expect(result.base_version).toBe(1);
+    // display_name = "<name> #<4hex>" where 4hex is the first 4 chars after `draft_`.
+    const suffix = result.draft_id.slice("draft_".length, "draft_".length + 4);
+    expect(result.display_name).toBe(`v2 depth-first #${suffix}`);
+
+    // Drafts list reflects new shape (touches + base_version + display_name).
+    const drafts = await backend.listDrafts();
+    const created = drafts.find((d) => d.draft_id === result.draft_id);
+    expect(created).toBeDefined();
+    expect(created!.touches).toEqual([DOC]);
+    expect(created!.base_version).toBe(1);
+    expect(created!.display_name).toBe(`v2 depth-first #${suffix}`);
+
+    // Threads landed on the new draft ref.
+    const threads = await backend.listThreads({ ref: result.draft_id });
+    expect(threads).toHaveLength(2);
+
+    // Atomicity / event budget: one draft_created, two thread_changed.
+    const created_events = events.filter((e) => e.kind === "draft_created");
+    const thread_events = events.filter((e) => e.kind === "thread_changed");
+    expect(created_events).toHaveLength(1);
+    expect(thread_events).toHaveLength(2);
+  });
+
+  it("works with zero initial_threads (allowed; no thread_changed events)", async () => {
+    const events: BackendEvent[] = [];
+    backend.subscribe((e) => events.push(e));
+
+    const result = await backend.forkAndAttachThreads({
+      base_path: DOC,
+      base_version: 1,
+      name: "empty",
+      initial_threads: [],
+    });
+
+    expect(result.draft_id).toMatch(/^draft_/);
+    const thread_events = events.filter((e) => e.kind === "thread_changed");
+    expect(thread_events).toHaveLength(0);
+  });
+});
+
+describe("POST /api/ui/drafts (Phase C)", () => {
+  let root: string;
+  let backend: StubBackend;
+  const DOC = "workspaces/ws/docs/a.md";
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
+    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "# title\n\nbody one\n",
+    );
+    backend = new StubBackend(root);
+    setBackend(backend);
+  });
+
+  afterEach(async () => {
+    setBackend(null);
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("creates a draft, returns 201 + {draft_id, display_name, base_version}", async () => {
+    const req = new Request("http://localhost/api/ui/drafts", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        base_path: DOC,
+        base_ref: "main",
+        base_version: 1,
+        name: "v2",
+        initial_threads: [
+          {
+            targets: [{ path: DOC, char_range: { from: 0, to: 7 } }],
+            message: "scope",
+          },
+        ],
+      }),
+    });
+    const res = await draftsPOST(req);
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as {
+      draft_id: string;
+      display_name: string;
+      base_version: number;
+    };
+    expect(body.draft_id).toMatch(/^draft_/);
+    expect(body.base_version).toBe(1);
+    expect(body.display_name).toMatch(/^v2 #[a-f0-9]{4}$/);
+
+    const drafts = await backend.listDrafts();
+    expect(drafts.some((d) => d.draft_id === body.draft_id)).toBe(true);
+  });
+
+  it("rejects invalid bodies with 400", async () => {
+    const req = new Request("http://localhost/api/ui/drafts", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ base_path: DOC }),
+    });
+    const res = await draftsPOST(req);
+    expect(res.status).toBe(400);
   });
 });

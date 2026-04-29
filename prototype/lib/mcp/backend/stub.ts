@@ -66,6 +66,9 @@ type DraftMeta = {
   created_at: number;
   submitted_at?: number;
   name?: string;
+  display_name?: string;
+  touches?: DocPath[];
+  base_version?: number;
 };
 
 type OpLog = Record<string, WriteResult>;
@@ -73,6 +76,18 @@ type OpLog = Record<string, WriteResult>;
 function assertDraftRef(ref: Ref): asserts ref is DraftId {
   if (ref === "main") throw err.writeToMainForbidden();
   assertDraftId(ref);
+}
+
+/**
+ * `<name> #<4hex>` per the resolved-decisions rule. Suffix comes from the
+ * first 4 chars of `draft_id` after stripping the `draft_` prefix; the id
+ * remains the unique key, the suffix is just the human-legible disambiguator.
+ */
+function renderDisplayName(name: string, draftId: DraftId): string {
+  const suffix = draftId.startsWith("draft_")
+    ? draftId.slice("draft_".length, "draft_".length + 4)
+    : draftId.slice(0, 4);
+  return `${name} #${suffix}`;
 }
 
 function titleFromMd(md: string, fallback: string): string {
@@ -343,6 +358,9 @@ export class StubBackend implements Backend {
       created_at: data.created_at,
       submitted_at: data.submitted_at,
       name: data.name,
+      display_name: data.display_name,
+      touches: data.touches,
+      base_version: data.base_version,
     } satisfies DraftMeta;
   }
 
@@ -653,6 +671,7 @@ export class StubBackend implements Backend {
     return this.withLock(async () => {
       assertWorkspacePath(p);
       await this.readDoc(p, "main");
+      const baseVersion = this.versionCounters.get(p) ?? 1;
       const ids: DraftId[] = [];
       for (let i = 0; i < n; i++) {
         const draftId = `draft_${randomUUID()}`;
@@ -663,6 +682,8 @@ export class StubBackend implements Backend {
           author,
           state: "open",
           created_at: Date.now(),
+          touches: [p],
+          base_version: baseVersion,
         };
         await this.saveDraftMeta(meta);
         this.emit({
@@ -674,6 +695,74 @@ export class StubBackend implements Backend {
       }
       return ids;
     });
+  }
+
+  async forkAndAttachThreads(opts: {
+    base_path: DocPath;
+    base_version?: number;
+    name: string;
+    author?: string;
+    intent?: string;
+    initial_threads: {
+      targets: ThreadAnchor[];
+      message: string;
+      draft?: ThreadDraftBody;
+    }[];
+  }): Promise<{
+    draft_id: DraftId;
+    display_name: string;
+    base_version: number;
+  }> {
+    assertWorkspacePath(opts.base_path);
+    // Create the draft inside the lock so the meta is committed before any
+    // thread save races against listing.
+    const author = opts.author ?? "user";
+    const draftIdHolder: { id?: DraftId; baseVersion?: number; displayName?: string } = {};
+    await this.withLock(async () => {
+      await this.readDoc(opts.base_path, "main");
+      const counter = this.versionCounters.get(opts.base_path) ?? 1;
+      const baseVersion = opts.base_version ?? counter;
+      const draftId: DraftId = `draft_${randomUUID()}`;
+      const displayName = renderDisplayName(opts.name, draftId);
+      const meta: DraftMeta = {
+        draft_id: draftId,
+        base_path: opts.base_path,
+        intent: opts.intent,
+        author,
+        state: "open",
+        created_at: Date.now(),
+        name: opts.name,
+        display_name: displayName,
+        touches: [opts.base_path],
+        base_version: baseVersion,
+      };
+      await this.saveDraftMeta(meta);
+      this.emit({
+        kind: "draft_created",
+        draft_id: draftId,
+        base_path: opts.base_path,
+      });
+      draftIdHolder.id = draftId;
+      draftIdHolder.baseVersion = baseVersion;
+      draftIdHolder.displayName = displayName;
+    });
+    const draftId = draftIdHolder.id!;
+    // Each addThread call takes the lock itself, so we do them sequentially
+    // outside the outer lock — yielding inside withLock would deadlock.
+    for (const t of opts.initial_threads) {
+      await this.addThread({
+        targets: t.targets,
+        message: t.message,
+        draft: t.draft,
+        ref: draftId,
+        author,
+      });
+    }
+    return {
+      draft_id: draftId,
+      display_name: draftIdHolder.displayName!,
+      base_version: draftIdHolder.baseVersion!,
+    };
   }
 
   propose(
@@ -793,6 +882,8 @@ export class StubBackend implements Backend {
       try {
         const meta = await this.loadDraftMeta(e.name);
         if (p && meta.base_path !== p) continue;
+        const touches = meta.touches ?? [meta.base_path];
+        const baseVersion = meta.base_version ?? 1;
         out.push({
           draft_id: meta.draft_id,
           base_path: meta.base_path,
@@ -802,6 +893,9 @@ export class StubBackend implements Backend {
           created_at: meta.created_at,
           submitted_at: meta.submitted_at,
           name: meta.name,
+          display_name: meta.display_name,
+          touches,
+          base_version: baseVersion,
         });
       } catch {
         continue;

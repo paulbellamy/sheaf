@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { Thread } from "@/lib/types";
 
 type Props = {
@@ -9,27 +9,44 @@ type Props = {
   open: boolean;
   onOpen: () => void;
   onClose: () => void;
-  onSubmit: (coverNote: string) => void | Promise<void>;
+  onStartDraft: (args: { name: string }) => void | Promise<void>;
 };
 
-export function ReviewBundle({
+function defaultDraftName(): string {
+  const now = new Date();
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  return `draft-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}`;
+}
+
+export function StartDraftPanel({
   pendingCount,
   pending,
   open,
   onOpen,
   onClose,
-  onSubmit,
+  onStartDraft,
 }: Props) {
-  const [coverNote, setCoverNote] = useState("");
+  const [name, setName] = useState(() => defaultDraftName());
   const [busy, setBusy] = useState(false);
 
-  if (pendingCount === 0 && !open) return null;
+  // Each time the modal opens, reset to a freshly-stamped default. Mid-flight
+  // typing isn't preserved across cancel/reopen — minimal modal scope.
+  useEffect(() => {
+    if (open) setName(defaultDraftName());
+  }, [open]);
+
+  const disabled = pendingCount === 0;
 
   return (
     <>
-      {!open && pendingCount > 0 && (
-        <button className="review-pill" onClick={onOpen}>
-          submit review <span className="count">({pendingCount})</span>
+      {!open && (
+        <button
+          className="review-pill"
+          onClick={onOpen}
+          disabled={disabled}
+          aria-disabled={disabled}
+        >
+          Start Draft <span className="count">({pendingCount})</span>
         </button>
       )}
 
@@ -37,10 +54,10 @@ export function ReviewBundle({
         <aside
           className="review-panel"
           role="dialog"
-          aria-label="submit review"
+          aria-label="start draft"
         >
           <header>
-            <span className="title">submit review</span>
+            <span className="title">start draft</span>
             <button
               className="review-close"
               aria-label="close"
@@ -51,20 +68,20 @@ export function ReviewBundle({
           </header>
 
           <div className="review-body">
-            <label className="review-label" htmlFor="review-cover">
-              cover note (optional)
+            <label className="review-label" htmlFor="start-draft-name">
+              draft name
             </label>
-            <textarea
-              id="review-cover"
+            <input
+              id="start-draft-name"
               className="review-cover"
-              placeholder="a sentence of context for the author…"
-              value={coverNote}
-              rows={3}
-              onChange={(e) => setCoverNote(e.target.value)}
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
             />
 
             <div className="review-list-label">
-              {pendingCount} thread{pendingCount === 1 ? "" : "s"} in this review
+              {pendingCount} thread{pendingCount === 1 ? "" : "s"} on this draft
             </div>
             <ul className="review-list">
               {pending.map((t) => (
@@ -88,19 +105,18 @@ export function ReviewBundle({
             </button>
             <button
               className="review-submit"
-              disabled={busy}
+              disabled={busy || pendingCount === 0 || name.trim() === ""}
               onClick={async () => {
                 if (busy) return;
                 setBusy(true);
                 try {
-                  await onSubmit(coverNote);
-                  setCoverNote("");
+                  await onStartDraft({ name: name.trim() });
                 } finally {
                   setBusy(false);
                 }
               }}
             >
-              {busy ? "submitting…" : "submit"}
+              {busy ? "starting…" : "Start Draft"}
             </button>
           </footer>
         </aside>

@@ -20,7 +20,7 @@ import {
 } from "@/lib/editor-helpers";
 import { useFormattingDiff } from "@/lib/hooks/useFormattingDiff";
 import { useServerThreads } from "@/lib/hooks/useServerThreads";
-import { useSubmitReview } from "@/lib/hooks/useSubmitReview";
+import { useStartDraft } from "@/lib/hooks/useStartDraft";
 import { useProposedEditHandlers } from "@/lib/hooks/useProposedEditHandlers";
 import { useThreadOutcome } from "@/lib/hooks/useThreadOutcome";
 import {
@@ -34,7 +34,7 @@ import {
 import { ThreadInteraction } from "./extensions/ThreadInteraction";
 import { MarginRail } from "./MarginRail";
 import { HelpModal } from "./HelpModal";
-import { ReviewBundle } from "./ReviewBundle";
+import { StartDraftPanel } from "./StartDraftPanel";
 import { SelectionBubble } from "./SelectionBubble";
 
 const THREAD_IDLE_MS = 4000;
@@ -474,10 +474,11 @@ export function Manuscript({
     onClearContextFor,
   });
 
-  const submitReview = useSubmitReview({
+  const startDraft = useStartDraft({
     editor,
     docPath,
     docRef,
+    versionCounter,
     threads,
     mdRef,
     getThreadView,
@@ -619,12 +620,12 @@ export function Manuscript({
           editor.view.focus();
         }}
       />
-      <ReviewBundle
+      <StartDraftPanel
         pendingCount={pendingThreads.length}
         open={showReview}
         onOpen={() => setShowReview(true)}
         onClose={() => setShowReview(false)}
-        onSubmit={submitReview}
+        onStartDraft={startDraft}
         pending={pendingThreads}
       />
       <button

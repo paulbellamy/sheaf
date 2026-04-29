@@ -92,6 +92,23 @@ export type DraftSummary = {
   submitted_at?: number;
   /** Human-friendly label shown in the review queue. */
   name?: string;
+  /**
+   * Server-rendered display name: `"<name> #<4hex>"`, where the suffix is
+   * the first 4 chars of `draft_id` after the `draft_` prefix. Set when the
+   * draft is created via `forkAndAttachThreads` (Phase C); absent on legacy
+   * drafts created via the bare `fork()` MCP path until they're touched.
+   */
+  display_name?: string;
+  /**
+   * Workspace paths the draft has touched. Initialized to `[base_path]` at
+   * fork time; Phase H expands as cross-cutting edits land.
+   */
+  touches: DocPath[];
+  /**
+   * Per-doc version counter of `base_path` at fork time. Surfaced as
+   * "based on v<base_version>" in the draft-mode banner.
+   */
+  base_version: number;
 };
 
 export type ThreadAnchor = {
@@ -171,6 +188,32 @@ export interface Backend {
     intent?: string,
     author?: string,
   ): Promise<DraftId[]>;
+
+  /**
+   * Atomic Start-Draft primitive: forks a single draft off `base_path` and
+   * persists `initial_threads` against the new draft ref in one shot. Used
+   * by the UI's `POST /api/ui/drafts` (Phase C) so the alice-clicks-Start-Draft
+   * gesture creates draft + threads as one transaction.
+   *
+   * Distinct from `fork()` so the MCP tool's existing one-arg surface stays
+   * untouched — callers there don't need the threads-in-one-shot semantics.
+   */
+  forkAndAttachThreads(opts: {
+    base_path: DocPath;
+    base_version?: number;
+    name: string;
+    author?: string;
+    intent?: string;
+    initial_threads: {
+      targets: ThreadAnchor[];
+      message: string;
+      draft?: ThreadDraftBody;
+    }[];
+  }): Promise<{
+    draft_id: DraftId;
+    display_name: string;
+    base_version: number;
+  }>;
 
   propose(
     draftId: DraftId,
