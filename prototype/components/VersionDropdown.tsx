@@ -34,7 +34,7 @@ export function VersionDropdown({ path, currentVersion }: Props) {
     const mySeq = ++seqRef.current;
     try {
       const r = await fetch(
-        `/api/ui/doc/${path}/versions`,
+        `/api/ui/doc-versions/${path}`,
         { cache: "no-store" },
       );
       if (mySeq !== seqRef.current) return;

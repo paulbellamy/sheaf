@@ -78,7 +78,7 @@ export function DraftBanner({
     void (async () => {
       try {
         const r = await fetch(
-          `/api/ui/doc/${docPath}/versions`,
+          `/api/ui/doc-versions/${docPath}`,
           { cache: "no-store" },
         );
         if (cancelled || !r.ok) return;

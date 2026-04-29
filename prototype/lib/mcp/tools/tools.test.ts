@@ -13,7 +13,7 @@ import { GET as draftIdGET } from "../../../app/api/ui/drafts/[id]/route";
 import { POST as acceptPOST } from "../../../app/api/ui/drafts/[id]/accept/route";
 import { POST as payloadPOST } from "../../../app/api/ui/threads/[id]/payload/route";
 import { POST as reopenPOST } from "../../../app/api/ui/threads/[id]/reopen/route";
-import { GET as versionsGET } from "../../../app/api/ui/doc/[...path]/versions/route";
+import { GET as versionsGET } from "../../../app/api/ui/doc-versions/[...path]/route";
 import { setBackend } from "../backend/factory";
 import type { BackendEvent } from "../backend";
 
@@ -1659,7 +1659,7 @@ describe("backend.merge populates version_history (Phase K)", () => {
   });
 });
 
-describe("GET /api/ui/doc/[...path]/versions (Phase K)", () => {
+describe("GET /api/ui/doc-versions/[...path] (Phase K)", () => {
   let root: string;
   let backend: StubBackend;
   const DOC = "workspaces/ws/docs/a.md";
@@ -1683,7 +1683,7 @@ describe("GET /api/ui/doc/[...path]/versions (Phase K)", () => {
   });
 
   it("returns the current version with no entries on a fresh doc", async () => {
-    const req = new Request(`http://localhost/api/ui/doc/${DOC}/versions`);
+    const req = new Request(`http://localhost/api/ui/doc-versions/${DOC}`);
     const res = await versionsGET(req, {
       params: Promise.resolve({ path: DOC.split("/") }),
     });
@@ -1703,7 +1703,7 @@ describe("GET /api/ui/doc/[...path]/versions (Phase K)", () => {
     await backend.propose(d1);
     await backend.merge(d1);
 
-    const req = new Request(`http://localhost/api/ui/doc/${DOC}/versions`);
+    const req = new Request(`http://localhost/api/ui/doc-versions/${DOC}`);
     const res = await versionsGET(req, {
       params: Promise.resolve({ path: DOC.split("/") }),
     });
