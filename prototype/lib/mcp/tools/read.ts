@@ -38,13 +38,14 @@ export function registerRead(server: McpServer, backend: Backend): void {
     },
     async ({ file_path, offset, limit, ref }) => {
       try {
-        const { md, version, origin } = await backend.readDoc(file_path, ref);
+        const { md, version_token, version_counter, origin } =
+          await backend.readDoc(file_path, ref);
         return {
           content: [
             { type: "text", text: sliceText(md, offset, limit) },
             {
               type: "text",
-              text: `\n--\nref: ${ref ?? "main"}  version: ${version}  origin: ${origin}`,
+              text: `\n--\nref: ${ref ?? "main"}  v: ${version_counter}  version_token: ${version_token}  origin: ${origin}`,
             },
           ],
         };

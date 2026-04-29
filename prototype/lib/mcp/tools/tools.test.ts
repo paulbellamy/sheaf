@@ -151,6 +151,65 @@ describe("threads route refuses ref=main", () => {
   });
 });
 
+describe("backend.readDoc version_counter (Phase B)", () => {
+  let root: string;
+  let backend: StubBackend;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
+    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "# a\n",
+    );
+    backend = new StubBackend(root);
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("returns version_counter: 1 for a fresh doc with prose", async () => {
+    const result = await backend.readDoc("workspaces/ws/docs/a.md");
+    expect(result.version_counter).toBe(1);
+  });
+
+  it("exposes version_token (renamed from version) on the read result", async () => {
+    const result = await backend.readDoc("workspaces/ws/docs/a.md");
+    expect(typeof result.version_token).toBe("string");
+    expect(result.version_token).toMatch(/^v-/);
+    // The legacy `version` field must not exist on the new shape.
+    expect((result as { version?: unknown }).version).toBeUndefined();
+  });
+
+  it("does not bump version_counter on writeDoc (Phase I bumps on accept)", async () => {
+    const [draftId] = await backend.fork("workspaces/ws/docs/a.md", 1);
+    await backend.writeDoc(
+      "workspaces/ws/docs/a.md",
+      draftId,
+      "# a edited\n",
+    );
+    const main = await backend.readDoc("workspaces/ws/docs/a.md");
+    expect(main.version_counter).toBe(1);
+    const draft = await backend.readDoc("workspaces/ws/docs/a.md", draftId);
+    expect(draft.version_counter).toBe(1);
+  });
+
+  it("writeDoc result carries version_token (renamed from version)", async () => {
+    const [draftId] = await backend.fork("workspaces/ws/docs/a.md", 1);
+    const result = await backend.writeDoc(
+      "workspaces/ws/docs/a.md",
+      draftId,
+      "# a v2\n",
+    );
+    expect(typeof result.version_token).toBe("string");
+    expect(result.version_token).toMatch(/^v-/);
+    expect((result as { version?: unknown }).version).toBeUndefined();
+  });
+});
+
 describe("backend.listDocs workspace filter", () => {
   let root: string;
   let backend: StubBackend;

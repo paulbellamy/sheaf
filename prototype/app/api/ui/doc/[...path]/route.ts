@@ -13,8 +13,8 @@ export async function GET(req: Request, ctx: Ctx): Promise<Response> {
   const ref = url.searchParams.get("ref") ?? "main";
   const backend = getBackend();
   try {
-    const { md } = await backend.readDoc(p, ref);
-    return Response.json({ path: p, ref, md });
+    const { md, version_counter } = await backend.readDoc(p, ref);
+    return Response.json({ path: p, ref, md, version_counter });
   } catch (e) {
     return respondError(e);
   }

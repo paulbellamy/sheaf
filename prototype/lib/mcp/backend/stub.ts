@@ -216,6 +216,13 @@ export class StubBackend implements Backend {
   private opLogCache: OpLog | null = null;
   private lockChain: Promise<unknown> = Promise.resolve();
   private subscribers = new Set<(event: BackendEvent) => void>();
+  /**
+   * Per-doc monotonic version counter. Initialized to 1 the first time a doc
+   * with prose is read on main; bumped on draft accept (Phase I wires the
+   * bump). In-memory only — production will derive from accept-commit
+   * metadata.
+   */
+  private versionCounters = new Map<DocPath, number>();
 
   constructor(root: string, pluginRoot?: string) {
     this.root = root;
@@ -550,9 +557,18 @@ export class StubBackend implements Backend {
       if (e instanceof McpError) throw e;
       throw err.docNotFound(p);
     }
+    // Initialize the counter the first time we surface a doc with prose. The
+    // counter is keyed off the workspace-relative path so drafts and main
+    // share the same counter (the doc's identity is the path, not the ref).
+    let version_counter = this.versionCounters.get(p);
+    if (version_counter === undefined && md.length > 0) {
+      version_counter = 1;
+      this.versionCounters.set(p, version_counter);
+    }
     return {
       md,
-      version: `v-${sha(md).slice(0, 12)}`,
+      version_token: `v-${sha(md).slice(0, 12)}`,
+      version_counter: version_counter ?? 0,
       origin,
     };
   }
@@ -572,7 +588,7 @@ export class StubBackend implements Backend {
         await this.ensureDir(path.dirname(abs));
         await writeFileNoFollow(abs, content);
         const result: WriteResult = {
-          version: `v-${sha(content).slice(0, 12)}`,
+          version_token: `v-${sha(content).slice(0, 12)}`,
         };
         this.emit({ kind: "draft_changed", draft_id: ref, path: p });
         return result;
@@ -620,7 +636,7 @@ export class StubBackend implements Backend {
         await this.ensureDir(path.dirname(abs));
         await writeFileNoFollow(abs, next);
         const result: WriteResult = {
-          version: `v-${sha(next).slice(0, 12)}`,
+          version_token: `v-${sha(next).slice(0, 12)}`,
         };
         this.emit({ kind: "draft_changed", draft_id: ref, path: p });
         return result;

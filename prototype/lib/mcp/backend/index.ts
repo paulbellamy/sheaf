@@ -31,7 +31,13 @@ export type DocContent = {
    * Opaque version token. Meaningful only to the backend that emitted it;
    * callers may round-trip it as a stale-check handle but must not parse it.
    */
-  version: string;
+  version_token: string;
+  /**
+   * Monotonic per-doc version counter. Bumped atomically on draft accept
+   * (Phase I); surfaced as the `vN` badge in the UI. Distinct from
+   * `version_token`, which is an opaque stale-check handle.
+   */
+  version_counter: number;
   /**
    * Which tree the bytes actually came from. `readDoc(path, draftId)` falls
    * through to main when the draft has no override; `origin` tells callers
@@ -41,8 +47,8 @@ export type DocContent = {
 };
 
 export type WriteResult = {
-  /** Opaque version token. Same semantics as DocContent.version. */
-  version: string;
+  /** Opaque version token. Same semantics as DocContent.version_token. */
+  version_token: string;
 };
 
 export type GrepMatch = {

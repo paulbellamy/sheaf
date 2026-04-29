@@ -68,7 +68,7 @@ export type ThreadOnDisk = z.infer<typeof threadOnDiskSchema>;
 export const opLogSchema = z.record(
   z.string().max(128),
   z.object({
-    version: z.string().max(128),
+    version_token: z.string().max(128),
   }),
 );
 

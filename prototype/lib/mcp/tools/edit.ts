@@ -60,7 +60,7 @@ export function registerEdit(server: McpServer, backend: Backend): void {
           content: [
             {
               type: "text",
-              text: `edited ${file_path} @ ${ref}  version=${result.version}`,
+              text: `edited ${file_path} @ ${ref}  version_token=${result.version_token}`,
             },
           ],
           structuredContent: result,

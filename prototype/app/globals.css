@@ -386,6 +386,19 @@ body {
   background: #e8e3d0;
 }
 
+.page-header .version-badge {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  font-variant: normal;
+  letter-spacing: 0;
+  color: var(--ink);
+  background: #f0ede0;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  padding: 0.05rem 0.4rem;
+  margin-right: 0.5rem;
+}
+
 .layout {
   max-width: 1200px;
   margin: 0 auto;

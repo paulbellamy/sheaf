@@ -50,6 +50,7 @@ type ManuscriptProps = {
   md?: string;
   docPath?: string;
   docRef?: string;
+  versionCounter?: number;
 };
 
 export function Manuscript({
@@ -57,6 +58,7 @@ export function Manuscript({
   md,
   docPath,
   docRef = "main",
+  versionCounter,
 }: ManuscriptProps = {}) {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
@@ -528,6 +530,11 @@ export function Manuscript({
           {docRef !== "main" ? `draft · ${docPath ?? ""}` : "sheaf · redline prototype"}
         </span>
         <span className="page-header-right">
+          {versionCounter !== undefined && versionCounter > 0 ? (
+            <span className="version-badge" aria-label={`version ${versionCounter}`}>
+              v{versionCounter}
+            </span>
+          ) : null}
           {docRef !== "main" ? (
             <>
               <button
