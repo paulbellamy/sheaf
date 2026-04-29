@@ -42,15 +42,19 @@ export const threadAnchorSchema = z.object({
   }),
 });
 
+const threadDraftBodySchema = z.object({
+  new_md: z.string().max(1_000_000),
+  name: z.string().max(256).optional(),
+});
+
 export const threadMessageSchema = z.object({
   author: z.string().max(64),
   ts: z.number().int(),
   body: z.string().max(10_000),
-  draft: z
-    .object({
-      new_md: z.string().max(1_000_000),
-    })
-    .optional(),
+  draft: threadDraftBodySchema.optional(),
+  // Multi-option α payload (Phase F). Bounded list so a malformed message
+  // can't blow the on-disk schema budget.
+  draft_options: z.array(threadDraftBodySchema).min(1).max(8).optional(),
 });
 
 export const threadOnDiskSchema = z.object({

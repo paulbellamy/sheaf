@@ -1147,6 +1147,50 @@ export class StubBackend implements Backend {
       });
     });
   }
+
+  attachDraftPayload(
+    threadId: ThreadId,
+    opts: {
+      message?: string;
+      draft?: ThreadDraftBody;
+      draft_options?: ThreadDraftBody[];
+      author?: string;
+    },
+  ): Promise<void> {
+    return this.withLock(async () => {
+      // Exactly one of `draft` / `draft_options` must be set. The two-leaf-or-
+      // more case is canonically `draft_options`; the single-leaf shortcut is
+      // `draft`. Rejecting both-or-neither up front keeps the on-disk shape
+      // unambiguous for readers.
+      const hasDraft = opts.draft !== undefined;
+      const hasOptions =
+        opts.draft_options !== undefined && opts.draft_options.length > 0;
+      if (!hasDraft && !hasOptions) {
+        throw err.invalidPayload(
+          "attachDraftPayload requires `draft` or `draft_options`",
+        );
+      }
+      if (hasDraft && hasOptions) {
+        throw err.invalidPayload(
+          "attachDraftPayload accepts `draft` (1 leaf) OR `draft_options` (>1); not both",
+        );
+      }
+      const thread = await this.loadThread(threadId);
+      thread.messages.push({
+        author: opts.author ?? "system",
+        ts: Date.now(),
+        body: opts.message ?? "",
+        draft: opts.draft,
+        draft_options: opts.draft_options,
+      });
+      await this.saveThread(thread);
+      this.emit({
+        kind: "thread_changed",
+        thread_id: threadId,
+        target_paths: thread.targets.map((t) => t.path),
+      });
+    });
+  }
 }
 
 /**

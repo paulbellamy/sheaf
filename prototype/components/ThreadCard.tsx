@@ -16,7 +16,7 @@ type Props = {
   onActivate: () => void;
   onSetNote: (note: string) => void;
   onReply: (message: string) => Promise<void>;
-  onAccept: () => void;
+  onAccept: (optionIndex?: number) => void;
   onDecline: () => void;
   onToggleCollapsed: () => void;
 };
@@ -63,6 +63,19 @@ export function ThreadCard({
   const hasMessages = messages.length > 0;
   const hasNote = thread.note !== "";
   const [replying, setReplying] = useState(false);
+  // Multi-option α: when the thread carries 2+ draft_options the reviewer
+  // picks one before accept. Default to the first leaf so a quick accept
+  // still does something sensible.
+  const draftOptions = thread.draftOptions ?? [];
+  const isMultiOption = draftOptions.length >= 2;
+  const [focusedOption, setFocusedOption] = useState(0);
+  // Clamp the focused index when the option list shrinks (e.g. after a
+  // server-side prune). Keeps `accept` from indexing off the end.
+  useEffect(() => {
+    if (focusedOption >= draftOptions.length && draftOptions.length > 0) {
+      setFocusedOption(0);
+    }
+  }, [draftOptions.length, focusedOption]);
 
   const submitReply = async () => {
     const body = thread.note.trim();
@@ -149,6 +162,31 @@ export function ThreadCard({
             </ul>
           )}
 
+          {isMultiOption && (
+            <div
+              className="thread-options"
+              role="radiogroup"
+              aria-label="proposed options"
+            >
+              {draftOptions.map((opt, i) => (
+                <label
+                  key={i}
+                  className="thread-option"
+                  data-focused={i === focusedOption ? "true" : "false"}
+                >
+                  <input
+                    type="radio"
+                    name={`thread-options-${thread.id}`}
+                    checked={i === focusedOption}
+                    onChange={() => setFocusedOption(i)}
+                    onMouseDown={(e) => e.stopPropagation()}
+                  />
+                  <span className="thread-option-name">{opt.name}</span>
+                </label>
+              ))}
+            </div>
+          )}
+
           <AutoGrowTextarea
             className="note"
             placeholder={
@@ -169,9 +207,21 @@ export function ThreadCard({
           />
 
           <div className="actions">
-            {kind === "redline" && submitted ? (
+            {isMultiOption && submitted ? (
               <>
-                <button className="accept" onClick={onAccept}>
+                <button
+                  className="accept"
+                  onClick={() => onAccept(focusedOption)}
+                >
+                  accept this option
+                </button>
+                <button className="decline" onClick={onDecline}>
+                  decline
+                </button>
+              </>
+            ) : kind === "redline" && submitted ? (
+              <>
+                <button className="accept" onClick={() => onAccept()}>
                   accept
                 </button>
                 <button className="decline" onClick={onDecline}>

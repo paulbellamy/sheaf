@@ -10,6 +10,7 @@ import {
 } from "../../../app/api/ui/threads/route";
 import { POST as draftsPOST } from "../../../app/api/ui/drafts/route";
 import { GET as draftIdGET } from "../../../app/api/ui/drafts/[id]/route";
+import { POST as payloadPOST } from "../../../app/api/ui/threads/[id]/payload/route";
 import { setBackend } from "../backend/factory";
 import type { BackendEvent } from "../backend";
 
@@ -599,5 +600,248 @@ describe("backend.subscribe agent_presence (Phase E)", () => {
     backend.subscribe(() => {}, { role: "agent" });
     const presence = uiEvents.filter((e) => e.kind === "agent_presence");
     expect(presence).toHaveLength(0);
+  });
+});
+
+describe("backend.attachDraftPayload (Phase F)", () => {
+  let root: string;
+  let backend: StubBackend;
+  const DOC = "workspaces/ws/docs/a.md";
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
+    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "# title\n\nbody one\n\nbody two\n",
+    );
+    backend = new StubBackend(root);
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("appends a system-style message carrying the single `draft` payload and emits thread_changed", async () => {
+    const { draft_id } = await backend.forkAndAttachThreads({
+      base_path: DOC,
+      base_version: 1,
+      name: "v2",
+      initial_threads: [
+        {
+          targets: [{ path: DOC, char_range: { from: 9, to: 17 } }],
+          message: "tighten",
+        },
+      ],
+    });
+    const [t] = await backend.listThreads({ ref: draft_id });
+
+    const events: BackendEvent[] = [];
+    backend.subscribe((e) => events.push(e), { role: "ui" });
+    events.length = 0;
+
+    await backend.attachDraftPayload(t.id, {
+      message: "cut ~40%, same beats",
+      draft: { new_md: "tightened body\n" },
+    });
+
+    const after = await backend.readThread(t.id);
+    const last = after.messages[after.messages.length - 1];
+    expect(last.body).toBe("cut ~40%, same beats");
+    expect(last.draft).toEqual({ new_md: "tightened body\n" });
+    expect(last.draft_options).toBeUndefined();
+    expect(last.author).toBe("system");
+
+    const changed = events.filter((e) => e.kind === "thread_changed");
+    expect(changed).toHaveLength(1);
+  });
+
+  it("appends a system-style message carrying multi-leaf `draft_options`", async () => {
+    const { draft_id } = await backend.forkAndAttachThreads({
+      base_path: DOC,
+      base_version: 1,
+      name: "v2",
+      initial_threads: [
+        {
+          targets: [{ path: DOC, char_range: { from: 9, to: 17 } }],
+          message: "rewrite",
+        },
+      ],
+    });
+    const [t] = await backend.listThreads({ ref: draft_id });
+
+    await backend.attachDraftPayload(t.id, {
+      message: "two angles; pick one",
+      draft_options: [
+        { name: "option a", new_md: "depth\n" },
+        { name: "option b", new_md: "breadth\n" },
+      ],
+    });
+
+    const after = await backend.readThread(t.id);
+    const last = after.messages[after.messages.length - 1];
+    expect(last.draft_options).toEqual([
+      { name: "option a", new_md: "depth\n" },
+      { name: "option b", new_md: "breadth\n" },
+    ]);
+    expect(last.draft).toBeUndefined();
+  });
+
+  it("rejects calls with neither `draft` nor `draft_options` set", async () => {
+    const { draft_id } = await backend.forkAndAttachThreads({
+      base_path: DOC,
+      base_version: 1,
+      name: "v2",
+      initial_threads: [
+        {
+          targets: [{ path: DOC, char_range: { from: 9, to: 17 } }],
+          message: "tighten",
+        },
+      ],
+    });
+    const [t] = await backend.listThreads({ ref: draft_id });
+
+    await expect(
+      backend.attachDraftPayload(t.id, { message: "no payload" }),
+    ).rejects.toThrow();
+  });
+
+  it("rejects calls with both `draft` and `draft_options` set simultaneously", async () => {
+    const { draft_id } = await backend.forkAndAttachThreads({
+      base_path: DOC,
+      base_version: 1,
+      name: "v2",
+      initial_threads: [
+        {
+          targets: [{ path: DOC, char_range: { from: 9, to: 17 } }],
+          message: "tighten",
+        },
+      ],
+    });
+    const [t] = await backend.listThreads({ ref: draft_id });
+
+    await expect(
+      backend.attachDraftPayload(t.id, {
+        draft: { new_md: "x\n" },
+        draft_options: [
+          { name: "a", new_md: "x\n" },
+          { name: "b", new_md: "y\n" },
+        ],
+      }),
+    ).rejects.toThrow();
+  });
+});
+
+describe("POST /api/ui/threads/[id]/payload (Phase F)", () => {
+  let root: string;
+  let backend: StubBackend;
+  const DOC = "workspaces/ws/docs/a.md";
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
+    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "# title\n\nbody one\n\nbody two\n",
+    );
+    backend = new StubBackend(root);
+    setBackend(backend);
+  });
+
+  afterEach(async () => {
+    setBackend(null);
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("returns 201 on a valid single-payload body", async () => {
+    const { draft_id } = await backend.forkAndAttachThreads({
+      base_path: DOC,
+      base_version: 1,
+      name: "v2",
+      initial_threads: [
+        {
+          targets: [{ path: DOC, char_range: { from: 9, to: 17 } }],
+          message: "tighten",
+        },
+      ],
+    });
+    const [t] = await backend.listThreads({ ref: draft_id });
+
+    const req = new Request(
+      `http://localhost/api/ui/threads/${t.id}/payload`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          message: "cut ~40%",
+          draft: { new_md: "tightened\n" },
+        }),
+      },
+    );
+    const res = await payloadPOST(req, {
+      params: Promise.resolve({ id: t.id }),
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { ok?: boolean };
+    expect(body.ok).toBe(true);
+  });
+
+  it("returns 400 when the body has neither `draft` nor `draft_options`", async () => {
+    const { draft_id } = await backend.forkAndAttachThreads({
+      base_path: DOC,
+      base_version: 1,
+      name: "v2",
+      initial_threads: [
+        {
+          targets: [{ path: DOC, char_range: { from: 9, to: 17 } }],
+          message: "tighten",
+        },
+      ],
+    });
+    const [t] = await backend.listThreads({ ref: draft_id });
+
+    const req = new Request(
+      `http://localhost/api/ui/threads/${t.id}/payload`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message: "empty" }),
+      },
+    );
+    const res = await payloadPOST(req, {
+      params: Promise.resolve({ id: t.id }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 400 on malformed JSON", async () => {
+    const { draft_id } = await backend.forkAndAttachThreads({
+      base_path: DOC,
+      base_version: 1,
+      name: "v2",
+      initial_threads: [
+        {
+          targets: [{ path: DOC, char_range: { from: 9, to: 17 } }],
+          message: "x",
+        },
+      ],
+    });
+    const [t] = await backend.listThreads({ ref: draft_id });
+    const req = new Request(
+      `http://localhost/api/ui/threads/${t.id}/payload`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "not json",
+      },
+    );
+    const res = await payloadPOST(req, {
+      params: Promise.resolve({ id: t.id }),
+    });
+    expect(res.status).toBe(400);
   });
 });

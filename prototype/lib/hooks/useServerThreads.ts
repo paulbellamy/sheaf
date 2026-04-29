@@ -1,10 +1,36 @@
 import { useEffect, useRef } from "react";
 
-import type { Thread } from "@/lib/types";
+import type { Thread, ThreadDraftOption } from "@/lib/types";
 import type { Thread as BackendThread } from "@/lib/mcp/backend";
 import { subscribeBackendEvents } from "./useBackendEvents";
 
+/**
+ * Walk the message log newest-first and pick the latest set of
+ * `draft_options`. Phase F: if no message carries options but one carries a
+ * single `draft`, surface that as a 1-leaf array so the rendering path is
+ * uniform (the multi-option UI just collapses to the single-payload redline
+ * when there's exactly one leaf).
+ */
+function deriveDraftOptions(
+  t: BackendThread,
+): ThreadDraftOption[] | undefined {
+  for (let i = t.messages.length - 1; i >= 0; i--) {
+    const m = t.messages[i];
+    if (m.draft_options && m.draft_options.length > 0) {
+      return m.draft_options.map((o, idx) => ({
+        name: o.name ?? `option ${idx + 1}`,
+        new_md: o.new_md,
+      }));
+    }
+    if (m.draft) {
+      return [{ name: m.draft.name ?? "proposal", new_md: m.draft.new_md }];
+    }
+  }
+  return undefined;
+}
+
 function backendThreadToUiThread(t: BackendThread): Thread {
+  const draftOptions = deriveDraftOptions(t);
   return {
     id: t.id,
     kind: "note",
@@ -17,6 +43,7 @@ function backendThreadToUiThread(t: BackendThread): Thread {
           : "submitted",
     createdAt: t.created,
     messages: t.messages,
+    draftOptions,
   };
 }
 
@@ -67,6 +94,9 @@ export function useServerThreads(
               autoFocusNote: local.autoFocusNote,
               anchor: local.anchor,
               structural: local.structural,
+              // draftOptions is server-derived: always take the freshest copy
+              // from the server, ignoring any stale local snapshot.
+              draftOptions: s.draftOptions,
             };
           });
           const merged = [

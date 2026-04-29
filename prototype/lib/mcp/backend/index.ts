@@ -116,13 +116,28 @@ export type ThreadAnchor = {
   char_range: { from: number; to: number };
 };
 
-export type ThreadDraftBody = { new_md: string };
+/**
+ * One proposed leaf attached to a thread message. `name` is set on each leaf
+ * when a message carries multiple options (so the UI can label them); single-
+ * payload uses don't bother with a name.
+ */
+export type ThreadDraftBody = { new_md: string; name?: string };
 
 export type ThreadMessage = {
   author: string;
   ts: number;
   body: string;
+  /**
+   * Single-leaf shortcut. Kept for back-compat with existing α flows that
+   * attach exactly one redline payload.
+   */
   draft?: ThreadDraftBody;
+  /**
+   * Canonical multi-option payload. `draft_options` is the going-forward way
+   * to attach proposed leaves to a message; reviewers pick one. Set this for
+   * 2+ options, set `draft` for 1.
+   */
+  draft_options?: ThreadDraftBody[];
 };
 
 export type ThreadTarget = {
@@ -255,6 +270,25 @@ export interface Backend {
   ): Promise<void>;
 
   resolveThread(id: ThreadId): Promise<void>;
+
+  /**
+   * Append a system-style message to an existing thread carrying one or more
+   * proposed leaves. Phase F: this is how claude attaches an α-style payload
+   * to an existing thread instead of spawning a sibling redline thread.
+   *
+   * Exactly one of `draft` or `draft_options` must be set. `draft_options` is
+   * canonical for >1 leaf; `draft` is the single-leaf shortcut. Implementations
+   * MUST reject a call with both missing or both set.
+   */
+  attachDraftPayload(
+    threadId: ThreadId,
+    opts: {
+      message?: string;
+      draft?: ThreadDraftBody;
+      draft_options?: ThreadDraftBody[];
+      author?: string;
+    },
+  ): Promise<void>;
 
   /**
    * Subscribe to mutation events. Returns an unsubscribe function.

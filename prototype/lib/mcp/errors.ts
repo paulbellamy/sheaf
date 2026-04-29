@@ -8,6 +8,7 @@ export type SheafErrorCode =
   | "invalid_path"
   | "invalid_ref"
   | "invalid_thread_id"
+  | "invalid_payload"
   | "draft_not_submitted"
   | "draft_already_submitted"
   | "merge_conflict"
@@ -77,6 +78,8 @@ export const err = {
       "invalid_thread_id",
       `thread id must match thrd_<uuid>: got ${id}`,
     ),
+  invalidPayload: (reason: string) =>
+    new SheafError("invalid_payload", reason),
   draftNotSubmitted: (id: string, state: string) =>
     new SheafError(
       "draft_not_submitted",
@@ -122,6 +125,7 @@ export function statusForCode(code: SheafErrorCode): number {
     case "invalid_path":
     case "invalid_ref":
     case "invalid_thread_id":
+    case "invalid_payload":
     case "edit_no_match":
     case "edit_ambiguous":
     case "payload_too_large":
