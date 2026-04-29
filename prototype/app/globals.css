@@ -386,6 +386,148 @@ body {
   background: #e8e3d0;
 }
 
+.page-header .version-badge {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  font-variant: normal;
+  letter-spacing: 0;
+  color: var(--ink);
+  background: #f0ede0;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  padding: 0.05rem 0.4rem;
+  margin-right: 0.5rem;
+}
+
+.version-dropdown-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.page-header .version-badge-btn {
+  cursor: pointer;
+  font: inherit;
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+}
+
+.page-header .version-badge-btn:hover {
+  background: #e8e3d0;
+}
+
+.version-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 16rem;
+  background: var(--paper, #fdfbf3);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  z-index: 50;
+  padding: 0.25rem 0;
+}
+
+.version-dropdown-empty {
+  padding: 0.5rem 0.75rem;
+  color: var(--muted);
+  font-style: italic;
+  font-size: 0.85rem;
+}
+
+.version-dropdown-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.version-dropdown-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.82rem;
+}
+
+.version-dropdown-row[data-current="true"] {
+  background: #f5f2e6;
+}
+
+.version-dropdown-label {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.version-dropdown-name {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  color: var(--ink);
+}
+
+.version-dropdown-time {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.version-dropdown-link {
+  color: var(--ink);
+  text-decoration: underline;
+  font-size: 0.78rem;
+}
+
+.version-dropdown-link:hover {
+  color: var(--accent, #8a4500);
+}
+
+.version-dropdown-currentmark {
+  color: var(--muted);
+  font-variant: small-caps;
+  letter-spacing: 0.04em;
+  font-size: 0.72rem;
+}
+
+.draft-banner-readonly {
+  background: #f5f2e6;
+}
+
+.page-header-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.agent-dock {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-variant: small-caps;
+  letter-spacing: 0.04em;
+  font-size: 0.72rem;
+  color: var(--muted);
+  cursor: default;
+}
+
+.agent-dock-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--rule);
+  display: inline-block;
+  flex: 0 0 auto;
+  transition: background 120ms ease;
+}
+
+.agent-dock-dot[data-connected="true"] {
+  background: #2e7d32;
+}
+
+.agent-dock-label {
+  font-variant: small-caps;
+  letter-spacing: 0.04em;
+}
+
 .layout {
   max-width: 1200px;
   margin: 0 auto;
@@ -1079,6 +1221,199 @@ body {
 }
 
 /* ------------------------------------------------------------------ */
+/* draft mode banner (Phase D)                                         */
+/* ------------------------------------------------------------------ */
+
+.draft-banner {
+  max-width: 1200px;
+  margin: 0 auto 1.4rem;
+  padding: 0.55rem 0.9rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.8rem;
+  background: var(--card, #f6f3e6);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  font-size: 0.85rem;
+  color: var(--ink);
+}
+
+.draft-banner-left {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.draft-banner-name {
+  font-weight: 500;
+}
+
+.draft-banner-sep {
+  color: var(--muted);
+}
+
+.draft-banner-chip {
+  font-size: 0.75rem;
+  padding: 0.1rem 0.45rem;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.draft-banner-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.draft-banner-btn {
+  font: inherit;
+  font-size: 0.82rem;
+  padding: 0.28rem 0.7rem;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  cursor: pointer;
+  color: var(--ink);
+}
+
+.draft-banner-btn:hover:not(:disabled) {
+  border-color: var(--ink);
+}
+
+.draft-banner-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.draft-banner-accept:not(:disabled) {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
+}
+
+.draft-banner-accept:not(:disabled):hover {
+  background: #000;
+}
+
+.draft-banner-copied {
+  font-size: 0.78rem;
+  color: var(--muted);
+  font-style: italic;
+}
+
+.draft-banner-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 60;
+}
+
+.draft-banner-modal {
+  background: var(--paper);
+  border: 1px solid var(--ink);
+  border-radius: 3px;
+  padding: 1.1rem 1.3rem;
+  min-width: 22rem;
+  max-width: 30rem;
+  box-shadow: 0 12px 36px -12px rgba(0, 0, 0, 0.35);
+}
+
+.draft-banner-modal-title {
+  font-size: 0.95rem;
+  font-weight: 500;
+  margin-bottom: 0.5rem;
+}
+
+.draft-banner-modal-body {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: 1rem;
+  line-height: 1.4;
+}
+
+.draft-banner-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.draft-banner-modal-actions button {
+  font: inherit;
+  font-size: 0.85rem;
+  padding: 0.35rem 0.9rem;
+  border-radius: 2px;
+  cursor: pointer;
+}
+
+.draft-banner-bump-list {
+  margin: 0.5rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.82rem;
+  color: var(--ink);
+}
+
+.draft-banner-bump-list code {
+  font-size: 0.78rem;
+  background: var(--card, #f6f3e6);
+  padding: 0 0.25rem;
+  border-radius: 2px;
+}
+
+.draft-banner-success {
+  background: #e6f3ec;
+  border-color: #b9d8c4;
+}
+
+.draft-banner-success-list {
+  font-size: 0.82rem;
+  color: var(--ink);
+}
+
+.draft-banner-conflict {
+  flex-basis: 100%;
+  margin-top: 0.6rem;
+  padding: 0.6rem 0.8rem;
+  background: #fbeded;
+  border: 1px solid #d6a3a3;
+  border-radius: 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.draft-banner-conflict-title {
+  font-weight: 500;
+  font-size: 0.85rem;
+  color: var(--ink);
+}
+
+.draft-banner-conflict-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  font-size: 0.82rem;
+}
+
+.draft-banner-conflict-list code {
+  font-size: 0.78rem;
+  background: var(--paper);
+  padding: 0 0.25rem;
+  border-radius: 2px;
+}
+
+.draft-banner-conflict .draft-banner-btn {
+  align-self: flex-start;
+}
+
+/* ------------------------------------------------------------------ */
 /* selection bubble                                                    */
 /* ------------------------------------------------------------------ */
 
@@ -1387,6 +1722,13 @@ body {
 
 .dashboard header {
   margin-bottom: 2rem;
+}
+
+.dashboard-header-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
 }
 
 .dashboard header h1 {

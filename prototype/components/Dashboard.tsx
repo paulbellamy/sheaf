@@ -3,6 +3,7 @@
 import Link from "next/link";
 
 import { useDocsIndex } from "@/lib/hooks/useDocsIndex";
+import { AgentDock } from "./AgentDock";
 
 function relTime(ms: number): string {
   const diff = Date.now() - ms;
@@ -26,7 +27,10 @@ export function Dashboard() {
   return (
     <div className="dashboard">
       <header>
-        <h1>sheaf</h1>
+        <div className="dashboard-header-row">
+          <h1>sheaf</h1>
+          <AgentDock />
+        </div>
         <p className="muted">recently edited docs &amp; in-flight drafts</p>
       </header>
       {error ? <div className="review-err">{error}</div> : null}

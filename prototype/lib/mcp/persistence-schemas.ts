@@ -20,6 +20,13 @@ export const draftMetaSchema = z.object({
   created_at: z.number().int(),
   submitted_at: z.number().int().optional(),
   name: z.string().max(256).optional(),
+  display_name: z.string().max(264).optional(),
+  touches: z.array(z.string().min(1).max(512)).max(64).optional(),
+  base_version: z.number().int().nonnegative().optional(),
+  parent_draft_id: z
+    .string()
+    .regex(/^draft_[A-Za-z0-9]{6,64}(?:-[A-Za-z0-9]{1,64}){0,8}$/)
+    .optional(),
   // seed_prompt / note kept for backward compatibility with on-disk files
   // written before the intent rename.
   seed_prompt: z.string().max(2048).optional(),
@@ -39,15 +46,19 @@ export const threadAnchorSchema = z.object({
   }),
 });
 
+const threadDraftBodySchema = z.object({
+  new_md: z.string().max(1_000_000),
+  name: z.string().max(256).optional(),
+});
+
 export const threadMessageSchema = z.object({
   author: z.string().max(64),
   ts: z.number().int(),
   body: z.string().max(10_000),
-  draft: z
-    .object({
-      new_md: z.string().max(1_000_000),
-    })
-    .optional(),
+  draft: threadDraftBodySchema.optional(),
+  // Multi-option α payload (Phase F). Bounded list so a malformed message
+  // can't blow the on-disk schema budget.
+  draft_options: z.array(threadDraftBodySchema).min(1).max(8).optional(),
 });
 
 export const threadOnDiskSchema = z.object({
@@ -68,7 +79,7 @@ export type ThreadOnDisk = z.infer<typeof threadOnDiskSchema>;
 export const opLogSchema = z.record(
   z.string().max(128),
   z.object({
-    version: z.string().max(128),
+    version_token: z.string().max(128),
   }),
 );
 

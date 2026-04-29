@@ -19,8 +19,9 @@ import {
   tryIndent,
 } from "@/lib/editor-helpers";
 import { useFormattingDiff } from "@/lib/hooks/useFormattingDiff";
+import { anchorToRange } from "@/lib/md-anchor";
 import { useServerThreads } from "@/lib/hooks/useServerThreads";
-import { useSubmitReview } from "@/lib/hooks/useSubmitReview";
+import { useStartDraft } from "@/lib/hooks/useStartDraft";
 import { useProposedEditHandlers } from "@/lib/hooks/useProposedEditHandlers";
 import { useThreadOutcome } from "@/lib/hooks/useThreadOutcome";
 import {
@@ -34,8 +35,12 @@ import {
 import { ThreadInteraction } from "./extensions/ThreadInteraction";
 import { MarginRail } from "./MarginRail";
 import { HelpModal } from "./HelpModal";
-import { ReviewBundle } from "./ReviewBundle";
+import { StartDraftPanel } from "./StartDraftPanel";
 import { SelectionBubble } from "./SelectionBubble";
+import { DraftBanner } from "./DraftBanner";
+import { AgentDock } from "./AgentDock";
+import { VersionDropdown } from "./VersionDropdown";
+import { useDraftMeta } from "@/lib/hooks/useDraftMeta";
 
 const THREAD_IDLE_MS = 4000;
 
@@ -50,6 +55,7 @@ type ManuscriptProps = {
   md?: string;
   docPath?: string;
   docRef?: string;
+  versionCounter?: number;
 };
 
 export function Manuscript({
@@ -57,6 +63,7 @@ export function Manuscript({
   md,
   docPath,
   docRef = "main",
+  versionCounter,
 }: ManuscriptProps = {}) {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
@@ -64,7 +71,6 @@ export function Manuscript({
   const [showReview, setShowReview] = useState(false);
   const [, bumpLayout] = useState(0);
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const [draftBusy, setDraftBusy] = useState(false);
   const router = useRouter();
   const mdRef = useRef<string>(md ?? "");
   // Keep mdRef in sync with the prop via effect rather than mutating during
@@ -398,9 +404,17 @@ export function Manuscript({
       if (!editor || !manuscriptRef.current) return null;
       const view = getThreadView(threadId);
       let pos = view?.del?.from ?? view?.ins?.from ?? null;
-      if (pos === null) {
-        const thread = threads.find((t) => t.id === threadId);
-        pos = thread?.anchor?.from ?? null;
+      const thread = pos === null ? threads.find((t) => t.id === threadId) : null;
+      if (pos === null && thread) {
+        pos = thread.anchor?.from ?? null;
+      }
+      if (pos === null && thread?.serverAnchor?.anchored_text) {
+        const range = anchorToRange(
+          editor,
+          thread.serverAnchor.anchored_text,
+          thread.serverAnchor.char_range.from,
+        );
+        pos = range?.from ?? null;
       }
       if (pos === null) return null;
       try {
@@ -444,6 +458,57 @@ export function Manuscript({
     [],
   );
 
+  const remixThread = useCallback(
+    async (threadId: string): Promise<void> => {
+      try {
+        const r = await fetch(
+          `/api/ui/threads/${encodeURIComponent(threadId)}/reopen`,
+          { method: "POST" },
+        );
+        if (!r.ok) {
+          const body = (await r.json().catch(() => ({}))) as { error?: string };
+          setSubmitError(body.error ?? `remix failed (HTTP ${r.status})`);
+          throw new Error(body.error ?? `HTTP ${r.status}`);
+        }
+      } catch (e) {
+        setSubmitError(e instanceof Error ? e.message : String(e));
+        throw e;
+      }
+    },
+    [],
+  );
+
+  const addOption = useCallback(
+    async (threadId: string, name: string, newMd: string): Promise<void> => {
+      try {
+        // To append a leaf "without disturbing prior leaves" we merge with
+        // whatever the thread's `draftOptions` already exposes and resubmit
+        // the union. The local UI state mirrors the server's latest options
+        // message, so reading from it avoids a second fetch.
+        const t = threads.find((x) => x.id === threadId);
+        const existing = t?.draftOptions ?? [];
+        const merged = [...existing, { name, new_md: newMd }];
+        const r = await fetch(
+          `/api/ui/threads/${encodeURIComponent(threadId)}/payload`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ draft_options: merged }),
+          },
+        );
+        if (!r.ok) {
+          const body = (await r.json().catch(() => ({}))) as { error?: string };
+          setSubmitError(body.error ?? `add option failed (HTTP ${r.status})`);
+          throw new Error(body.error ?? `HTTP ${r.status}`);
+        }
+      } catch (e) {
+        setSubmitError(e instanceof Error ? e.message : String(e));
+        throw e;
+      }
+    },
+    [threads],
+  );
+
   const setThreadCollapsed = useCallback(
     (threadId: string, collapsed: boolean) => {
       setThreads((prev) =>
@@ -472,10 +537,11 @@ export function Manuscript({
     onClearContextFor,
   });
 
-  const submitReview = useSubmitReview({
+  const startDraft = useStartDraft({
     editor,
     docPath,
     docRef,
+    versionCounter,
     threads,
     mdRef,
     getThreadView,
@@ -484,28 +550,12 @@ export function Manuscript({
     setShowReview,
   });
 
-  const actOnDraft = useCallback(
-    async (kind: "accept" | "decline") => {
-      if (docRef === "main") return;
-      setDraftBusy(true);
-      try {
-        const r = await fetch(`/api/ui/drafts/${docRef}/${kind}`, {
-          method: "POST",
-        });
-        if (!r.ok) {
-          const body = (await r.json().catch(() => ({}))) as { error?: string };
-          setSubmitError(body.error ?? `${kind} failed`);
-          return;
-        }
-        router.push(docPath ? `/doc/${docPath}` : "/");
-      } catch (e) {
-        setSubmitError(e instanceof Error ? e.message : String(e));
-      } finally {
-        setDraftBusy(false);
-      }
-    },
-    [docRef, docPath, router],
-  );
+  // Phase D: Accept/Discard now live on the draft banner. The banner
+  // calls the same accept/decline routes and navigates back to main on
+  // success; this helper just centralizes the navigation target.
+  const navigateToMain = useCallback(() => {
+    router.push(docPath ? `/doc/${docPath}` : "/");
+  }, [docPath, router]);
 
   const pendingThreads = useMemo(
     () => threads.filter((t) => t.state === "pending"),
@@ -521,33 +571,31 @@ export function Manuscript({
     editor.commands.setTextSelection(to);
   }, [editor, registerNoteThread]);
 
+  const isDraftRef = docRef.startsWith("draft_");
+  const { data: draftMeta } = useDraftMeta(isDraftRef ? docRef : undefined);
+  const isHistoricalView = isDraftRef && draftMeta?.state === "accepted";
+  // When viewing an accepted draft, lock the editor. Selection bubble
+  // actions, StartDraftPanel, and DraftBanner accept/discard buttons are
+  // suppressed downstream; making the ProseMirror view non-editable
+  // covers stray keystroke routes (drag-drop, inputrules) that bypass the
+  // chrome.
+  useEffect(() => {
+    if (!editor) return;
+    editor.setEditable(!isHistoricalView);
+  }, [editor, isHistoricalView]);
+
   return (
     <>
       <header className="page-header">
         <span className="title">
-          {docRef !== "main" ? `draft · ${docPath ?? ""}` : "sheaf · redline prototype"}
+          {isDraftRef ? `draft · ${docPath ?? ""}` : "sheaf · redline prototype"}
         </span>
         <span className="page-header-right">
-          {docRef !== "main" ? (
-            <>
-              <button
-                type="button"
-                className="draft-accept"
-                disabled={draftBusy}
-                onClick={() => void actOnDraft("accept")}
-              >
-                accept draft
-              </button>
-              <button
-                type="button"
-                className="draft-decline"
-                disabled={draftBusy}
-                onClick={() => void actOnDraft("decline")}
-              >
-                decline draft
-              </button>
-            </>
-          ) : (
+          {versionCounter !== undefined && versionCounter > 0 && docPath ? (
+            <VersionDropdown path={docPath} currentVersion={versionCounter} />
+          ) : null}
+          <AgentDock />
+          {!isDraftRef ? (
             <>
               edit anywhere — your changes become suggestions. press{" "}
               <button
@@ -560,9 +608,20 @@ export function Manuscript({
               </button>{" "}
               for help.
             </>
-          )}
+          ) : null}
         </span>
       </header>
+      {isDraftRef && docPath ? (
+        <DraftBanner
+          docPath={docPath}
+          docRef={docRef}
+          onDiscarded={navigateToMain}
+          onAccepted={navigateToMain}
+          onError={setSubmitError}
+          readOnly={isHistoricalView}
+          latestVersion={versionCounter}
+        />
+      ) : null}
       {submitError ? (
         <div className="submit-error" role="alert">
           {submitError}
@@ -581,43 +640,51 @@ export function Manuscript({
             <EditorContent editor={editor} />
           </div>
         </div>
-        <MarginRail
-          threads={threads}
-          activeThreadId={activeThreadId}
-          getAnchorTop={getAnchorTop}
-          getThreadView={getThreadView}
-          onActivate={activateThread}
-          onSetNote={setNote}
-          onReply={replyToThread}
-          onAccept={acceptThread}
-          onDecline={declineThread}
-          onToggleCollapsed={setThreadCollapsed}
-          onSetAllCollapsed={setAllCollapsed}
-        />
+        {isDraftRef || pendingThreads.length > 0 ? (
+          <MarginRail
+            threads={threads}
+            activeThreadId={activeThreadId}
+            getAnchorTop={getAnchorTop}
+            getThreadView={getThreadView}
+            onActivate={activateThread}
+            onSetNote={setNote}
+            onReply={replyToThread}
+            onAccept={acceptThread}
+            onDecline={declineThread}
+            onToggleCollapsed={setThreadCollapsed}
+            onSetAllCollapsed={setAllCollapsed}
+            onRemix={remixThread}
+            onAddOption={addOption}
+          />
+        ) : null}
       </div>
-      <SelectionBubble
-        editor={editor}
-        onComment={startNoteThread}
-        onStructuralMark={(label, range) => registerStructuralThread(label, range)}
-        onIndent={() => {
-          if (!editor) return;
-          tryIndent(editor.state, editor.view.dispatch, "in");
-          editor.view.focus();
-        }}
-        onOutdent={() => {
-          if (!editor) return;
-          tryIndent(editor.state, editor.view.dispatch, "out");
-          editor.view.focus();
-        }}
-      />
-      <ReviewBundle
-        pendingCount={pendingThreads.length}
-        open={showReview}
-        onOpen={() => setShowReview(true)}
-        onClose={() => setShowReview(false)}
-        onSubmit={submitReview}
-        pending={pendingThreads}
-      />
+      {!isHistoricalView ? (
+        <SelectionBubble
+          editor={editor}
+          onComment={startNoteThread}
+          onStructuralMark={(label, range) => registerStructuralThread(label, range)}
+          onIndent={() => {
+            if (!editor) return;
+            tryIndent(editor.state, editor.view.dispatch, "in");
+            editor.view.focus();
+          }}
+          onOutdent={() => {
+            if (!editor) return;
+            tryIndent(editor.state, editor.view.dispatch, "out");
+            editor.view.focus();
+          }}
+        />
+      ) : null}
+      {!isHistoricalView ? (
+        <StartDraftPanel
+          pendingCount={pendingThreads.length}
+          open={showReview}
+          onOpen={() => setShowReview(true)}
+          onClose={() => setShowReview(false)}
+          onStartDraft={startDraft}
+          pending={pendingThreads}
+        />
+      ) : null}
       <button
         className="help-fab"
         onClick={() => setShowHelp(true)}

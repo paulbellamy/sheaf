@@ -8,6 +8,7 @@ import {
   messageArg,
   pathArg,
   refOptionalArg,
+  threadDraftOptionSchema,
   threadDraftSchema,
   threadIdArg,
 } from "../schemas";
@@ -144,6 +145,48 @@ export function registerThreadTools(
         await backend.replyThread(thread_id, message, { author, draft });
         return {
           content: [{ type: "text", text: `replied on ${thread_id}` }],
+          structuredContent: { thread_id },
+        };
+      } catch (e) {
+        return toToolError(e);
+      }
+    },
+  );
+
+  server.registerTool(
+    "AttachDraftPayload",
+    {
+      title: "AttachDraftPayload",
+      description:
+        "Attach one or more proposed leaves (α-style payload) to an existing thread. Pass `draft` for a single leaf, `draft_options` for two or more. The thread message becomes a redline (single) or a leaf selector (multi).",
+      inputSchema: {
+        thread_id: threadIdArg,
+        message: messageArg.optional(),
+        draft: threadDraftSchema.optional(),
+        draft_options: z
+          .array(threadDraftOptionSchema)
+          .min(2)
+          .max(8)
+          .optional()
+          .describe(
+            "Two or more option leaves. Each must carry a `name` so the reviewer can label them.",
+          ),
+        author: authorArg,
+      },
+      annotations: { readOnlyHint: false, openWorldHint: false },
+    },
+    async ({ thread_id, message, draft, draft_options, author }) => {
+      try {
+        await backend.attachDraftPayload(thread_id, {
+          message,
+          draft,
+          draft_options,
+          author,
+        });
+        return {
+          content: [
+            { type: "text", text: `attached payload to ${thread_id}` },
+          ],
           structuredContent: { thread_id },
         };
       } catch (e) {

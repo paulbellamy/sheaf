@@ -1,10 +1,63 @@
 import { useEffect, useRef } from "react";
 
-import type { Thread } from "@/lib/types";
+import type { Thread, ThreadDraftOption } from "@/lib/types";
 import type { Thread as BackendThread } from "@/lib/mcp/backend";
 import { subscribeBackendEvents } from "./useBackendEvents";
 
+/**
+ * Walk the message log newest-first and pick the latest set of
+ * `draft_options`. Phase F: if no message carries options but one carries a
+ * single `draft`, surface that as a 1-leaf array so the rendering path is
+ * uniform (the multi-option UI just collapses to the single-payload redline
+ * when there's exactly one leaf).
+ */
+function deriveDraftOptions(
+  t: BackendThread,
+): ThreadDraftOption[] | undefined {
+  for (let i = t.messages.length - 1; i >= 0; i--) {
+    const m = t.messages[i];
+    if (m.draft_options && m.draft_options.length > 0) {
+      return m.draft_options.map((o, idx) => ({
+        name: o.name ?? `option ${idx + 1}`,
+        new_md: o.new_md,
+      }));
+    }
+    if (m.draft) {
+      return [{ name: m.draft.name ?? "proposal", new_md: m.draft.new_md }];
+    }
+  }
+  return undefined;
+}
+
+function decodeRelPos(
+  rel_pos: string,
+): { from: number; to: number } | null {
+  try {
+    const json =
+      typeof atob === "function"
+        ? atob(rel_pos)
+        : Buffer.from(rel_pos, "base64").toString("utf8");
+    const parsed = JSON.parse(json) as { from: unknown; to: unknown };
+    if (typeof parsed.from === "number" && typeof parsed.to === "number") {
+      return { from: parsed.from, to: parsed.to };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function backendThreadToUiThread(t: BackendThread): Thread {
+  const draftOptions = deriveDraftOptions(t);
+  const target = t.targets[0];
+  const charRange = target ? decodeRelPos(target.anchor.rel_pos) : null;
+  const serverAnchor =
+    target && charRange
+      ? {
+          char_range: charRange,
+          anchored_text: target.anchor.anchored_text,
+        }
+      : undefined;
   return {
     id: t.id,
     kind: "note",
@@ -17,6 +70,8 @@ function backendThreadToUiThread(t: BackendThread): Thread {
           : "submitted",
     createdAt: t.created,
     messages: t.messages,
+    draftOptions,
+    serverAnchor,
   };
 }
 
@@ -33,6 +88,9 @@ export function useServerThreads(
   const seqRef = useRef(0);
   useEffect(() => {
     if (!docPath) return;
+    // Threads only live on drafts. Skip the fetch and SSE subscription on main
+    // so the margin rail stays empty and no listThreads(ref=main) ever fires.
+    if (docRef === "main") return;
     const load = async () => {
       const mySeq = ++seqRef.current;
       try {
@@ -43,8 +101,10 @@ export function useServerThreads(
         if (!r.ok) return;
         const body = (await r.json()) as { threads: BackendThread[] };
         if (mySeq !== seqRef.current) return;
+        // Phase J: include accepted threads too so the remix action is
+        // reachable. Declined and archived threads stay hidden.
         const server = body.threads
-          .filter((t) => t.status === "open")
+          .filter((t) => t.status === "open" || t.status === "accepted")
           .map(backendThreadToUiThread);
         const serverIds = new Set(server.map((t) => t.id));
         setThreads((prev) => {
@@ -64,6 +124,11 @@ export function useServerThreads(
               autoFocusNote: local.autoFocusNote,
               anchor: local.anchor,
               structural: local.structural,
+              // draftOptions and serverAnchor are server-derived: always take
+              // the freshest copy from the server, ignoring any stale local
+              // snapshot.
+              draftOptions: s.draftOptions,
+              serverAnchor: s.serverAnchor,
             };
           });
           const merged = [

@@ -94,8 +94,32 @@ export const threadDraftSchema = z
       .string()
       .max(LIMITS.content)
       .describe("Proposed replacement markdown for this thread's anchor."),
+    name: z
+      .string()
+      .max(LIMITS.name)
+      .optional()
+      .describe(
+        "Optional leaf label. Set when the message carries multiple options.",
+      ),
   })
   .describe("Optional attached draft (counter-proposal / edit suggestion).");
+
+/**
+ * One option leaf in a multi-option `AttachDraftPayload` message. The name
+ * is required here because the UI needs a label per leaf when the reviewer
+ * is choosing between them.
+ */
+export const threadDraftOptionSchema = z.object({
+  name: z
+    .string()
+    .min(1)
+    .max(LIMITS.name)
+    .describe("Human-legible leaf name (shown in the option selector)."),
+  new_md: z
+    .string()
+    .max(LIMITS.content)
+    .describe("Proposed replacement markdown for this option."),
+});
 
 /** Shared bounded-content schema for Write/Edit tool payloads. */
 export const contentArg = z

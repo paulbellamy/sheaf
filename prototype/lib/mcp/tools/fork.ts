@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { Backend } from "../backend/index";
-import { authorArg, intentArg, pathArg } from "../schemas";
+import { authorArg, draftIdArg, intentArg, pathArg } from "../schemas";
 import { toToolError } from "../errors";
 
 /**
@@ -15,7 +15,7 @@ export function registerFork(server: McpServer, backend: Backend): void {
     {
       title: "Fork",
       description:
-        "Create one or more draft branches of a doc off main. Returns draft ids to pass as `ref` on subsequent Read/Write/Edit/Propose calls. Use n>1 to produce parallel variants for the reviewer to pick between.",
+        "Create one or more draft branches of a doc. Without `parent`, branches off main. With `parent` set to an existing draft id, creates sub-drafts that branch off the parent's current draft content (used for multi-option exploration on a thread). Returns draft ids to pass as `ref` on subsequent Read/Write/Edit/Propose calls. Use n>1 to produce parallel variants for the reviewer to pick between.",
       inputSchema: {
         path: pathArg,
         n: z
@@ -30,12 +30,17 @@ export function registerFork(server: McpServer, backend: Backend): void {
           "Optional natural-language intent for the draft; persisted with the draft for reviewer context. Editable at Propose time.",
         ),
         author: authorArg,
+        parent: draftIdArg
+          .optional()
+          .describe(
+            "Optional parent draft id. When set, the new drafts are sub-drafts that branch off the parent's current content (Phase G). When omitted, drafts branch off main. `path` must equal the parent's `base_path`.",
+          ),
       },
       annotations: { readOnlyHint: false, openWorldHint: false },
     },
-    async ({ path: p, n, intent, author }) => {
+    async ({ path: p, n, intent, author, parent }) => {
       try {
-        const ids = await backend.fork(p, n ?? 1, intent, author);
+        const ids = await backend.fork(p, n ?? 1, intent, author, parent);
         return {
           content: [
             {

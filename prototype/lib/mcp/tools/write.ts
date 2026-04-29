@@ -30,7 +30,7 @@ export function registerWrite(server: McpServer, backend: Backend): void {
           content: [
             {
               type: "text",
-              text: `wrote ${file_path} @ ${ref}  version=${result.version}`,
+              text: `wrote ${file_path} @ ${ref}  version_token=${result.version_token}`,
             },
           ],
           structuredContent: result,

@@ -86,8 +86,8 @@ export function HelpModal({ onClose }: Props) {
           <dl>
             <dt>pending</dt>
             <dd>new threads are drafts, visible only to you. a dotted rail marks the margin.</dd>
-            <dt>submit review</dt>
-            <dd>bundles all pending threads into one review with an optional cover note.</dd>
+            <dt>start draft</dt>
+            <dd>persists all pending threads onto a fresh draft and switches the editor into draft mode.</dd>
             <dt>accept / decline</dt>
             <dd>applied to submitted threads — accept replaces, decline reverts.</dd>
           </dl>

@@ -8,12 +8,20 @@ export type SheafErrorCode =
   | "invalid_path"
   | "invalid_ref"
   | "invalid_thread_id"
+  | "invalid_payload"
   | "draft_not_submitted"
   | "draft_already_submitted"
   | "merge_conflict"
+  | "accept_blocked"
   | "anchor_orphaned"
   | "grep_timeout"
   | "payload_too_large";
+
+export type MergeConflictDetail = {
+  path: string;
+  base_version: number;
+  main_version: number;
+};
 
 /**
  * Thrown by the sheaf backend and tool layer. Surfaces through MCP
@@ -24,11 +32,29 @@ export type SheafErrorCode =
  */
 export class SheafError extends Error {
   code: SheafErrorCode;
+  /**
+   * Phase I: populated only on `merge_conflict`. Lists the touched paths
+   * whose main has advanced past the draft's `base_version`, so callers can
+   * render a per-path conflict banner without re-querying.
+   */
+  conflicts?: MergeConflictDetail[];
+  /**
+   * Phase J: populated only on `accept_blocked`. Number of open threads on
+   * the draft at the moment Accept was attempted, so callers can render
+   * `<N> threads still open · cannot accept` without re-querying.
+   */
+  open_count?: number;
 
-  constructor(code: SheafErrorCode, message: string) {
+  constructor(
+    code: SheafErrorCode,
+    message: string,
+    extras?: { conflicts?: MergeConflictDetail[]; open_count?: number },
+  ) {
     super(message);
     this.name = "SheafError";
     this.code = code;
+    if (extras?.conflicts) this.conflicts = extras.conflicts;
+    if (extras?.open_count !== undefined) this.open_count = extras.open_count;
   }
 }
 
@@ -77,6 +103,8 @@ export const err = {
       "invalid_thread_id",
       `thread id must match thrd_<uuid>: got ${id}`,
     ),
+  invalidPayload: (reason: string) =>
+    new SheafError("invalid_payload", reason),
   draftNotSubmitted: (id: string, state: string) =>
     new SheafError(
       "draft_not_submitted",
@@ -87,11 +115,33 @@ export const err = {
       "draft_already_submitted",
       `draft ${id} is already submitted`,
     ),
-  mergeConflict: (path: string) =>
+  acceptBlocked: (openCount: number): SheafError =>
     new SheafError(
-      "merge_conflict",
-      `conflict merging ${path}; re-fork off latest main and retry`,
+      "accept_blocked",
+      `accept blocked: ${openCount} open thread${openCount === 1 ? "" : "s"} on the draft; resolve before accepting`,
+      { open_count: openCount },
     ),
+  mergeConflict: (
+    conflicts: MergeConflictDetail[] | string,
+  ): SheafError => {
+    if (typeof conflicts === "string") {
+      return new SheafError(
+        "merge_conflict",
+        `conflict merging ${conflicts}; re-fork off latest main and retry`,
+      );
+    }
+    const summary = conflicts
+      .map(
+        (c) =>
+          `${c.path}: main is at v${c.main_version}, draft based on v${c.base_version}`,
+      )
+      .join("; ");
+    return new SheafError(
+      "merge_conflict",
+      `conflict on ${conflicts.length} path${conflicts.length === 1 ? "" : "s"} (${summary}); re-fork off latest main and retry`,
+      { conflicts },
+    );
+  },
   anchorOrphaned: (threadId: string) =>
     new SheafError(
       "anchor_orphaned",
@@ -122,6 +172,7 @@ export function statusForCode(code: SheafErrorCode): number {
     case "invalid_path":
     case "invalid_ref":
     case "invalid_thread_id":
+    case "invalid_payload":
     case "edit_no_match":
     case "edit_ambiguous":
     case "payload_too_large":
@@ -132,6 +183,8 @@ export function statusForCode(code: SheafErrorCode): number {
     case "merge_conflict":
     case "anchor_orphaned":
       return 409;
+    case "accept_blocked":
+      return 422;
     case "grep_timeout":
       return 504;
     default: {
@@ -149,10 +202,10 @@ export function statusForCode(code: SheafErrorCode): number {
  */
 export function respondError(e: unknown): Response {
   if (e instanceof SheafError) {
-    return Response.json(
-      { error: e.message, code: e.code },
-      { status: statusForCode(e.code) },
-    );
+    const body: Record<string, unknown> = { error: e.message, code: e.code };
+    if (e.conflicts) body.conflicts = e.conflicts;
+    if (e.open_count !== undefined) body.open_count = e.open_count;
+    return Response.json(body, { status: statusForCode(e.code) });
   }
   if (e instanceof Error) {
     console.error("[ui] internal error", e);

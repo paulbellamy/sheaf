@@ -28,20 +28,40 @@ export function useThreadOutcome({
   setActiveThreadId,
   onClearContextFor,
 }: Params) {
-  const resolveOnServer = useCallback(async (threadId: string) => {
-    try {
-      await fetch(`/api/ui/threads/${threadId}/resolve`, { method: "POST" });
-    } catch {
-      /* Server-side resolution is best-effort. */
-    }
-  }, []);
+  const resolveOnServer = useCallback(
+    async (threadId: string, optionIndex?: number) => {
+      try {
+        // Phase F: when accepting a multi-option thread, the chosen leaf is
+        // applied server-side (the route reads `option_index` and writes the
+        // selected `new_md` to the draft ref before resolving). Single-leaf
+        // threads omit `option_index` and rely on the legacy client-side
+        // editor path for the visual ops.
+        const url =
+          optionIndex !== undefined
+            ? `/api/ui/threads/${threadId}/resolve?option_index=${optionIndex}`
+            : `/api/ui/threads/${threadId}/resolve`;
+        await fetch(url, { method: "POST" });
+      } catch {
+        /* Server-side resolution is best-effort. */
+      }
+    },
+    [],
+  );
 
   const applyOutcome = useCallback(
-    (threadId: string, kind: "accept" | "decline") => {
+    (
+      threadId: string,
+      kind: "accept" | "decline",
+      optionIndex?: number,
+    ) => {
       if (!editor) return;
       const target = threads.find((t) => t.id === threadId);
       if (!target) return;
-      if (target.state !== "pending") void resolveOnServer(threadId);
+      if (target.state !== "pending")
+        void resolveOnServer(
+          threadId,
+          kind === "accept" ? optionIndex : undefined,
+        );
 
       if (target.kind !== "redline") {
         if (
@@ -120,7 +140,8 @@ export function useThreadOutcome({
   );
 
   const acceptThread = useCallback(
-    (threadId: string) => applyOutcome(threadId, "accept"),
+    (threadId: string, optionIndex?: number) =>
+      applyOutcome(threadId, "accept", optionIndex),
     [applyOutcome],
   );
 

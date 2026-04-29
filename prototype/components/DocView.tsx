@@ -6,7 +6,12 @@ import { marked } from "marked";
 import { Manuscript } from "./Manuscript";
 import { subscribeBackendEvents } from "@/lib/hooks/useBackendEvents";
 
-type Loaded = { md: string; path: string; ref: string };
+type Loaded = {
+  md: string;
+  path: string;
+  ref: string;
+  version_counter: number;
+};
 
 const PROSE_SELECTOR = ".manuscript-prose";
 
@@ -202,6 +207,7 @@ export function DocView({
         md={data.md}
         docPath={path}
         docRef={docRef ?? "main"}
+        versionCounter={data.version_counter}
       />
     </div>
   );
