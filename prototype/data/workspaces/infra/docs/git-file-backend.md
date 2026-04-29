@@ -53,7 +53,7 @@ Flip state in the draft note to `submitted`, set `submitted_at`, `note`, `name`.
 
 ### Merge(draft_id)
 
-Fast-forward or squash-merge the draft branch into main. Policy: squash, because draft history is conversational and not interesting to main. Delete the branch; keep the note so history is traceable.
+Squash-merge the draft branch into main — draft history is conversational and not interesting to main. The squash commit message is generated from the draft: first line is the draft's `name`, body is the `intent` plus a bulleted list of the branch commits (`write(<path>)` / `edit(<path>)` / thread ops) so `git log` on main still surfaces what happened inside the draft without carrying every agent ping-pong commit. Delete the branch; keep the draft note so history is traceable.
 
 ### declineDraft(draft_id)
 
@@ -82,5 +82,4 @@ Case-2 sync (design §4.2) is the adapter: it takes a human's markdown edit and 
 
 ## Unresolved
 
-- Squash vs. merge commit on `Merge`. Squash loses conversational authorship; merge bloats main history with agent ping-pong.
 - GC policy for declined drafts. A week? A month? Configurable per-workspace?
