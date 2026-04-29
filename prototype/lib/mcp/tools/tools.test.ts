@@ -34,10 +34,13 @@ describe("backend.draftChanges on an empty draft", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("returns an empty array for a fresh draft with no writes", async () => {
+  it("returns the base_path entry for a fresh draft with no writes (main_md === draft_md)", async () => {
     const [draftId] = await backend.fork("workspaces/ws/docs/a.md", 1);
     const changes = await backend.draftChanges(draftId);
-    expect(changes).toEqual([]);
+    expect(changes).toHaveLength(1);
+    expect(changes[0].path).toBe("workspaces/ws/docs/a.md");
+    expect(changes[0].main_md).toBe("# a\n");
+    expect(changes[0].draft_md).toBe("# a\n");
   });
 
   it("returns pairs after a write", async () => {
@@ -972,5 +975,121 @@ describe("backend.fork(parent=...) sub-drafts (Phase G)", () => {
     const [parentId] = await backend.fork(DOC, 1);
     const declined = await backend._cascadeDeclineSubDrafts(parentId);
     expect(declined).toEqual([]);
+  });
+});
+
+describe("backend cross-cutting drafts (Phase H)", () => {
+  let root: string;
+  let backend: StubBackend;
+  const DOC_A = "workspaces/ws/docs/a.md";
+  const DOC_B = "workspaces/ws/docs/b.md";
+  const DOC_C = "workspaces/ws/docs/c.md";
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
+    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "# a\nbody\n",
+    );
+    await fs.writeFile(
+      path.join(root, "workspaces", "ws", "docs", "b.md"),
+      "# b\nbody\n",
+    );
+    await fs.writeFile(
+      path.join(root, "workspaces", "ws", "docs", "c.md"),
+      "# c\nbody\n",
+    );
+    backend = new StubBackend(root);
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  const touchesOf = async (id: string): Promise<string[]> => {
+    const drafts = await backend.listDrafts();
+    return drafts.find((d) => d.draft_id === id)!.touches;
+  };
+
+  it("editDoc against a path outside touches appends it", async () => {
+    const [draftId] = await backend.fork(DOC_A, 1);
+    expect(await touchesOf(draftId)).toEqual([DOC_A]);
+
+    await backend.editDoc(DOC_B, draftId, "# b", "# b v2", false);
+
+    expect(await touchesOf(draftId)).toEqual([DOC_A, DOC_B]);
+  });
+
+  it("writeDoc against a path outside touches appends it", async () => {
+    const [draftId] = await backend.fork(DOC_A, 1);
+
+    await backend.writeDoc(DOC_B, draftId, "# b v2\n");
+
+    expect(await touchesOf(draftId)).toEqual([DOC_A, DOC_B]);
+  });
+
+  it("addThread targeting a new path appends it to touches", async () => {
+    const [draftId] = await backend.fork(DOC_A, 1);
+
+    await backend.addThread({
+      ref: draftId,
+      targets: [{ path: DOC_B, char_range: { from: 0, to: 3 } }],
+      message: "rename",
+    });
+
+    expect(await touchesOf(draftId)).toEqual([DOC_A, DOC_B]);
+  });
+
+  it("does not duplicate a path written multiple times", async () => {
+    const [draftId] = await backend.fork(DOC_A, 1);
+
+    await backend.writeDoc(DOC_B, draftId, "# b v2\n");
+    await backend.writeDoc(DOC_B, draftId, "# b v3\n");
+    await backend.editDoc(DOC_B, draftId, "v3", "v4", false);
+
+    expect(await touchesOf(draftId)).toEqual([DOC_A, DOC_B]);
+  });
+
+  it("a multi-target thread spanning two new paths adds both", async () => {
+    const [draftId] = await backend.fork(DOC_A, 1);
+
+    await backend.addThread({
+      ref: draftId,
+      targets: [
+        { path: DOC_B, char_range: { from: 0, to: 3 } },
+        { path: DOC_C, char_range: { from: 0, to: 3 } },
+      ],
+      message: "cross-cutting rename",
+    });
+
+    const touches = await touchesOf(draftId);
+    expect(new Set(touches)).toEqual(new Set([DOC_A, DOC_B, DOC_C]));
+  });
+
+  it("draftChanges returns entries for every path in touches", async () => {
+    const [draftId] = await backend.fork(DOC_A, 1);
+    await backend.writeDoc(DOC_B, draftId, "# b v2\n");
+    await backend.addThread({
+      ref: draftId,
+      targets: [{ path: DOC_C, char_range: { from: 0, to: 3 } }],
+      message: "thread on c",
+    });
+
+    const changes = await backend.draftChanges(draftId);
+    const paths = changes.map((c) => c.path).sort();
+    expect(paths).toEqual([DOC_A, DOC_B, DOC_C].sort());
+
+    // The path with no override falls back to main_md on both sides.
+    const cEntry = changes.find((c) => c.path === DOC_C)!;
+    expect(cEntry.main_md).toBe("# c\nbody\n");
+    expect(cEntry.draft_md).toBe("# c\nbody\n");
+
+    // The edited path shows the override on draft_md.
+    const bEntry = changes.find((c) => c.path === DOC_B)!;
+    expect(bEntry.main_md).toBe("# b\nbody\n");
+    expect(bEntry.draft_md).toBe("# b v2\n");
   });
 });

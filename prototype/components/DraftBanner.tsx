@@ -113,6 +113,7 @@ export function DraftBanner({
   const displayName = data?.display_name ?? docRef;
   const baseVersion = data?.base_version;
   const openCount = data?.open_count ?? 0;
+  const touchesCount = data?.touches.length ?? 0;
   const acceptDisabled = busy || isLoading || openCount > 0 || !data;
   const acceptLabel =
     baseVersion !== undefined
@@ -131,6 +132,14 @@ export function DraftBanner({
         ) : null}
         <span className="draft-banner-sep">·</span>
         <span>{openCount} open</span>
+        {touchesCount > 1 ? (
+          <span
+            className="draft-banner-chip"
+            title={data?.touches.join("\n")}
+          >
+            cross-cutting · {touchesCount} docs
+          </span>
+        ) : null}
       </div>
       <div className="draft-banner-right">
         <button

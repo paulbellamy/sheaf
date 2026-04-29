@@ -416,6 +416,32 @@ export class StubBackend implements Backend {
     await writeFileNoFollow(p, JSON.stringify(meta, null, 2));
   }
 
+  /**
+   * Phase H: append `paths` to the draft's `touches` list (deduped). Loads,
+   * mutates, and persists meta inside the caller's lock — every call site
+   * (`writeDoc`, `editDoc`, `addThread`) is already holding `withLock`.
+   * No-op when every path is already tracked.
+   */
+  private async addTouches(
+    draftId: DraftId,
+    paths: DocPath[],
+  ): Promise<void> {
+    const meta = await this.loadDraftMeta(draftId);
+    const current = meta.touches ?? [meta.base_path];
+    const set = new Set(current);
+    let changed = false;
+    for (const p of paths) {
+      if (!set.has(p)) {
+        set.add(p);
+        current.push(p);
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    meta.touches = current;
+    await this.saveDraftMeta(meta);
+  }
+
   async listWorkspaces(): Promise<Workspace[]> {
     const wsRoot = path.join(this.root, "workspaces");
     try {
@@ -651,6 +677,7 @@ export class StubBackend implements Backend {
         const abs = this.absDraft(ref, p);
         await this.ensureDir(path.dirname(abs));
         await writeFileNoFollow(abs, content);
+        await this.addTouches(ref, [p]);
         const result: WriteResult = {
           version_token: `v-${sha(content).slice(0, 12)}`,
         };
@@ -699,6 +726,7 @@ export class StubBackend implements Backend {
         const abs = this.absDraft(ref, p);
         await this.ensureDir(path.dirname(abs));
         await writeFileNoFollow(abs, next);
+        await this.addTouches(ref, [p]);
         const result: WriteResult = {
           version_token: `v-${sha(next).slice(0, 12)}`,
         };
@@ -951,19 +979,24 @@ export class StubBackend implements Backend {
   async draftChanges(
     draftId: DraftId,
   ): Promise<{ path: DocPath; main_md: string; draft_md: string }[]> {
-    await this.loadDraftMeta(draftId);
+    const meta = await this.loadDraftMeta(draftId);
+    const touches = meta.touches ?? [meta.base_path];
     const draftRoot = path.join(this.root, ".drafts", draftId);
-    const files = await walk(draftRoot);
     const out: { path: DocPath; main_md: string; draft_md: string }[] = [];
-    for (const f of files) {
-      const rel = path.relative(draftRoot, f).replace(/\\/g, "/");
+    for (const rel of touches) {
       if (!rel.startsWith("workspaces/") || !rel.endsWith(".md")) continue;
-      const draft_md = await readFileNoFollow(f);
       let main_md = "";
       try {
         main_md = await readFileNoFollow(this.absMain(rel));
       } catch {
         main_md = "";
+      }
+      let draft_md = main_md;
+      try {
+        draft_md = await readFileNoFollow(safeJoin(draftRoot, rel));
+      } catch {
+        // No override on disk — the path was added to touches by addThread
+        // without an edit landing yet. Show main bytes on both sides.
       }
       out.push({ path: rel, main_md, draft_md });
     }
@@ -1164,6 +1197,12 @@ export class StubBackend implements Backend {
         ],
       };
       await this.saveThread(thread);
+      if (draftId) {
+        await this.addTouches(
+          draftId,
+          thread.targets.map((t) => t.path),
+        );
+      }
       this.emit({
         kind: "thread_changed",
         thread_id: id,

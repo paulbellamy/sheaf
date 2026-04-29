@@ -1162,6 +1162,16 @@ body {
   color: var(--muted);
 }
 
+.draft-banner-chip {
+  font-size: 0.75rem;
+  padding: 0.1rem 0.45rem;
+  background: var(--paper);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .draft-banner-right {
   display: inline-flex;
   align-items: center;
