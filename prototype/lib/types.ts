@@ -16,6 +16,16 @@ export type Thread = {
   createdAt: number;
   structural?: { label: string; range?: { from: number; to: number } };
   anchor?: { from: number; to: number };
+  /**
+   * Server-side anchor hint for threads hydrated from the backend. The server
+   * stores positions as MD char offsets, but the client uses ProseMirror
+   * positions; `getAnchorTop` resolves this lazily by text-searching the live
+   * PM doc for `anchored_text` (closest occurrence to `char_range.from`).
+   */
+  serverAnchor?: {
+    char_range: { from: number; to: number };
+    anchored_text: string;
+  };
   autoFocusNote?: boolean;
   collapsed?: boolean;
   /**

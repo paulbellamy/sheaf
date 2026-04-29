@@ -67,3 +67,44 @@ function findNearest(md: string, needle: string, hint: number): number {
     Math.abs(a - hint) <= Math.abs(b - hint) ? a : b,
   );
 }
+
+/**
+ * Inverse of {@link rangeToAnchor}: locate `anchoredText` inside the live PM
+ * doc and return PM positions for it. Used when hydrating server-persisted
+ * threads, whose stored char offsets are MD-relative and cannot be used
+ * directly with `editor.view.coordsAtPos`.
+ *
+ * `hintCharPos` is the MD char offset stored on the server; we project it
+ * into a PM-position hint by scaling against doc lengths and pick the match
+ * closest to that hint when there are multiple occurrences of the text.
+ */
+export function anchorToRange(
+  editor: Editor,
+  anchoredText: string,
+  hintCharPos: number,
+): { from: number; to: number } | null {
+  if (!anchoredText) return null;
+  const doc = editor.state.doc;
+  const fullText = doc.textBetween(0, doc.content.size, "\n", "\n");
+  if (!fullText.length) return null;
+  const ratio = fullText.length > 0 ? hintCharPos / fullText.length : 0;
+  const hintPmPos = Math.round(ratio * doc.content.size);
+
+  const matches: { from: number; to: number }[] = [];
+  doc.descendants((node, pos) => {
+    if (!node.isText || !node.text) return;
+    const text = node.text;
+    let idx = text.indexOf(anchoredText);
+    while (idx !== -1) {
+      matches.push({
+        from: pos + idx,
+        to: pos + idx + anchoredText.length,
+      });
+      idx = text.indexOf(anchoredText, idx + 1);
+    }
+  });
+  if (matches.length === 0) return null;
+  return matches.reduce((a, b) =>
+    Math.abs(a.from - hintPmPos) <= Math.abs(b.from - hintPmPos) ? a : b,
+  );
+}

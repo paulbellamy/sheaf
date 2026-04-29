@@ -29,8 +29,35 @@ function deriveDraftOptions(
   return undefined;
 }
 
+function decodeRelPos(
+  rel_pos: string,
+): { from: number; to: number } | null {
+  try {
+    const json =
+      typeof atob === "function"
+        ? atob(rel_pos)
+        : Buffer.from(rel_pos, "base64").toString("utf8");
+    const parsed = JSON.parse(json) as { from: unknown; to: unknown };
+    if (typeof parsed.from === "number" && typeof parsed.to === "number") {
+      return { from: parsed.from, to: parsed.to };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function backendThreadToUiThread(t: BackendThread): Thread {
   const draftOptions = deriveDraftOptions(t);
+  const target = t.targets[0];
+  const charRange = target ? decodeRelPos(target.anchor.rel_pos) : null;
+  const serverAnchor =
+    target && charRange
+      ? {
+          char_range: charRange,
+          anchored_text: target.anchor.anchored_text,
+        }
+      : undefined;
   return {
     id: t.id,
     kind: "note",
@@ -44,6 +71,7 @@ function backendThreadToUiThread(t: BackendThread): Thread {
     createdAt: t.created,
     messages: t.messages,
     draftOptions,
+    serverAnchor,
   };
 }
 
@@ -96,9 +124,11 @@ export function useServerThreads(
               autoFocusNote: local.autoFocusNote,
               anchor: local.anchor,
               structural: local.structural,
-              // draftOptions is server-derived: always take the freshest copy
-              // from the server, ignoring any stale local snapshot.
+              // draftOptions and serverAnchor are server-derived: always take
+              // the freshest copy from the server, ignoring any stale local
+              // snapshot.
               draftOptions: s.draftOptions,
+              serverAnchor: s.serverAnchor,
             };
           });
           const merged = [

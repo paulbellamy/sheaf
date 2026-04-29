@@ -19,6 +19,7 @@ import {
   tryIndent,
 } from "@/lib/editor-helpers";
 import { useFormattingDiff } from "@/lib/hooks/useFormattingDiff";
+import { anchorToRange } from "@/lib/md-anchor";
 import { useServerThreads } from "@/lib/hooks/useServerThreads";
 import { useStartDraft } from "@/lib/hooks/useStartDraft";
 import { useProposedEditHandlers } from "@/lib/hooks/useProposedEditHandlers";
@@ -403,9 +404,17 @@ export function Manuscript({
       if (!editor || !manuscriptRef.current) return null;
       const view = getThreadView(threadId);
       let pos = view?.del?.from ?? view?.ins?.from ?? null;
-      if (pos === null) {
-        const thread = threads.find((t) => t.id === threadId);
-        pos = thread?.anchor?.from ?? null;
+      const thread = pos === null ? threads.find((t) => t.id === threadId) : null;
+      if (pos === null && thread) {
+        pos = thread.anchor?.from ?? null;
+      }
+      if (pos === null && thread?.serverAnchor?.anchored_text) {
+        const range = anchorToRange(
+          editor,
+          thread.serverAnchor.anchored_text,
+          thread.serverAnchor.char_range.from,
+        );
+        pos = range?.from ?? null;
       }
       if (pos === null) return null;
       try {
