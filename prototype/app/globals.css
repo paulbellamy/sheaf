@@ -399,6 +399,99 @@ body {
   margin-right: 0.5rem;
 }
 
+.version-dropdown-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.page-header .version-badge-btn {
+  cursor: pointer;
+  font: inherit;
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+}
+
+.page-header .version-badge-btn:hover {
+  background: #e8e3d0;
+}
+
+.version-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 16rem;
+  background: var(--paper, #fdfbf3);
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  z-index: 50;
+  padding: 0.25rem 0;
+}
+
+.version-dropdown-empty {
+  padding: 0.5rem 0.75rem;
+  color: var(--muted);
+  font-style: italic;
+  font-size: 0.85rem;
+}
+
+.version-dropdown-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.version-dropdown-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.82rem;
+}
+
+.version-dropdown-row[data-current="true"] {
+  background: #f5f2e6;
+}
+
+.version-dropdown-label {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.version-dropdown-name {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  color: var(--ink);
+}
+
+.version-dropdown-time {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.version-dropdown-link {
+  color: var(--ink);
+  text-decoration: underline;
+  font-size: 0.78rem;
+}
+
+.version-dropdown-link:hover {
+  color: var(--accent, #8a4500);
+}
+
+.version-dropdown-currentmark {
+  color: var(--muted);
+  font-variant: small-caps;
+  letter-spacing: 0.04em;
+  font-size: 0.72rem;
+}
+
+.draft-banner-readonly {
+  background: #f5f2e6;
+}
+
 .page-header-right {
   display: inline-flex;
   align-items: center;

@@ -77,6 +77,19 @@ export type GrepResult =
   | { mode: "files_with_matches"; paths: DocPath[] }
   | { mode: "count"; counts: { path: DocPath; count: number }[] };
 
+/**
+ * One entry in a doc's version history. Phase K: populated on every
+ * `merge()` for each touched path. The earliest version produced by a
+ * merge is `from + 1`; the entry records that resulting version, the
+ * source draft, and when it landed. v1 (the initial state) has no entry —
+ * the dropdown renders it as plain text without a `view threads` link.
+ */
+export type VersionHistoryEntry = {
+  version: number;
+  draft_id: DraftId;
+  accepted_at: number;
+};
+
 export type DraftSummary = {
   draft_id: DraftId;
   base_path: DocPath;
@@ -296,6 +309,14 @@ export interface Backend {
   draftChanges(
     draftId: DraftId,
   ): Promise<{ path: DocPath; main_md: string; draft_md: string }[]>;
+
+  /**
+   * Phase K: per-doc version history. Entries are appended on every
+   * `merge()` for each touched path. The pre-merge version (v1 for an
+   * untouched doc) has no entry — the version dropdown renders it as
+   * plain text without an associated draft.
+   */
+  listVersionHistory(path: DocPath): Promise<VersionHistoryEntry[]>;
 
   listThreads(opts: {
     path?: DocPath;

@@ -38,6 +38,8 @@ import { StartDraftPanel } from "./StartDraftPanel";
 import { SelectionBubble } from "./SelectionBubble";
 import { DraftBanner } from "./DraftBanner";
 import { AgentDock } from "./AgentDock";
+import { VersionDropdown } from "./VersionDropdown";
+import { useDraftMeta } from "@/lib/hooks/useDraftMeta";
 
 const THREAD_IDLE_MS = 4000;
 
@@ -561,6 +563,18 @@ export function Manuscript({
   }, [editor, registerNoteThread]);
 
   const isDraftRef = docRef.startsWith("draft_");
+  const { data: draftMeta } = useDraftMeta(isDraftRef ? docRef : undefined);
+  const isHistoricalView = isDraftRef && draftMeta?.state === "accepted";
+  // When viewing an accepted draft, lock the editor. Selection bubble
+  // actions, StartDraftPanel, and DraftBanner accept/discard buttons are
+  // suppressed downstream; making the ProseMirror view non-editable
+  // covers stray keystroke routes (drag-drop, inputrules) that bypass the
+  // chrome.
+  useEffect(() => {
+    if (!editor) return;
+    editor.setEditable(!isHistoricalView);
+  }, [editor, isHistoricalView]);
+
   return (
     <>
       <header className="page-header">
@@ -568,10 +582,8 @@ export function Manuscript({
           {isDraftRef ? `draft · ${docPath ?? ""}` : "sheaf · redline prototype"}
         </span>
         <span className="page-header-right">
-          {versionCounter !== undefined && versionCounter > 0 ? (
-            <span className="version-badge" aria-label={`version ${versionCounter}`}>
-              v{versionCounter}
-            </span>
+          {versionCounter !== undefined && versionCounter > 0 && docPath ? (
+            <VersionDropdown path={docPath} currentVersion={versionCounter} />
           ) : null}
           <AgentDock />
           {!isDraftRef ? (
@@ -597,6 +609,8 @@ export function Manuscript({
           onDiscarded={navigateToMain}
           onAccepted={navigateToMain}
           onError={setSubmitError}
+          readOnly={isHistoricalView}
+          latestVersion={versionCounter}
         />
       ) : null}
       {submitError ? (
@@ -635,29 +649,33 @@ export function Manuscript({
           />
         ) : null}
       </div>
-      <SelectionBubble
-        editor={editor}
-        onComment={startNoteThread}
-        onStructuralMark={(label, range) => registerStructuralThread(label, range)}
-        onIndent={() => {
-          if (!editor) return;
-          tryIndent(editor.state, editor.view.dispatch, "in");
-          editor.view.focus();
-        }}
-        onOutdent={() => {
-          if (!editor) return;
-          tryIndent(editor.state, editor.view.dispatch, "out");
-          editor.view.focus();
-        }}
-      />
-      <StartDraftPanel
-        pendingCount={pendingThreads.length}
-        open={showReview}
-        onOpen={() => setShowReview(true)}
-        onClose={() => setShowReview(false)}
-        onStartDraft={startDraft}
-        pending={pendingThreads}
-      />
+      {!isHistoricalView ? (
+        <SelectionBubble
+          editor={editor}
+          onComment={startNoteThread}
+          onStructuralMark={(label, range) => registerStructuralThread(label, range)}
+          onIndent={() => {
+            if (!editor) return;
+            tryIndent(editor.state, editor.view.dispatch, "in");
+            editor.view.focus();
+          }}
+          onOutdent={() => {
+            if (!editor) return;
+            tryIndent(editor.state, editor.view.dispatch, "out");
+            editor.view.focus();
+          }}
+        />
+      ) : null}
+      {!isHistoricalView ? (
+        <StartDraftPanel
+          pendingCount={pendingThreads.length}
+          open={showReview}
+          onOpen={() => setShowReview(true)}
+          onClose={() => setShowReview(false)}
+          onStartDraft={startDraft}
+          pending={pendingThreads}
+        />
+      ) : null}
       <button
         className="help-fab"
         onClick={() => setShowHelp(true)}

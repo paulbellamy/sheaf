@@ -13,6 +13,7 @@ import { GET as draftIdGET } from "../../../app/api/ui/drafts/[id]/route";
 import { POST as acceptPOST } from "../../../app/api/ui/drafts/[id]/accept/route";
 import { POST as payloadPOST } from "../../../app/api/ui/threads/[id]/payload/route";
 import { POST as reopenPOST } from "../../../app/api/ui/threads/[id]/reopen/route";
+import { GET as versionsGET } from "../../../app/api/ui/doc/[...path]/versions/route";
 import { setBackend } from "../backend/factory";
 import type { BackendEvent } from "../backend";
 
@@ -1571,5 +1572,184 @@ describe("POST /api/ui/threads/[id]/reopen (Phase J)", () => {
       params: Promise.resolve({ id }),
     });
     expect(res.status).toBe(404);
+  });
+});
+
+describe("backend.merge populates version_history (Phase K)", () => {
+  let root: string;
+  let backend: StubBackend;
+  const DOC_A = "workspaces/ws/docs/a.md";
+  const DOC_B = "workspaces/ws/docs/b.md";
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
+    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "# a\nbody\n",
+    );
+    await fs.writeFile(
+      path.join(root, "workspaces", "ws", "docs", "b.md"),
+      "# b\nbody\n",
+    );
+    backend = new StubBackend(root);
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("appends an entry on single-doc merge with the new version, draft_id, and timestamp", async () => {
+    await backend.readDoc(DOC_A);
+    const [draftId] = await backend.fork(DOC_A, 1);
+    await backend.writeDoc(DOC_A, draftId, "# a v2\nbody\n");
+    await backend.propose(draftId);
+    const t0 = Date.now();
+    await backend.merge(draftId);
+
+    const history = await backend.listVersionHistory(DOC_A);
+    expect(history).toHaveLength(1);
+    expect(history[0].version).toBe(2);
+    expect(history[0].draft_id).toBe(draftId);
+    expect(history[0].accepted_at).toBeGreaterThanOrEqual(t0 - 1);
+  });
+
+  it("appends entries for every touched path on a cross-cutting merge", async () => {
+    await backend.readDoc(DOC_A);
+    await backend.readDoc(DOC_B);
+    const [draftId] = await backend.fork(DOC_A, 1);
+    await backend.writeDoc(DOC_A, draftId, "# a v2\nbody\n");
+    await backend.writeDoc(DOC_B, draftId, "# b v2\nbody\n");
+    await backend.propose(draftId);
+    await backend.merge(draftId);
+
+    const histA = await backend.listVersionHistory(DOC_A);
+    const histB = await backend.listVersionHistory(DOC_B);
+    expect(histA).toHaveLength(1);
+    expect(histB).toHaveLength(1);
+    expect(histA[0].draft_id).toBe(draftId);
+    expect(histB[0].draft_id).toBe(draftId);
+    expect(histA[0].version).toBe(2);
+    expect(histB[0].version).toBe(2);
+  });
+
+  it("accumulates entries across successive merges of the same doc", async () => {
+    await backend.readDoc(DOC_A);
+    const [d1] = await backend.fork(DOC_A, 1);
+    await backend.writeDoc(DOC_A, d1, "# a v2\nbody\n");
+    await backend.propose(d1);
+    await backend.merge(d1);
+
+    const [d2] = await backend.fork(DOC_A, 1);
+    await backend.writeDoc(DOC_A, d2, "# a v3\nbody\n");
+    await backend.propose(d2);
+    await backend.merge(d2);
+
+    const history = await backend.listVersionHistory(DOC_A);
+    expect(history.map((e) => e.version)).toEqual([2, 3]);
+    expect(history[0].draft_id).toBe(d1);
+    expect(history[1].draft_id).toBe(d2);
+  });
+
+  it("returns an empty history for a doc that has never been merged", async () => {
+    const history = await backend.listVersionHistory(DOC_A);
+    expect(history).toEqual([]);
+  });
+});
+
+describe("GET /api/ui/doc/[...path]/versions (Phase K)", () => {
+  let root: string;
+  let backend: StubBackend;
+  const DOC = "workspaces/ws/docs/a.md";
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
+    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "# a\nbody\n",
+    );
+    backend = new StubBackend(root);
+    setBackend(backend);
+  });
+
+  afterEach(async () => {
+    setBackend(null);
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("returns the current version with no entries on a fresh doc", async () => {
+    const req = new Request(`http://localhost/api/ui/doc/${DOC}/versions`);
+    const res = await versionsGET(req, {
+      params: Promise.resolve({ path: DOC.split("/") }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      path: string;
+      versions: { version: number; draft_id?: string; accepted_at?: number }[];
+    };
+    expect(body.path).toBe(DOC);
+    expect(body.versions).toEqual([{ version: 1 }]);
+  });
+
+  it("returns history entries for every accepted draft plus the current version", async () => {
+    await backend.readDoc(DOC);
+    const [d1] = await backend.fork(DOC, 1);
+    await backend.writeDoc(DOC, d1, "# a v2\nbody\n");
+    await backend.propose(d1);
+    await backend.merge(d1);
+
+    const req = new Request(`http://localhost/api/ui/doc/${DOC}/versions`);
+    const res = await versionsGET(req, {
+      params: Promise.resolve({ path: DOC.split("/") }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      versions: { version: number; draft_id?: string }[];
+    };
+    expect(body.versions).toHaveLength(2);
+    const v1 = body.versions.find((v) => v.version === 1);
+    const v2 = body.versions.find((v) => v.version === 2);
+    expect(v1).toEqual({ version: 1 });
+    expect(v2?.draft_id).toBe(d1);
+  });
+});
+
+describe("draft.state === 'accepted' for merged drafts (Phase K)", () => {
+  let root: string;
+  let backend: StubBackend;
+  const DOC = "workspaces/ws/docs/a.md";
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
+    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "# a\nbody\n",
+    );
+    backend = new StubBackend(root);
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("a merged draft reports state === 'accepted' so the editor renders read-only", async () => {
+    await backend.readDoc(DOC);
+    const [draftId] = await backend.fork(DOC, 1);
+    await backend.writeDoc(DOC, draftId, "# a v2\nbody\n");
+    await backend.propose(draftId);
+    await backend.merge(draftId);
+
+    const drafts = await backend.listDrafts();
+    const meta = drafts.find((d) => d.draft_id === draftId);
+    expect(meta).toBeDefined();
+    expect(meta!.state).toBe("accepted");
   });
 });

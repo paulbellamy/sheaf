@@ -21,6 +21,7 @@ import {
   type ThreadDraftBody,
   type ThreadId,
   type ThreadSummary,
+  type VersionHistoryEntry,
   type WriteResult,
   type Workspace,
 } from "./index";
@@ -247,6 +248,12 @@ export class StubBackend implements Backend {
    * metadata.
    */
   private versionCounters = new Map<DocPath, number>();
+  /**
+   * Phase K: per-doc accepted-draft history. Appended in `merge()` for each
+   * touched path. The initial v1 has no entry — readers should treat the
+   * absence as "no draft produced this version".
+   */
+  private versionHistory = new Map<DocPath, VersionHistoryEntry[]>();
 
   constructor(root: string, pluginRoot?: string) {
     this.root = root;
@@ -990,6 +997,7 @@ export class StubBackend implements Backend {
 
       // No conflicts: stage every planned write, then bump counters.
       const versions: { path: DocPath; from: number; to: number }[] = [];
+      const acceptedAt = Date.now();
       for (const plan of plans) {
         await this.ensureDir(path.dirname(plan.dest));
         await copyFileNoFollow(plan.src, plan.dest);
@@ -997,6 +1005,9 @@ export class StubBackend implements Backend {
         const to = from + 1;
         this.versionCounters.set(plan.rel, to);
         versions.push({ path: plan.rel, from, to });
+        const history = this.versionHistory.get(plan.rel) ?? [];
+        history.push({ version: to, draft_id: draftId, accepted_at: acceptedAt });
+        this.versionHistory.set(plan.rel, history);
       }
 
       meta.state = "accepted";
@@ -1040,6 +1051,12 @@ export class StubBackend implements Backend {
         state: "declined",
       });
     });
+  }
+
+  async listVersionHistory(p: DocPath): Promise<VersionHistoryEntry[]> {
+    assertWorkspacePath(p);
+    const entries = this.versionHistory.get(p) ?? [];
+    return entries.slice();
   }
 
   async draftChanges(

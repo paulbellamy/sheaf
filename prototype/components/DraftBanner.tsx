@@ -10,6 +10,15 @@ type Props = {
   onDiscarded?: () => void;
   onAccepted?: () => void;
   onError?: (msg: string) => void;
+  /**
+   * Phase K: when true, the draft is `state === "accepted"` and we're
+   * viewing it for historical context only. The banner replaces its
+   * action buttons with a `viewing v<N> · v<latest> is current` message
+   * and accept/discard are suppressed.
+   */
+  readOnly?: boolean;
+  /** Phase K: current main version of `base_path`, used in the read-only label. */
+  latestVersion?: number;
 };
 
 const COPIED_VISIBLE_MS = 1500;
@@ -42,6 +51,8 @@ export function DraftBanner({
   onDiscarded,
   onAccepted,
   onError,
+  readOnly = false,
+  latestVersion,
 }: Props) {
   const { data, isLoading } = useDraftMeta(docRef);
   const [copied, setCopied] = useState(false);
@@ -50,8 +61,40 @@ export function DraftBanner({
   const [success, setSuccess] = useState<AcceptVersion[] | null>(null);
   const [conflicts, setConflicts] = useState<ConflictDetail[] | null>(null);
   const [blocked, setBlocked] = useState<AcceptBlocked | null>(null);
+  const [producedVersion, setProducedVersion] = useState<number | null>(null);
   const copiedTimerRef = useRef<number | null>(null);
   const successTimerRef = useRef<number | null>(null);
+
+  // Phase K: in read-only mode, look up which version this draft produced
+  // for `docPath` by walking the per-doc history. Only fires for accepted
+  // drafts; historical drafts that never landed (declined) leave the value
+  // null and the banner falls back to the docRef.
+  useEffect(() => {
+    if (!readOnly) {
+      setProducedVersion(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await fetch(
+          `/api/ui/doc/${docPath}/versions`,
+          { cache: "no-store" },
+        );
+        if (cancelled || !r.ok) return;
+        const body = (await r.json()) as {
+          versions: { version: number; draft_id?: string }[];
+        };
+        const match = body.versions.find((v) => v.draft_id === docRef);
+        if (!cancelled) setProducedVersion(match?.version ?? null);
+      } catch {
+        /* silent — read-only label gracefully degrades */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [readOnly, docPath, docRef]);
 
   useEffect(() => {
     return () => {
@@ -178,6 +221,26 @@ export function DraftBanner({
                 .map((v) => `${v.path}: v${v.from} → v${v.to}`)
                 .join(" · ")}
             </span>
+          ) : null}
+        </div>
+      </div>
+    );
+  }
+
+  if (readOnly) {
+    const viewingLabel =
+      producedVersion !== null
+        ? `viewing v${producedVersion}`
+        : `viewing ${displayName}`;
+    return (
+      <div className="draft-banner draft-banner-readonly" role="status">
+        <div className="draft-banner-left">
+          <span className="draft-banner-name">{viewingLabel}</span>
+          {latestVersion !== undefined ? (
+            <>
+              <span className="draft-banner-sep">·</span>
+              <span>v{latestVersion} is current</span>
+            </>
           ) : null}
         </div>
       </div>
