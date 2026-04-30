@@ -1,6 +1,6 @@
 ---
 name: notion-watcher
-description: React to new comments on a Notion page as they arrive, and respond by editing the page, posting a proposal, asking a clarifying question, or sketching a plan — whichever the comment calls for. Use when the user asks the agent to watch a Notion page, react to comments live, or stay reactive to a Notion doc while idle. Also use when the user says "watch this Notion page", "respond to comments on this doc", or pastes a Notion page URL/ID and asks the agent to engage with it.
+description: React to live changes on a Notion page — both new comments and direct page edits — so the user and the agent can edit the doc in parallel and stay in sync. The agent responds by editing, proposing, asking, or planning depending on what the comment or edit calls for. Use when the user asks the agent to watch a Notion page, collaborate on a doc live, react to comments, or stay reactive to a Notion page while idle. Also use when the user says "watch this Notion page", "respond to comments on this doc", or pastes a Notion page URL/ID and asks the agent to engage with it.
 allowed-tools:
   - Bash(${CLAUDE_PLUGIN_ROOT}/scripts/notion-watch.mjs:*)
   - Bash(node:*)
@@ -8,20 +8,68 @@ allowed-tools:
   - TaskStop
 ---
 
-# Notion comment watcher
+# Notion page watcher
 
-Use this skill when the user wants the agent to react to comments on a Notion page in near real-time — without having to type a message to trigger each turn.
+Use this skill when the user wants the agent to collaborate on a Notion page in near real-time — reacting to comments and to direct page edits without having to type a message to trigger each turn.
 
 ## How it works
 
-`scripts/notion-watch.mjs` polls a single Notion page every 10 seconds via the `notion` MCP server (which must be configured in `.mcp.json`). It emits one JSON line per *new* comment to stdout. Claude Code's `Monitor` tool treats each line as a notification that wakes an idle session.
+`scripts/notion-watch.mjs` polls a single Notion page every 10 seconds via the Notion REST API (using the same auth as the `notion` MCP server). It emits one JSON line per event to stdout. Claude Code's `Monitor` tool treats each line as a notification that wakes an idle session.
 
-State is kept in `.context/notion-seen-<page_id>.json`, so comments seen in earlier runs do not re-fire.
+State is kept in `.context/notion-seen-<page_id>.json`, so events seen in earlier runs do not re-fire.
 
-Event shape:
+Two event kinds, both shaped to match [Notion's webhook envelope](https://developers.notion.com/reference/webhooks-events-delivery) — a `x_sheaf` extension carries inline content snapshots that real Notion webhooks omit:
 
+**`page.content_updated`** — one event per debounced burst of block edits (see "Debouncing" below).
+
+```json
+{
+  "id": "<uuid>",
+  "timestamp": "<iso>",
+  "workspace_id": "<uuid|null>",
+  "type": "page.content_updated",
+  "authors": [{ "id": "<user-uuid>", "type": "person" }],
+  "attempt_number": 1,
+  "entity": { "id": "<page-uuid>", "type": "page" },
+  "data": {
+    "updated_blocks": [{ "id": "<block-uuid>", "type": "block" }],
+    "parent": { "id": "<page-uuid>", "type": "page" }
+  },
+  "x_sheaf": {
+    "source": "polling",
+    "blocks": [{
+      "id": "<block-uuid>",
+      "action": "added|updated|removed",
+      "block_type": "paragraph",
+      "last_edited_time": "<iso>",
+      "last_edited_by_id": "<user-uuid>",
+      "content": { /* type-keyed Notion block payload, or null for removed */ }
+    }]
+  }
+}
 ```
-{"kind":"comment_created","page_id":"<id>","comment_id":"<id>","discussion_id":"<id>","parent_block_id":"<id>","author_id":"<id>","body":"<text>"}
+
+**`comment.created`** — one event per new comment, no debounce.
+
+```json
+{
+  "id": "<uuid>",
+  "timestamp": "<iso>",
+  "workspace_id": "<uuid|null>",
+  "type": "comment.created",
+  "authors": [{ "id": "<user-uuid>", "type": "person" }],
+  "attempt_number": 1,
+  "entity": { "id": "<comment-uuid>", "type": "comment" },
+  "data": {
+    "page_id": "<page-uuid>",
+    "parent": { "id": "<block-or-page-uuid>", "type": "block|page" }
+  },
+  "x_sheaf": {
+    "source": "polling",
+    "discussion_id": "<uuid|null>",
+    "body": "<plain text>"
+  }
+}
 ```
 
 ## Usage
@@ -31,31 +79,73 @@ Start the watcher with `Monitor` at the beginning of a reactive session, passing
 ```
 Monitor({
   command: "node ${CLAUDE_PLUGIN_ROOT}/scripts/notion-watch.mjs <page_id_or_url>",
-  description: "notion page comments",
+  description: "notion page edits + comments",
   persistent: true,
 })
 ```
 
-The watcher accepts a bare UUID (`12345678-90ab-cdef-1234-567890abcdef`), a 32-char hex id, or a full Notion URL (`https://www.notion.so/Title-1234567890abcdef1234567890abcdef`); it normalizes internally so the same page maps to one state file regardless of input form.
+The watcher accepts a bare UUID (`12345678-90ab-cdef-1234-567890abcdef`), a 32-char hex id, or a full Notion URL.
 
 To watch multiple pages, run multiple `Monitor` instances — one per page.
 
 Stop with `TaskStop` when the reactive session ends.
 
+## On session start
+
+The watcher does **not** replay existing state — first poll snapshots silently and only emits deltas going forward. So immediately after starting `Monitor`, fetch the current page (`notion-fetch`) and existing open comments (`notion-get-comments`) once to seed your context. Everything after that arrives via the event stream.
+
+## Recognizing your own writes
+
+The watcher cannot tell your edits apart from the user's — the auth identity may be the same person if the user is on a personal OAuth token. **You are the only thing that knows what you just wrote.** Filter accordingly.
+
+Maintain a small **recent-writes log** in your working context. Every time you call `notion-update-page` or `notion-create-comment`, record `{block_id or comment_id, content fingerprint, time}`. Keep the last ~20 entries; older entries can age out.
+
+On each `page.content_updated`, walk `x_sheaf.blocks[]`:
+
+- If a block ID matches a recent self-write AND the new `content` matches what you wrote (modulo trivial whitespace), drop it from the burst — it's your own echo.
+- Whatever's left is the user's edit. React to that.
+
+On each `comment.created`, compare `entity.id` and `x_sheaf.body` to your recent-comments log. Match → ignore.
+
+If the burst is empty after filtering, do nothing. `authors[]` and `last_edited_by_id` are useful supplementary signals (especially when multiple humans are on the page) but not load-bearing for echo cancellation.
+
+## Debouncing
+
+Block edits are coalesced. The watcher holds pending changes until the user has been quiet for ~5s, or the burst has been running for ~30s, then flushes one event listing all changed blocks. So:
+
+- One event per editing burst, not per keystroke.
+- A single typo fix arrives ~5s after the user stops typing.
+- A long continuous edit gets flushed every ~30s while still being typed.
+
+Comments are **not** debounced — each comment fires its own event immediately.
+
+## Reacting to a page edit
+
+After echo-filtering, if a `page.content_updated` event has remaining changes, use `x_sheaf.blocks[*].content` to update your model directly. (If `x_sheaf` is absent — a future world where this skill consumes real Notion webhooks — fall back to `notion-fetch` per block id.)
+
+Pick **one** response per burst, not per block:
+
+- **Silent merge.** User revised their own prose. Update your mental model, no reply.
+- **Acknowledge.** User accepted/rejected something you proposed. Reply briefly on the relevant `discussion_id`.
+- **Reconcile.** User edited a block where you had a pending proposal. Drop the proposal; address the new state.
+- **Question.** The edit creates ambiguity with an earlier instruction. Ask one focused question.
+
+Default is silent merge. Don't comment on every burst.
+
 ## Responding to a comment
 
-On each notification, you have the full `notion` MCP toolset (`notion-fetch`, `notion-get-comments`, `notion-create-comment`, `notion-update-page`, `notion-search`, ...). What you do depends on what the comment is asking. Pick one:
+Pick one:
 
-- **Edit the block.** The comment is an unambiguous mechanical instruction ("fix this typo", "rename X to Y"). Apply the change with `notion-update-page`, then `notion-create-comment` on the same `discussion_id` saying briefly what you did. The user reverts via Notion's page history if they dislike it.
-- **Propose a rewrite.** The comment asks for substantive prose change ("rework this paragraph", "tighten §3"). Post the proposed replacement inside a code block in a reply on the same `discussion_id`. Do not edit the page until the user confirms.
-- **Ask a clarifying question.** The comment is ambiguous ("tighten this" with no target length, "rework §4" with no angle). Reply with one focused question. Skip the comment for now; the user's reply will re-fire the loop.
-- **Sketch a plan.** The comment is too broad to address in one go ("rework middle §3–§5"). Reply with a short numbered plan, then wait for the user to greenlight or split the work.
+- **Edit the block.** Comment is an unambiguous mechanical instruction ("fix this typo", "rename X to Y"). Apply with `notion-update-page`, then `notion-create-comment` on the same `discussion_id` briefly noting what you did. User reverts via Notion's page history if they dislike it.
+- **Propose a rewrite.** Comment asks for substantive prose change ("rework this paragraph", "tighten §3"). Post the proposed replacement inside a code block in a reply on the same `discussion_id`. Do not edit until the user confirms.
+- **Ask a clarifying question.** Comment is ambiguous ("tighten this" with no target length). Reply with one focused question.
+- **Sketch a plan.** Comment is too broad to address in one go ("rework §3–§5"). Reply with a short numbered plan, then wait for greenlight or splitting.
 
 When in doubt, prefer proposing over directly editing — proposals are reviewable; edits land immediately.
 
-## Reading context first
+## Reading context
 
-Before responding, fetch the surrounding block via `notion-fetch` so you understand what's being commented on. Notion API anchors comments at block level, not character range — if the user wants precision, they'll quote the snippet inside the comment body.
+Notion anchors comments at block level, not character range — if the user wants precision, they'll quote the snippet inside the comment body. For page edits, `x_sheaf.blocks[*].content` is the new state; if you need surrounding context, `notion-fetch` the parent.
 
 ## Stop conditions
 
@@ -65,6 +155,6 @@ Before responding, fetch the surrounding block via `notion-fetch` so you underst
 
 ## Preconditions
 
-- One of: `NOTION_TOKEN` set in the shell that launched Claude Code, OR Claude Code has an authorized Notion MCP connection at `~/.config/mcp/auth/notion.json` (run `claude mcp` once to set it up). The watcher prefers `NOTION_TOKEN` and falls back to the OAuth bearer.
-- The Notion integration (or Claude's OAuth app) has been added to the watched page via Notion's "Connections" menu (otherwise comments are not visible).
+- `NOTION_TOKEN` set to a Notion internal integration secret in the shell that launched Claude Code. The watcher hits `api.notion.com` directly for raw block data, so Claude Code's hosted-MCP OAuth bearer is not sufficient — it has to be an integration secret.
+- The integration has been added to the watched page via Notion's "Connections" menu (otherwise the API can't see the page).
 - Node 20+ on the agent host.

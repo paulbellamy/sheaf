@@ -1,29 +1,36 @@
 #!/usr/bin/env node
-// Polls Notion comments on a page and emits one compact JSON line per
-// *new* comment to stdout. Intended as the stdin of Claude Code's
-// `Monitor` tool so an idle agent wakes on each comment.
+// Polls a Notion page directly via the Notion REST API and emits one
+// JSON line per event to stdout. Intended as the stdin of Claude Code's
+// `Monitor` tool so an idle agent wakes on each event.
+//
+// Two event kinds, both shaped to match Notion's webhook envelope
+// (https://developers.notion.com/reference/webhooks-events-delivery)
+// with an `x_sheaf` extension carrying inline content snapshots:
+//
+//   - page.content_updated   one per debounced burst of block edits
+//   - comment.created        one per new comment, no debounce
 //
 // Usage:
 //   node .claude-plugin/scripts/notion-watch.mjs <page_id_or_url>
 //
-// Auth (in order of preference):
-//   1. NOTION_TOKEN env var — spawns @notionhq/notion-mcp-server over
-//      stdio with that integration secret.
-//   2. ~/.config/mcp/auth/notion.json — the OAuth bearer Claude Code
-//      already holds for the hosted Notion MCP. Used when NOTION_TOKEN
-//      is unset; talks to https://mcp.notion.com/mcp over HTTP.
+// Auth: NOTION_TOKEN env var. Must be a Notion integration token (internal
+// integration secret or a public integration's OAuth access_token issued
+// directly by Notion) — these authenticate against api.notion.com. The
+// OAuth bearer Claude Code holds for the hosted MCP at mcp.notion.com is
+// scoped to that service only and will not work here.
+//
+// Optional: NOTION_WORKSPACE_ID populates the envelope's workspace_id.
+// Tunables: SHEAF_POLL_MS, SHEAF_DEBOUNCE_QUIET_MS, SHEAF_DEBOUNCE_MAX_MS,
+// SHEAF_MAX_BACKOFF_MS.
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import {
   existsSync,
   mkdirSync,
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname } from "node:path";
+import { randomUUID } from "node:crypto";
 
 const rawArg = process.argv[2];
 const pageId = rawArg ? parsePageId(rawArg) : null;
@@ -32,74 +39,51 @@ if (!pageId) {
   process.exit(2);
 }
 
-const POLL_MS = 10_000;
-const MAX_BACKOFF_MS = 60_000;
+const POLL_MS           = num("SHEAF_POLL_MS",           10_000);
+const DEBOUNCE_QUIET_MS = num("SHEAF_DEBOUNCE_QUIET_MS",  5_000);
+const DEBOUNCE_MAX_MS   = num("SHEAF_DEBOUNCE_MAX_MS",   30_000);
+const MAX_BACKOFF_MS    = num("SHEAF_MAX_BACKOFF_MS",    60_000);
+
+if (!process.env.NOTION_TOKEN) {
+  process.stderr.write(
+    "NOTION_TOKEN is not set. Create a Notion internal integration\n" +
+    "(Settings → Integrations → New internal integration), grant it page\n" +
+    "access via the page's Connections menu, then export NOTION_TOKEN=ntn_...\n",
+  );
+  process.exit(2);
+}
+
+const NOTION = "https://api.notion.com/v1";
+const HEADERS = {
+  "Authorization": `Bearer ${process.env.NOTION_TOKEN}`,
+  "Notion-Version": "2022-06-28",
+  "Content-Type": "application/json",
+};
+
 const stateFile = `.context/notion-seen-${pageId}.json`;
 mkdirSync(dirname(stateFile), { recursive: true });
 
-const seen = new Set(loadSeen());
+const state = loadState();
+const seenComments = new Set(state.comments);
+const blockSnapshot = new Map(Object.entries(state.blocks));
 
-const transport = selectTransport();
-
-const client = new Client(
-  { name: "sheaf-notion-watcher", version: "0.2.0" },
-  { capabilities: {} },
-);
-
-try {
-  await client.connect(transport);
-} catch (err) {
-  if (isUnauthorized(err)) {
-    process.stderr.write(
-      "Claude MCP Notion token rejected — run `claude mcp` to re-auth, or set NOTION_TOKEN.\n",
-    );
-    process.exit(2);
-  }
-  throw err;
-}
-
-const getCommentsTool = await findGetCommentsTool();
-const idArgName = pickIdArg(getCommentsTool);
-const extraArgs = {};
-const commentsProps = getCommentsTool.inputSchema?.properties ?? {};
-if ("include_all_blocks" in commentsProps) extraArgs.include_all_blocks = true;
-
-const shutdown = async () => {
-  try {
-    await client.close();
-  } catch {}
-  process.exit(0);
+const buffer = {
+  blocks: new Map(),
+  authors: new Set(),
+  firstChangeAt: 0,
+  lastChangeAt: 0,
 };
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+
+const workspaceId = await resolveWorkspaceId();
+
+process.on("SIGINT", () => process.exit(0));
+process.on("SIGTERM", () => process.exit(0));
 
 let backoffMs = POLL_MS;
 
 while (true) {
   try {
-    const result = await client.callTool({
-      name: getCommentsTool.name,
-      arguments: { [idArgName]: pageId, ...extraArgs },
-    });
-    if (result.isError) {
-      throw new Error(`tool error: ${textOf(result)}`);
-    }
-    for (const comment of parseComments(result)) {
-      if (!comment.id || seen.has(comment.id)) continue;
-      seen.add(comment.id);
-      process.stdout.write(
-        JSON.stringify({
-          kind: "comment_created",
-          page_id: pageId,
-          comment_id: comment.id,
-          discussion_id: comment.discussion_id ?? null,
-          parent_block_id: comment.parent_block_id ?? null,
-          author_id: comment.author_id ?? null,
-          body: comment.body ?? "",
-        }) + "\n",
-      );
-    }
-    persistSeen();
+    await pollOnce();
     backoffMs = POLL_MS;
   } catch (err) {
     process.stderr.write(
@@ -110,37 +94,262 @@ while (true) {
   await sleep(backoffMs);
 }
 
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
+async function pollOnce() {
+  const page = await notion(`/pages/${pageId}`);
+  const pageEditedAt = page.last_edited_time;
+
+  if (pageEditedAt !== state.page_last_edited_time) {
+    const blocks = await walkBlocks(pageId);
+    diffBlocksIntoBuffer(blocks);
+    state.page_last_edited_time = pageEditedAt;
+    rewriteBlockSnapshot(blocks);
+  }
+
+  maybeFlushPageBurst();
+  await pollComments();
+
+  if (!state.started) state.started = true;
+  persistState();
 }
 
-function loadSeen() {
-  if (!existsSync(stateFile)) return [];
+async function walkBlocks(rootId) {
+  const out = [];
+  let cursor;
+  do {
+    const params = { page_size: 100 };
+    if (cursor) params.start_cursor = cursor;
+    const result = await notion(`/blocks/${rootId}/children`, params);
+    for (const b of result.results ?? []) {
+      out.push({
+        id: b.id,
+        type: b.type,
+        last_edited_time: b.last_edited_time,
+        last_edited_by_id: b.last_edited_by?.id ?? null,
+        content: b.type ? b[b.type] ?? null : null,
+      });
+      if (b.has_children) {
+        out.push(...await walkBlocks(b.id));
+      }
+    }
+    cursor = result.has_more ? result.next_cursor : undefined;
+  } while (cursor);
+  return out;
+}
+
+function diffBlocksIntoBuffer(blocks) {
+  const currentIds = new Set(blocks.map((b) => b.id));
+  const deltas = [];
+
+  for (const b of blocks) {
+    const prev = blockSnapshot.get(b.id);
+    if (!prev) {
+      deltas.push({ ...b, action: "added" });
+    } else if (prev !== b.last_edited_time) {
+      deltas.push({ ...b, action: "updated" });
+    }
+  }
+  for (const id of blockSnapshot.keys()) {
+    if (!currentIds.has(id)) {
+      deltas.push({
+        id,
+        type: null,
+        last_edited_time: null,
+        last_edited_by_id: null,
+        content: null,
+        action: "removed",
+      });
+    }
+  }
+
+  if (deltas.length === 0) return;
+  if (!state.started) return;
+
+  const now = Date.now();
+  if (buffer.blocks.size === 0) buffer.firstChangeAt = now;
+  buffer.lastChangeAt = now;
+
+  for (const d of deltas) {
+    buffer.blocks.set(d.id, {
+      id: d.id,
+      action: d.action,
+      block_type: d.type,
+      last_edited_time: d.last_edited_time,
+      last_edited_by_id: d.last_edited_by_id,
+      content: d.content,
+    });
+    if (d.last_edited_by_id) buffer.authors.add(d.last_edited_by_id);
+  }
+}
+
+function rewriteBlockSnapshot(blocks) {
+  blockSnapshot.clear();
+  for (const b of blocks) blockSnapshot.set(b.id, b.last_edited_time);
+}
+
+function maybeFlushPageBurst() {
+  if (buffer.blocks.size === 0) return;
+  const now = Date.now();
+  const quiet = now - buffer.lastChangeAt >= DEBOUNCE_QUIET_MS;
+  const ceiling = now - buffer.firstChangeAt >= DEBOUNCE_MAX_MS;
+  if (!quiet && !ceiling) return;
+
+  emit({
+    id: randomUUID(),
+    timestamp: new Date(now).toISOString(),
+    workspace_id: workspaceId,
+    type: "page.content_updated",
+    authors: [...buffer.authors].map((id) => ({ id, type: "person" })),
+    attempt_number: 1,
+    entity: { id: pageId, type: "page" },
+    data: {
+      updated_blocks: [...buffer.blocks.values()].map((b) => ({
+        id: b.id,
+        type: "block",
+      })),
+      parent: { id: pageId, type: "page" },
+    },
+    x_sheaf: {
+      source: "polling",
+      blocks: [...buffer.blocks.values()].map((b) => ({
+        id: b.id,
+        action: b.action,
+        block_type: b.block_type,
+        last_edited_time: b.last_edited_time,
+        last_edited_by_id: b.last_edited_by_id,
+        content: b.action === "removed" ? null : b.content,
+      })),
+    },
+  });
+
+  buffer.blocks.clear();
+  buffer.authors.clear();
+  buffer.firstChangeAt = 0;
+  buffer.lastChangeAt = 0;
+}
+
+async function pollComments() {
+  let cursor;
+  const fresh = [];
+  do {
+    const params = { block_id: pageId, page_size: 100 };
+    if (cursor) params.start_cursor = cursor;
+    const result = await notion("/comments", params);
+    for (const c of result.results ?? []) {
+      if (!c.id || seenComments.has(c.id)) continue;
+      seenComments.add(c.id);
+      if (state.started) fresh.push(c);
+    }
+    cursor = result.has_more ? result.next_cursor : undefined;
+  } while (cursor);
+
+  for (const c of fresh) {
+    const parentBlock = c.parent?.block_id ?? c.parent?.page_id ?? null;
+    const parentType = c.parent?.block_id
+      ? "block"
+      : c.parent?.page_id
+        ? "page"
+        : null;
+    emit({
+      id: randomUUID(),
+      timestamp: new Date().toISOString(),
+      workspace_id: workspaceId,
+      type: "comment.created",
+      authors: c.created_by?.id
+        ? [{ id: c.created_by.id, type: c.created_by.type ?? "person" }]
+        : [],
+      attempt_number: 1,
+      entity: { id: c.id, type: "comment" },
+      data: {
+        page_id: pageId,
+        parent: parentBlock ? { id: parentBlock, type: parentType } : null,
+      },
+      x_sheaf: {
+        source: "polling",
+        discussion_id: c.discussion_id ?? null,
+        body: extractCommentBody(c),
+      },
+    });
+  }
+}
+
+function extractCommentBody(c) {
+  if (typeof c.body === "string") return c.body;
+  if (Array.isArray(c.rich_text)) {
+    return c.rich_text.map((rt) => rt.plain_text ?? "").join("");
+  }
+  return "";
+}
+
+function emit(event) {
+  process.stdout.write(JSON.stringify(event) + "\n");
+}
+
+async function notion(path, params) {
+  const url = new URL(`${NOTION}${path}`);
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
+    }
+  }
+  const res = await fetch(url, { headers: HEADERS });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`notion ${path}: ${res.status} ${text.slice(0, 300)}`);
+  }
+  return res.json();
+}
+
+async function resolveWorkspaceId() {
+  if (process.env.NOTION_WORKSPACE_ID) return process.env.NOTION_WORKSPACE_ID;
+  let me;
   try {
-    return JSON.parse(readFileSync(stateFile, "utf8"));
+    me = await notion("/users/me");
+  } catch (err) {
+    if (/\b401\b/.test(err.message)) {
+      process.stderr.write(
+        "NOTION_TOKEN was rejected by api.notion.com (401 unauthorized).\n" +
+        "Note: the OAuth bearer Claude Code uses for the hosted Notion MCP\n" +
+        "is scoped to mcp.notion.com and will not work here. Use a Notion\n" +
+        "internal integration secret (ntn_...) instead.\n",
+      );
+      process.exit(2);
+    }
+    process.stderr.write(`workspace_id discovery failed: ${err.message}\n`);
+    return null;
+  }
+  return me.bot?.workspace_id ?? null;
+}
+
+function loadState() {
+  const defaults = {
+    version: 1,
+    started: false,
+    page_last_edited_time: null,
+    comments: [],
+    blocks: {},
+  };
+  if (!existsSync(stateFile)) return defaults;
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync(stateFile, "utf8"));
   } catch {
-    return [];
+    return defaults;
   }
+  if (Array.isArray(raw)) {
+    return { ...defaults, comments: raw };
+  }
+  return {
+    ...defaults,
+    ...raw,
+    comments: Array.isArray(raw.comments) ? raw.comments : [],
+    blocks: raw.blocks && typeof raw.blocks === "object" ? raw.blocks : {},
+  };
 }
 
-function persistSeen() {
-  writeFileSync(stateFile, JSON.stringify([...seen]));
-}
-
-async function findGetCommentsTool() {
-  const { tools } = await client.listTools();
-  const candidates = ["notion-get-comments", "get-comments", "retrieve-comments"];
-  for (const name of candidates) {
-    const t = tools.find((tt) => tt.name === name);
-    if (t) return t;
-  }
-  const fuzzy = tools.find((t) => /comments?/.test(t.name) && /get|list|retrieve/.test(t.name));
-  if (fuzzy) return fuzzy;
-  throw new Error(
-    `notion-mcp-server exposes no comment-listing tool. Available: ${tools
-      .map((t) => t.name)
-      .join(", ")}`,
-  );
+function persistState() {
+  state.comments = [...seenComments];
+  state.blocks = Object.fromEntries(blockSnapshot);
+  writeFileSync(stateFile, JSON.stringify(state));
 }
 
 function parsePageId(input) {
@@ -156,163 +365,13 @@ function parsePageId(input) {
   return null;
 }
 
-function pickIdArg(tool) {
-  const props = tool.inputSchema?.properties ?? {};
-  for (const candidate of ["page_id", "block_id", "id", "url"]) {
-    if (props[candidate]) return candidate;
-  }
-  const keys = Object.keys(props);
-  if (keys.length === 1) return keys[0];
-  throw new Error(
-    `cannot determine id arg for ${tool.name}; schema keys: ${keys.join(", ")}`,
-  );
+function num(envName, fallback) {
+  const v = process.env[envName];
+  if (!v) return fallback;
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-function textOf(result) {
-  return (result.content ?? [])
-    .map((c) => (c.type === "text" ? c.text : ""))
-    .filter(Boolean)
-    .join("\n");
-}
-
-function parseComments(result) {
-  const text = textOf(result);
-  if (!text) return [];
-  let parsed;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return [];
-  }
-  // Hosted Notion MCP wraps an XML <discussions> blob inside {"text": "..."}.
-  if (parsed && typeof parsed.text === "string" && /<discussion\b/.test(parsed.text)) {
-    return parseDiscussionsXml(parsed.text);
-  }
-  const list = Array.isArray(parsed)
-    ? parsed
-    : Array.isArray(parsed.results)
-      ? parsed.results
-      : Array.isArray(parsed.comments)
-        ? parsed.comments
-        : [];
-  return list.map((c) => ({
-    id: c.id,
-    discussion_id: c.discussion_id,
-    parent_block_id:
-      c.parent?.block_id ?? c.parent?.page_id ?? c.block_id ?? c.page_id,
-    author_id: c.created_by?.id ?? c.author?.id,
-    body: extractBody(c),
-  }));
-}
-
-function parseDiscussionsXml(blob) {
-  const out = [];
-  const discussionRe = /<discussion\b([^>]*)>([\s\S]*?)<\/discussion>/g;
-  let dm;
-  while ((dm = discussionRe.exec(blob))) {
-    const dAttrs = parseXmlAttrs(dm[1]);
-    const parts = parseDiscussionUri(dAttrs.id);
-    const inner = dm[2];
-    const commentRe = /<comment\b([^>]*)>([\s\S]*?)<\/comment>/g;
-    let cm;
-    while ((cm = commentRe.exec(inner))) {
-      const cAttrs = parseXmlAttrs(cm[1]);
-      out.push({
-        id: cAttrs.id,
-        discussion_id: parts.discussionId,
-        parent_block_id: parts.blockId,
-        author_id: parseUserUri(cAttrs["user-url"]),
-        body: decodeXmlEntities(cm[2]).trim(),
-      });
-    }
-  }
-  return out;
-}
-
-function parseXmlAttrs(s) {
-  const out = {};
-  const re = /([\w-]+)="([^"]*)"/g;
-  let m;
-  while ((m = re.exec(s))) out[m[1]] = m[2];
-  return out;
-}
-
-function parseDiscussionUri(s) {
-  const m = String(s ?? "").match(/^discussion:\/\/([^/]+)\/([^/]+)\/(.+)$/);
-  return m ? { pageId: m[1], blockId: m[2], discussionId: m[3] } : {};
-}
-
-function parseUserUri(s) {
-  const m = String(s ?? "").match(/^user:\/\/(.+)$/);
-  return m ? m[1] : null;
-}
-
-function decodeXmlEntities(s) {
-  return s
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, "&");
-}
-
-function extractBody(c) {
-  if (typeof c.body === "string") return c.body;
-  if (Array.isArray(c.rich_text)) {
-    return c.rich_text.map((rt) => rt.plain_text ?? "").join("");
-  }
-  return "";
-}
-
-function selectTransport() {
-  if (process.env.NOTION_TOKEN) {
-    return new StdioClientTransport({
-      command: "npx",
-      args: ["-y", "@notionhq/notion-mcp-server"],
-      env: { ...process.env },
-    });
-  }
-
-  const authFile = join(homedir(), ".config", "mcp", "auth", "notion.json");
-  if (!existsSync(authFile)) {
-    process.stderr.write(
-      `no NOTION_TOKEN set and no ${authFile} — set NOTION_TOKEN or run \`claude mcp\` to authorize Notion.\n`,
-    );
-    process.exit(2);
-  }
-
-  let auth;
-  try {
-    auth = JSON.parse(readFileSync(authFile, "utf8"));
-  } catch (err) {
-    process.stderr.write(`failed to read ${authFile}: ${err.message}\n`);
-    process.exit(2);
-  }
-
-  if (!auth.access_token || !auth.resource) {
-    process.stderr.write(
-      `${authFile} missing access_token or resource — run \`claude mcp\` to re-auth.\n`,
-    );
-    process.exit(2);
-  }
-
-  if (typeof auth.expires_at === "number" && auth.expires_at * 1000 <= Date.now()) {
-    process.stderr.write(
-      "Claude MCP Notion token expired — run `claude mcp` to re-auth, or set NOTION_TOKEN.\n",
-    );
-    process.exit(2);
-  }
-
-  return new StreamableHTTPClientTransport(new URL(auth.resource), {
-    requestInit: {
-      headers: { Authorization: `Bearer ${auth.access_token}` },
-    },
-  });
-}
-
-function isUnauthorized(err) {
-  if (!err) return false;
-  if (err.name === "UnauthorizedError") return true;
-  const msg = String(err.message ?? "");
-  return /\b401\b|unauthorized/i.test(msg);
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
 }
