@@ -1,19 +1,19 @@
 # Sheaf
 
-A Claude Code plugin that turns a Notion page into a live, two-way agent collaboration surface. Comment on a block or edit the page directly, and the agent reacts — edits, posts a proposal, asks a clarifying question, or sketches a plan, depending on what the change calls for. The user and the agent can edit the doc in parallel and stay in sync.
+A Claude Code plugin that turns a Notion page into a live agent feedback loop. Comment on a block, and the agent reacts — edits, posts a proposal, asks a clarifying question, or sketches a plan, depending on what the comment is asking.
 
 Two pieces:
 
 1. The official [`@notionhq/notion-mcp-server`](https://github.com/makenotion/notion-mcp-server), wired into `.mcp.json`. Gives the agent the Notion read/write toolkit (`notion-fetch`, `notion-get-comments`, `notion-create-comment`, `notion-update-page`, ...).
-2. The `notion-watcher` skill (this repo). Polls a single Notion page every 10 seconds against Notion's REST API directly (using the same auth as the MCP server), emits a JSON line per event — both new comments and debounced bursts of block edits — and wakes the agent under Claude Code's `Monitor` tool. Events are shaped to match [Notion's webhook envelope](https://developers.notion.com/reference/webhooks-events-delivery), so a future swap from polling to real webhooks needs no consumer changes.
+2. The `notion-watcher` skill (this repo). Polls a single Notion page every 10 seconds via the same MCP server, emits a JSON line per comment event (`comment.created`, `comment.updated`, `comment.deleted`), and wakes the agent under Claude Code's `Monitor` tool. Events are shaped to match [Notion's webhook envelope](https://developers.notion.com/reference/webhooks-events-delivery), so a future swap from polling to real webhooks needs no consumer changes.
 
 ## Setup
 
-1. **Create a Notion integration token.** Notion → Settings → Integrations → Develop or manage integrations → New internal integration. Give it `read` + `update` content and `read` + `insert` comment capabilities. Copy the secret and `export NOTION_TOKEN=ntn_...`. The watcher and the agent both use this one variable.
+1. **Authorize Notion for the agent.** Either:
+   - Run `claude mcp` once and authorize the hosted Notion MCP — Claude Code stores the OAuth bearer at `~/.config/mcp/auth/notion.json` and the watcher reuses it. No env var needed.
+   - Or create a Notion internal integration (Notion → Settings → Integrations → New internal integration), give it `read` + `update` content and `read` + `insert` comment capabilities, and `export NOTION_TOKEN=ntn_...`. The watcher prefers `NOTION_TOKEN` when it's set; otherwise it falls back to the OAuth bearer.
 
-   The watcher hits `https://api.notion.com/v1` directly (it needs raw block data with timestamps, which the hosted Notion MCP at `mcp.notion.com` does not expose). Claude Code's hosted-MCP OAuth bearer is **not** sufficient — you need an integration secret.
-
-2. **Grant the integration access to the page.** Open the Notion page → top-right `...` menu → Connections → Add connections → pick the integration. Without this, the API can't see the page or its comments.
+2. **Grant access to the page.** Open the Notion page → top-right `...` menu → Connections → Add connections → pick whichever Notion app you authorized in step 1 (Claude's OAuth app, or your internal integration). Without this, comments are not visible to the watcher.
 
 3. **Install dependencies.**
 
@@ -34,23 +34,19 @@ The agent will launch the watcher under `Monitor`:
 ```
 Monitor({
   command: "node ${CLAUDE_PLUGIN_ROOT}/scripts/notion-watch.mjs <page_id>",
-  description: "notion page edits + comments",
+  description: "notion page comments",
   persistent: true,
 })
 ```
 
-Now edit the page or leave a comment in Notion. Within ~10–15 seconds the agent wakes:
+Now leave (or edit, or delete) a comment in Notion. Within ~10 seconds the agent wakes and responds based on the SKILL.md playbook:
 
-- new, edited, and deleted comments each fire immediately on the next poll
-- block edits are debounced — one event per editing burst once the user has been quiet for ~5s (or the burst has been running ~30s), so rapid typing doesn't spam the agent
-
-The agent responds based on the SKILL.md playbook:
-
-- comment with mechanical instruction → edit the block, reply "done"
-- comment with substantive prose change → reply with a proposed rewrite in a code block
+- mechanical instruction → edit the block, reply "done"
+- substantive prose change → reply with a proposed rewrite in a code block
 - ambiguous comment → reply with one clarifying question
 - broad comment → reply with a short numbered plan
-- direct page edit → silent merge by default; reconcile with any pending proposals; ask if the edit creates ambiguity
+- edited comment → reread, treat as the user revising their ask
+- deleted/resolved comment → drop any pending proposal on that thread
 
 Stop with `TaskStop` when done.
 
@@ -68,7 +64,7 @@ Stop with `TaskStop` when done.
   plugin.json             # plugin manifest
   marketplace.json        # marketplace metadata
   scripts/
-    notion-watch.mjs      # polls a page, emits page.content_updated and comment.{created,updated,deleted} events
+    notion-watch.mjs      # polls a page, emits comment.{created,updated,deleted} events
   skills/
     notion-watcher/
       SKILL.md            # when to invoke, how to respond
