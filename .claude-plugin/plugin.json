@@ -1,5 +1,5 @@
 {
-  "name": "sheaf",
+  "name": "notion-watcher",
   "version": "0.2.0",
   "description": "Wake an idle Claude Code agent on Notion page comments via the notion-watcher skill — turning a Notion page into a live agent feedback loop.",
   "author": {
