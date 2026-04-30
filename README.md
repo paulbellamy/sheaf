@@ -9,27 +9,21 @@ Two pieces:
 
 ## Setup
 
-1. **Get a Notion API token.**
-   If you already have one (from another MCP integration, a script, etc.), reuse it. If not: in Notion → Settings → Integrations → Develop or manage integrations → New internal integration. Give it `read` + `update` content and `read` + `insert` comment capabilities. Copy the secret.
+1. **Pick an auth source.** The watcher accepts either:
 
-2. **Set it in your shell.**
+   - **`NOTION_TOKEN` (internal integration secret).** Notion → Settings → Integrations → Develop or manage integrations → New internal integration. Give it `read` + `update` content and `read` + `insert` comment capabilities. Copy the secret and `export NOTION_TOKEN=ntn_...`. With this set, the watcher spawns `@notionhq/notion-mcp-server` over stdio.
+   - **Claude Code's existing OAuth token.** If `NOTION_TOKEN` is unset, the watcher falls back to `~/.config/mcp/auth/notion.json` — the bearer Claude already holds after running `claude mcp` and authorizing Notion. With this fallback, the watcher talks to the hosted MCP at `https://mcp.notion.com/mcp`. Refresh by re-running `claude mcp` if the token expires.
 
-   ```sh
-   export NOTION_TOKEN=ntn_...
-   ```
+2. **Grant the integration (or Claude's OAuth app) access to the page.**
+   Open the Notion page → top-right `...` menu → Connections → Add connections → pick the integration that owns the token you're using. Without this, the API can't see the page or its comments.
 
-   Both `notion-mcp-server` (called by Claude) and the watcher (run under `Monitor`) read this from the environment. One variable, one source of auth.
-
-3. **Grant the integration access to the page.**
-   Open the Notion page → top-right `...` menu → Connections → Add connections → pick the integration the token belongs to. Without this, the API can't see the page or its comments.
-
-4. **Install dependencies.**
+3. **Install dependencies.**
 
    ```sh
    pnpm install
    ```
 
-5. **Open the repo in Claude Code.** The `.mcp.json` at the root registers the `notion` MCP server automatically. The `notion-watcher` skill is installed via `.claude-plugin/`.
+4. **Open the repo in Claude Code.** The `.mcp.json` at the root registers the `notion` MCP server automatically. The `notion-watcher` skill is installed via `.claude-plugin/`.
 
 ## Usage
 

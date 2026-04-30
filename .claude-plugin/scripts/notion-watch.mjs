@@ -1,25 +1,29 @@
 #!/usr/bin/env node
-// Polls Notion comments on a page via the official notion-mcp-server
-// and emits one compact JSON line per *new* comment to stdout. Intended
-// as the stdin of Claude Code's `Monitor` tool so an idle agent wakes
-// on each comment.
+// Polls Notion comments on a page and emits one compact JSON line per
+// *new* comment to stdout. Intended as the stdin of Claude Code's
+// `Monitor` tool so an idle agent wakes on each comment.
 //
 // Usage:
 //   node .claude-plugin/scripts/notion-watch.mjs <page_id>
 //
-// Auth: the spawned notion-mcp-server reads NOTION_TOKEN from env. This
-// script forwards process.env unchanged — it never touches the token
-// itself. Configure the token once (e.g. in your shell or .env).
+// Auth (in order of preference):
+//   1. NOTION_TOKEN env var — spawns @notionhq/notion-mcp-server over
+//      stdio with that integration secret.
+//   2. ~/.config/mcp/auth/notion.json — the OAuth bearer Claude Code
+//      already holds for the hosted Notion MCP. Used when NOTION_TOKEN
+//      is unset; talks to https://mcp.notion.com/mcp over HTTP.
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import {
   existsSync,
   mkdirSync,
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { dirname } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 
 const pageId = process.argv[2];
 if (!pageId) {
@@ -34,18 +38,24 @@ mkdirSync(dirname(stateFile), { recursive: true });
 
 const seen = new Set(loadSeen());
 
-const transport = new StdioClientTransport({
-  command: "npx",
-  args: ["-y", "@notionhq/notion-mcp-server"],
-  env: { ...process.env },
-});
+const transport = selectTransport();
 
 const client = new Client(
   { name: "sheaf-notion-watcher", version: "0.2.0" },
   { capabilities: {} },
 );
 
-await client.connect(transport);
+try {
+  await client.connect(transport);
+} catch (err) {
+  if (isUnauthorized(err)) {
+    process.stderr.write(
+      "Claude MCP Notion token rejected — run `claude mcp` to re-auth, or set NOTION_TOKEN.\n",
+    );
+    process.exit(2);
+  }
+  throw err;
+}
 
 const getCommentsTool = await findGetCommentsTool();
 const idArgName = pickIdArg(getCommentsTool);
@@ -180,4 +190,57 @@ function extractBody(c) {
     return c.rich_text.map((rt) => rt.plain_text ?? "").join("");
   }
   return "";
+}
+
+function selectTransport() {
+  if (process.env.NOTION_TOKEN) {
+    return new StdioClientTransport({
+      command: "npx",
+      args: ["-y", "@notionhq/notion-mcp-server"],
+      env: { ...process.env },
+    });
+  }
+
+  const authFile = join(homedir(), ".config", "mcp", "auth", "notion.json");
+  if (!existsSync(authFile)) {
+    process.stderr.write(
+      `no NOTION_TOKEN set and no ${authFile} — set NOTION_TOKEN or run \`claude mcp\` to authorize Notion.\n`,
+    );
+    process.exit(2);
+  }
+
+  let auth;
+  try {
+    auth = JSON.parse(readFileSync(authFile, "utf8"));
+  } catch (err) {
+    process.stderr.write(`failed to read ${authFile}: ${err.message}\n`);
+    process.exit(2);
+  }
+
+  if (!auth.access_token || !auth.resource) {
+    process.stderr.write(
+      `${authFile} missing access_token or resource — run \`claude mcp\` to re-auth.\n`,
+    );
+    process.exit(2);
+  }
+
+  if (typeof auth.expires_at === "number" && auth.expires_at * 1000 <= Date.now()) {
+    process.stderr.write(
+      "Claude MCP Notion token expired — run `claude mcp` to re-auth, or set NOTION_TOKEN.\n",
+    );
+    process.exit(2);
+  }
+
+  return new StreamableHTTPClientTransport(new URL(auth.resource), {
+    requestInit: {
+      headers: { Authorization: `Bearer ${auth.access_token}` },
+    },
+  });
+}
+
+function isUnauthorized(err) {
+  if (!err) return false;
+  if (err.name === "UnauthorizedError") return true;
+  const msg = String(err.message ?? "");
+  return /\b401\b|unauthorized/i.test(msg);
 }

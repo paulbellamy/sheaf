@@ -63,6 +63,6 @@ Before responding, fetch the surrounding block via `notion-fetch` so you underst
 
 ## Preconditions
 
-- The `notion` MCP server is wired in `.mcp.json` and `NOTION_TOKEN` is set in the shell that launched Claude Code.
-- The Notion integration has been added to the watched page via Notion's "Connections" menu (otherwise comments are not visible).
+- One of: `NOTION_TOKEN` set in the shell that launched Claude Code, OR Claude Code has an authorized Notion MCP connection at `~/.config/mcp/auth/notion.json` (run `claude mcp` once to set it up). The watcher prefers `NOTION_TOKEN` and falls back to the OAuth bearer.
+- The Notion integration (or Claude's OAuth app) has been added to the watched page via Notion's "Connections" menu (otherwise comments are not visible).
 - Node 20+ on the agent host.
