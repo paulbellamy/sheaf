@@ -1,10 +1,10 @@
 {
-  "name": "sheaf-event-watcher",
-  "version": "0.1.0",
-  "description": "Wake an idle Claude Code agent on sheaf backend events by streaming /api/ui/drafts/stream into Monitor.",
+  "name": "sheaf",
+  "version": "0.2.0",
+  "description": "Wake an idle Claude Code agent on Notion page comments via the notion-watcher skill — turning a Notion page into a live agent feedback loop.",
   "author": {
     "name": "Paul Bellamy",
     "email": "paul@paulbellamy.com"
   },
-  "keywords": ["sheaf", "mcp", "watcher", "sse"]
+  "keywords": ["notion", "mcp", "watcher", "comments", "feedback-loop"]
 }
