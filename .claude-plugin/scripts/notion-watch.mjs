@@ -3,12 +3,17 @@
 // JSON line per event to stdout. Intended as the stdin of Claude Code's
 // `Monitor` tool so an idle agent wakes on each event.
 //
-// Two event kinds, both shaped to match Notion's webhook envelope
+// Four event kinds, all shaped to match Notion's webhook envelope
 // (https://developers.notion.com/reference/webhooks-events-delivery)
 // with an `x_sheaf` extension carrying inline content snapshots:
 //
 //   - page.content_updated   one per debounced burst of block edits
 //   - comment.created        one per new comment, no debounce
+//   - comment.updated        one per edited comment, no debounce
+//   - comment.deleted        one per removed/resolved comment, no debounce
+//
+// Note: Notion's list-comments endpoint returns only un-resolved comments,
+// so `comment.deleted` also fires when a discussion is resolved.
 //
 // Usage:
 //   node .claude-plugin/scripts/notion-watch.mjs <page_id_or_url>
@@ -64,7 +69,7 @@ const stateFile = `.context/notion-seen-${pageId}.json`;
 mkdirSync(dirname(stateFile), { recursive: true });
 
 const state = loadState();
-const seenComments = new Set(state.comments);
+const commentSnapshot = new Map(Object.entries(state.comments));
 const blockSnapshot = new Map(Object.entries(state.blocks));
 
 const buffer = {
@@ -228,48 +233,110 @@ function maybeFlushPageBurst() {
 }
 
 async function pollComments() {
+  const fresh = new Map();
   let cursor;
-  const fresh = [];
   do {
     const params = { block_id: pageId, page_size: 100 };
     if (cursor) params.start_cursor = cursor;
     const result = await notion("/comments", params);
     for (const c of result.results ?? []) {
-      if (!c.id || seenComments.has(c.id)) continue;
-      seenComments.add(c.id);
-      if (state.started) fresh.push(c);
+      if (!c.id) continue;
+      fresh.set(c.id, c);
     }
     cursor = result.has_more ? result.next_cursor : undefined;
   } while (cursor);
 
-  for (const c of fresh) {
-    const parentBlock = c.parent?.block_id ?? c.parent?.page_id ?? null;
-    const parentType = c.parent?.block_id
-      ? "block"
-      : c.parent?.page_id
-        ? "page"
-        : null;
-    emit({
-      id: randomUUID(),
-      timestamp: new Date().toISOString(),
-      workspace_id: workspaceId,
-      type: "comment.created",
-      authors: c.created_by?.id
-        ? [{ id: c.created_by.id, type: c.created_by.type ?? "person" }]
-        : [],
-      attempt_number: 1,
-      entity: { id: c.id, type: "comment" },
-      data: {
-        page_id: pageId,
-        parent: parentBlock ? { id: parentBlock, type: parentType } : null,
-      },
-      x_sheaf: {
-        source: "polling",
-        discussion_id: c.discussion_id ?? null,
-        body: extractCommentBody(c),
-      },
-    });
+  const events = [];
+  for (const [id, c] of fresh) {
+    const prev = commentSnapshot.get(id);
+    const nextEditedAt = c.last_edited_time ?? null;
+    if (!prev) {
+      events.push({ kind: "live", type: "comment.created", comment: c });
+    } else if ((prev.last_edited_time ?? null) !== nextEditedAt) {
+      events.push({ kind: "live", type: "comment.updated", comment: c });
+    }
   }
+  for (const [id, prev] of commentSnapshot) {
+    if (!fresh.has(id)) {
+      events.push({ kind: "deleted", id, record: prev });
+    }
+  }
+
+  commentSnapshot.clear();
+  for (const [id, c] of fresh) commentSnapshot.set(id, snapshotRecord(c));
+
+  if (!state.started) return;
+
+  for (const e of events) {
+    emit(
+      e.kind === "deleted"
+        ? buildCommentDeletedEnvelope(e.id, e.record)
+        : buildCommentEnvelope(e.comment, e.type),
+    );
+  }
+}
+
+function snapshotRecord(c) {
+  return {
+    last_edited_time: c.last_edited_time ?? null,
+    created_by_id: c.created_by?.id ?? null,
+    created_by_type: c.created_by?.type ?? null,
+    parent: commentParent(c),
+    discussion_id: c.discussion_id ?? null,
+    body: extractCommentBody(c),
+  };
+}
+
+function commentParent(c) {
+  if (c.parent?.block_id) return { id: c.parent.block_id, type: "block" };
+  if (c.parent?.page_id) return { id: c.parent.page_id, type: "page" };
+  return null;
+}
+
+function buildCommentEnvelope(c, type) {
+  return {
+    id: randomUUID(),
+    timestamp: new Date().toISOString(),
+    workspace_id: workspaceId,
+    type,
+    authors: c.created_by?.id
+      ? [{ id: c.created_by.id, type: c.created_by.type ?? "person" }]
+      : [],
+    attempt_number: 1,
+    entity: { id: c.id, type: "comment" },
+    data: {
+      page_id: pageId,
+      parent: commentParent(c),
+    },
+    x_sheaf: {
+      source: "polling",
+      discussion_id: c.discussion_id ?? null,
+      body: extractCommentBody(c),
+    },
+  };
+}
+
+function buildCommentDeletedEnvelope(id, record) {
+  return {
+    id: randomUUID(),
+    timestamp: new Date().toISOString(),
+    workspace_id: workspaceId,
+    type: "comment.deleted",
+    authors: record.created_by_id
+      ? [{ id: record.created_by_id, type: record.created_by_type ?? "person" }]
+      : [],
+    attempt_number: 1,
+    entity: { id, type: "comment" },
+    data: {
+      page_id: pageId,
+      parent: record.parent,
+    },
+    x_sheaf: {
+      source: "polling",
+      discussion_id: record.discussion_id,
+      body: record.body,
+    },
+  };
 }
 
 function extractCommentBody(c) {
@@ -322,10 +389,10 @@ async function resolveWorkspaceId() {
 
 function loadState() {
   const defaults = {
-    version: 1,
+    version: 2,
     started: false,
     page_last_edited_time: null,
-    comments: [],
+    comments: {},
     blocks: {},
   };
   if (!existsSync(stateFile)) return defaults;
@@ -335,19 +402,27 @@ function loadState() {
   } catch {
     return defaults;
   }
-  if (Array.isArray(raw)) {
-    return { ...defaults, comments: raw };
+  // Legacy: top-level array of comment ids — rebaseline.
+  if (Array.isArray(raw)) return defaults;
+  // Legacy v1: comments stored as array of ids — rebaseline silently.
+  if (Array.isArray(raw.comments)) {
+    return {
+      ...defaults,
+      page_last_edited_time: raw.page_last_edited_time ?? null,
+      blocks: raw.blocks && typeof raw.blocks === "object" ? raw.blocks : {},
+    };
   }
   return {
     ...defaults,
     ...raw,
-    comments: Array.isArray(raw.comments) ? raw.comments : [],
+    version: 2,
+    comments: raw.comments && typeof raw.comments === "object" ? raw.comments : {},
     blocks: raw.blocks && typeof raw.blocks === "object" ? raw.blocks : {},
   };
 }
 
 function persistState() {
-  state.comments = [...seenComments];
+  state.comments = Object.fromEntries(commentSnapshot);
   state.blocks = Object.fromEntries(blockSnapshot);
   writeFileSync(stateFile, JSON.stringify(state));
 }

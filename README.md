@@ -41,7 +41,7 @@ Monitor({
 
 Now edit the page or leave a comment in Notion. Within ~10–15 seconds the agent wakes:
 
-- a comment fires immediately on the next poll
+- new, edited, and deleted comments each fire immediately on the next poll
 - block edits are debounced — one event per editing burst once the user has been quiet for ~5s (or the burst has been running ~30s), so rapid typing doesn't spam the agent
 
 The agent responds based on the SKILL.md playbook:
@@ -68,7 +68,7 @@ Stop with `TaskStop` when done.
   plugin.json             # plugin manifest
   marketplace.json        # marketplace metadata
   scripts/
-    notion-watch.mjs      # polls a page, emits page.content_updated and comment.created events
+    notion-watch.mjs      # polls a page, emits page.content_updated and comment.{created,updated,deleted} events
   skills/
     notion-watcher/
       SKILL.md            # when to invoke, how to respond

@@ -18,7 +18,7 @@ Use this skill when the user wants the agent to collaborate on a Notion page in 
 
 State is kept in `.context/notion-seen-<page_id>.json`, so events seen in earlier runs do not re-fire.
 
-Two event kinds, both shaped to match [Notion's webhook envelope](https://developers.notion.com/reference/webhooks-events-delivery) — a `x_sheaf` extension carries inline content snapshots that real Notion webhooks omit:
+Four event kinds, all shaped to match [Notion's webhook envelope](https://developers.notion.com/reference/webhooks-events-delivery) — a `x_sheaf` extension carries inline content snapshots that real Notion webhooks omit:
 
 **`page.content_updated`** — one event per debounced burst of block edits (see "Debouncing" below).
 
@@ -49,7 +49,7 @@ Two event kinds, both shaped to match [Notion's webhook envelope](https://develo
 }
 ```
 
-**`comment.created`** — one event per new comment, no debounce.
+**`comment.created`** / **`comment.updated`** — one event per new or edited comment, no debounce. Same envelope shape, only `type` differs. `x_sheaf.body` carries the current text.
 
 ```json
 {
@@ -71,6 +71,31 @@ Two event kinds, both shaped to match [Notion's webhook envelope](https://develo
   }
 }
 ```
+
+**`comment.deleted`** — fires when a comment disappears from the page. `authors`, `data.parent`, `x_sheaf.discussion_id`, and `x_sheaf.body` reflect the **last-known** snapshot before deletion, so the agent can locate what was removed.
+
+```json
+{
+  "id": "<uuid>",
+  "timestamp": "<iso>",
+  "workspace_id": "<uuid|null>",
+  "type": "comment.deleted",
+  "authors": [{ "id": "<user-uuid>", "type": "person" }],
+  "attempt_number": 1,
+  "entity": { "id": "<comment-uuid>", "type": "comment" },
+  "data": {
+    "page_id": "<page-uuid>",
+    "parent": { "id": "<block-or-page-uuid>", "type": "block|page" }
+  },
+  "x_sheaf": {
+    "source": "polling",
+    "discussion_id": "<uuid|null>",
+    "body": "<last-known plain text>"
+  }
+}
+```
+
+> Caveat: Notion's REST API only lists **un-resolved** comments, so `comment.deleted` also fires when a discussion is resolved. Treat both as "no longer live" — the comment doesn't need a reply either way.
 
 ## Usage
 
@@ -105,7 +130,7 @@ On each `page.content_updated`, walk `x_sheaf.blocks[]`:
 - If a block ID matches a recent self-write AND the new `content` matches what you wrote (modulo trivial whitespace), drop it from the burst — it's your own echo.
 - Whatever's left is the user's edit. React to that.
 
-On each `comment.created`, compare `entity.id` and `x_sheaf.body` to your recent-comments log. Match → ignore.
+On each `comment.created`, `comment.updated`, or `comment.deleted`, compare `entity.id` and `x_sheaf.body` to your recent-comments log. Match → ignore. If you edit or delete a comment yourself (via `notion-update-page`-style writes against the comments API, or by resolving a discussion), log that too so the resulting echo is filtered.
 
 If the burst is empty after filtering, do nothing. `authors[]` and `last_edited_by_id` are useful supplementary signals (especially when multiple humans are on the page) but not load-bearing for echo cancellation.
 
@@ -142,6 +167,8 @@ Pick one:
 - **Sketch a plan.** Comment is too broad to address in one go ("rework §3–§5"). Reply with a short numbered plan, then wait for greenlight or splitting.
 
 When in doubt, prefer proposing over directly editing — proposals are reviewable; edits land immediately.
+
+`comment.updated` events flip the meaning of an in-flight reply. Reread the new body before acting; an updated comment is the user revising their ask, not a separate request. `comment.deleted` events are usually "ignore" — the user retracted the thread; don't reply, just drop any pending proposal tied to that `discussion_id`.
 
 ## Reading context
 
