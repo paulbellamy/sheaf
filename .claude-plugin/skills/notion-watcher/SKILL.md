@@ -26,15 +26,17 @@ Event shape:
 
 ## Usage
 
-Start the watcher with `Monitor` at the beginning of a reactive session, passing the page id the user gave you:
+Start the watcher with `Monitor` at the beginning of a reactive session, passing either a Notion page id or the page URL the user gave you:
 
 ```
 Monitor({
-  command: "node ${CLAUDE_PLUGIN_ROOT}/scripts/notion-watch.mjs <page_id>",
+  command: "node ${CLAUDE_PLUGIN_ROOT}/scripts/notion-watch.mjs <page_id_or_url>",
   description: "notion page comments",
   persistent: true,
 })
 ```
+
+The watcher accepts a bare UUID (`12345678-90ab-cdef-1234-567890abcdef`), a 32-char hex id, or a full Notion URL (`https://www.notion.so/Title-1234567890abcdef1234567890abcdef`); it normalizes internally so the same page maps to one state file regardless of input form.
 
 To watch multiple pages, run multiple `Monitor` instances — one per page.
 

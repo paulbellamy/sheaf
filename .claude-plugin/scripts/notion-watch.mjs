@@ -4,7 +4,7 @@
 // `Monitor` tool so an idle agent wakes on each comment.
 //
 // Usage:
-//   node .claude-plugin/scripts/notion-watch.mjs <page_id>
+//   node .claude-plugin/scripts/notion-watch.mjs <page_id_or_url>
 //
 // Auth (in order of preference):
 //   1. NOTION_TOKEN env var — spawns @notionhq/notion-mcp-server over
@@ -25,9 +25,10 @@ import {
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-const pageId = process.argv[2];
+const rawArg = process.argv[2];
+const pageId = rawArg ? parsePageId(rawArg) : null;
 if (!pageId) {
-  process.stderr.write("usage: notion-watch.mjs <page_id>\n");
+  process.stderr.write("usage: notion-watch.mjs <page_id_or_url>\n");
   process.exit(2);
 }
 
@@ -59,6 +60,9 @@ try {
 
 const getCommentsTool = await findGetCommentsTool();
 const idArgName = pickIdArg(getCommentsTool);
+const extraArgs = {};
+const commentsProps = getCommentsTool.inputSchema?.properties ?? {};
+if ("include_all_blocks" in commentsProps) extraArgs.include_all_blocks = true;
 
 const shutdown = async () => {
   try {
@@ -75,7 +79,7 @@ while (true) {
   try {
     const result = await client.callTool({
       name: getCommentsTool.name,
-      arguments: { [idArgName]: pageId },
+      arguments: { [idArgName]: pageId, ...extraArgs },
     });
     if (result.isError) {
       throw new Error(`tool error: ${textOf(result)}`);
@@ -139,6 +143,19 @@ async function findGetCommentsTool() {
   );
 }
 
+function parsePageId(input) {
+  const dashed = input.match(
+    /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i,
+  );
+  if (dashed) return dashed[0].toLowerCase();
+  const hex = input.match(/[0-9a-f]{32}/i);
+  if (hex) {
+    const h = hex[0].toLowerCase();
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+  }
+  return null;
+}
+
 function pickIdArg(tool) {
   const props = tool.inputSchema?.properties ?? {};
   for (const candidate of ["page_id", "block_id", "id", "url"]) {
@@ -167,6 +184,10 @@ function parseComments(result) {
   } catch {
     return [];
   }
+  // Hosted Notion MCP wraps an XML <discussions> blob inside {"text": "..."}.
+  if (parsed && typeof parsed.text === "string" && /<discussion\b/.test(parsed.text)) {
+    return parseDiscussionsXml(parsed.text);
+  }
   const list = Array.isArray(parsed)
     ? parsed
     : Array.isArray(parsed.results)
@@ -182,6 +203,57 @@ function parseComments(result) {
     author_id: c.created_by?.id ?? c.author?.id,
     body: extractBody(c),
   }));
+}
+
+function parseDiscussionsXml(blob) {
+  const out = [];
+  const discussionRe = /<discussion\b([^>]*)>([\s\S]*?)<\/discussion>/g;
+  let dm;
+  while ((dm = discussionRe.exec(blob))) {
+    const dAttrs = parseXmlAttrs(dm[1]);
+    const parts = parseDiscussionUri(dAttrs.id);
+    const inner = dm[2];
+    const commentRe = /<comment\b([^>]*)>([\s\S]*?)<\/comment>/g;
+    let cm;
+    while ((cm = commentRe.exec(inner))) {
+      const cAttrs = parseXmlAttrs(cm[1]);
+      out.push({
+        id: cAttrs.id,
+        discussion_id: parts.discussionId,
+        parent_block_id: parts.blockId,
+        author_id: parseUserUri(cAttrs["user-url"]),
+        body: decodeXmlEntities(cm[2]).trim(),
+      });
+    }
+  }
+  return out;
+}
+
+function parseXmlAttrs(s) {
+  const out = {};
+  const re = /([\w-]+)="([^"]*)"/g;
+  let m;
+  while ((m = re.exec(s))) out[m[1]] = m[2];
+  return out;
+}
+
+function parseDiscussionUri(s) {
+  const m = String(s ?? "").match(/^discussion:\/\/([^/]+)\/([^/]+)\/(.+)$/);
+  return m ? { pageId: m[1], blockId: m[2], discussionId: m[3] } : {};
+}
+
+function parseUserUri(s) {
+  const m = String(s ?? "").match(/^user:\/\/(.+)$/);
+  return m ? m[1] : null;
+}
+
+function decodeXmlEntities(s) {
+  return s
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&");
 }
 
 function extractBody(c) {
