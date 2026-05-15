@@ -140,16 +140,27 @@ export class ThreadsView extends ItemView {
     card.style.padding = "0.5em 0.75em";
     card.style.borderBottom = "1px solid var(--background-modifier-border)";
 
-    const anchor = thread.targets[0]?.anchor.anchored_text ?? "";
-    if (anchor) {
-      const anchorEl = card.createDiv();
-      anchorEl.setText(anchor.length > 80 ? anchor.slice(0, 80) + "…" : anchor);
-      anchorEl.style.fontStyle = "italic";
-      anchorEl.style.opacity = "0.6";
-      anchorEl.style.fontSize = "0.85em";
-      anchorEl.style.borderLeft = "2px solid var(--text-muted)";
-      anchorEl.style.paddingLeft = "0.5em";
-      anchorEl.style.marginBottom = "0.5em";
+    const target = thread.targets[0];
+    if (target?.scope === "range") {
+      const anchor = target.anchor.anchored_text;
+      if (anchor) {
+        const anchorEl = card.createDiv();
+        anchorEl.setText(anchor.length > 80 ? anchor.slice(0, 80) + "…" : anchor);
+        anchorEl.style.fontStyle = "italic";
+        anchorEl.style.opacity = "0.6";
+        anchorEl.style.fontSize = "0.85em";
+        anchorEl.style.borderLeft = "2px solid var(--text-muted)";
+        anchorEl.style.paddingLeft = "0.5em";
+        anchorEl.style.marginBottom = "0.5em";
+      }
+    } else if (target?.scope === "doc") {
+      const tag = card.createDiv();
+      tag.setText("doc-level");
+      tag.style.fontSize = "0.7em";
+      tag.style.textTransform = "uppercase";
+      tag.style.letterSpacing = "0.05em";
+      tag.style.opacity = "0.5";
+      tag.style.marginBottom = "0.5em";
     }
 
     for (const msg of thread.messages) {

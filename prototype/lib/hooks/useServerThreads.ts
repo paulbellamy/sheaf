@@ -50,9 +50,10 @@ function decodeRelPos(
 function backendThreadToUiThread(t: BackendThread): Thread {
   const draftOptions = deriveDraftOptions(t);
   const target = t.targets[0];
-  const charRange = target ? decodeRelPos(target.anchor.rel_pos) : null;
+  const charRange =
+    target && target.scope === "range" ? decodeRelPos(target.anchor.rel_pos) : null;
   const serverAnchor =
-    target && charRange
+    target && target.scope === "range" && charRange
       ? {
           char_range: charRange,
           anchored_text: target.anchor.anchored_text,

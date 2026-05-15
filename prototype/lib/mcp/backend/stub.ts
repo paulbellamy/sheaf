@@ -1276,6 +1276,13 @@ export class StubBackend implements Backend {
       const id: ThreadId = `thrd_${randomUUID()}`;
       const targets: Thread["targets"] = [];
       for (const t of opts.targets) {
+        if (t.scope === "doc") {
+          // Doc-level: no anchor. Verify the doc exists so we don't store
+          // threads pointing at nothing.
+          await this.readDoc(t.path, ref);
+          targets.push({ path: t.path, scope: "doc" });
+          continue;
+        }
         const { md } = await this.readDoc(t.path, ref);
         const from = Math.max(0, Math.min(t.char_range.from, md.length));
         const to = Math.max(from, Math.min(t.char_range.to, md.length));
@@ -1284,6 +1291,7 @@ export class StubBackend implements Backend {
         const after = md.slice(to, Math.min(md.length, to + 64));
         targets.push({
           path: t.path,
+          scope: "range",
           anchor: {
             rel_pos: Buffer.from(
               JSON.stringify({ from, to }),
@@ -1378,10 +1386,11 @@ export class StubBackend implements Backend {
       }
       // Snapshot the current draft prose for the thread's primary target so
       // reviewers can compare past options against current state. v0 uses
-      // target[0] only; multi-target snapshots are deferred polish.
+      // target[0] only; multi-target snapshots are deferred polish. Doc-level
+      // targets don't have an anchor; snapshot is empty in that case.
       const target = thread.targets[0];
-      let currentMd = target.anchor.anchored_text;
-      if (thread.draft_id) {
+      let currentMd = target.scope === "range" ? target.anchor.anchored_text : "";
+      if (target.scope === "range" && thread.draft_id) {
         try {
           const view = await this.readDoc(target.path, thread.draft_id);
           const decoded = JSON.parse(

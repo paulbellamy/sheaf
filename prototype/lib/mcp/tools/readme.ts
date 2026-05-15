@@ -35,9 +35,14 @@ mark the thread resolved. The user sees your edits land in their editor live.
 
 1. **Subscribe** to events (one-time, see below).
 2. On each \`thread_changed\` event:
-   a. \`ReadThread(thread_id)\` to get the brief and the anchored text.
-   b. \`Edit\` (or \`Write\`) the doc with \`ref="main"\` to apply the change.
-   c. \`ResolveThread(thread_id)\` to mark it done.
+   a. \`ReadThread(thread_id)\` to get the brief, the targets, and the message.
+   b. Branch on the first target's \`scope\`:
+      - \`scope: "range"\` — the user highlighted a specific passage. Use
+        \`target.anchor.anchored_text\` as \`old_string\` in an \`Edit\` call.
+      - \`scope: "doc"\` — the comment is about the whole doc. There is no
+        anchor. \`Read\` the doc and apply the change broadly (\`Write\` the
+        whole new version, or run multiple \`Edit\` calls).
+   c. \`ResolveThread(thread_id)\` once your edit has landed.
 3. Stop with \`TaskStop\` when the session ends.
 
 If the brief is too vague to act on (e.g. *"tighten this"* with no length
@@ -78,22 +83,27 @@ and can be ignored.
 
 ## Tools you'll use
 
-- \`ReadThread(thread_id)\` — full thread including \`targets[i].anchor.anchored_text\` (what the user selected) and \`messages[]\` (what they wrote).
+- \`ReadThread(thread_id)\` — full thread. Each target has a \`scope\` field: \`"range"\` carries an \`anchor\` (\`anchored_text\`, \`context_before/after\`, \`rel_pos\`); \`"doc"\` has no anchor.
 - \`ListThreads({path, ref:"main"})\` — enumerate threads on a doc; useful when you want context beyond the one event.
 - \`Read(file_path)\` — full doc contents. \`ref\` defaults to \`"main"\`.
 - \`Edit(file_path, old_string, new_string)\` — surgical replace. Pass \`ref="main"\` (or omit). Prefer this for small changes; \`old_string\` should be unique in the doc.
-- \`Write(file_path, content)\` — full-doc rewrite. Pass \`ref="main"\` (or omit). Use sparingly.
+- \`Write(file_path, content)\` — full-doc rewrite. Pass \`ref="main"\` (or omit). Use this for doc-level briefs or when many edits would be needed.
 - \`ReplyThread(thread_id, message)\` — add a message to the thread. Use for clarifying questions.
 - \`ResolveThread(thread_id)\` — mark thread done. Call this once your edit has landed.
 - \`Glob(pattern)\` / \`Grep({pattern, ...})\` — search the workspace.
 
-## Anchored edits
+## Range vs doc-level
 
-The thread's anchored text is the most useful starting point for an \`Edit\`
-call: \`old_string = thread.targets[0].anchor.anchored_text\`, \`new_string =
-your revision\`. If the anchored text isn't unique in the doc (you'll get
-\`edit_ambiguous\`), include surrounding context from
-\`anchor.context_before\` / \`anchor.context_after\` to disambiguate.
+**Range targets** (\`scope: "range"\`) are the common case: the user highlighted
+text and commented on it. Use \`target.anchor.anchored_text\` as \`old_string\`
+in an \`Edit\`. If the anchored text isn't unique in the doc (\`edit_ambiguous\`),
+include surrounding context from \`anchor.context_before\` / \`anchor.context_after\`
+to disambiguate.
+
+**Doc-level targets** (\`scope: "doc"\`) carry no anchor — the comment is about
+the doc as a whole (e.g. *"rewrite this for tone"*, *"add a conclusion"*). Read
+the doc first, then make the change with \`Write\` (full rewrite) or several
+\`Edit\` calls. There is no anchored text to use as \`old_string\`.
 
 ## What not to do
 

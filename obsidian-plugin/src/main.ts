@@ -1,4 +1,4 @@
-import { Editor, MarkdownView, Notice, Plugin, TFile } from "obsidian";
+import { Editor, MarkdownView, Notice, Plugin } from "obsidian";
 
 import { SheafApiError, SheafClient } from "./sheaf-client";
 import { SheafEventStream, type BackendEvent } from "./sheaf-events";
@@ -52,10 +52,14 @@ export default class SheafPlugin extends Plugin {
     this.registerEvent(
       this.app.workspace.on("editor-menu", (menu, editor, view) => {
         if (!(view instanceof MarkdownView)) return;
-        if (editor.getSelection().length === 0) return;
+        const hasSelection = editor.getSelection().length > 0;
         menu.addItem((item) => {
           item
-            .setTitle("Sheaf: Comment for agent")
+            .setTitle(
+              hasSelection
+                ? "Sheaf: Comment for agent"
+                : "Sheaf: Comment on doc",
+            )
             .setIcon("message-square")
             .onClick(() => this.openCommentModal(editor, view));
         });
@@ -124,16 +128,6 @@ export default class SheafPlugin extends Plugin {
       new Notice("Open a markdown file first");
       return;
     }
-    const selection = editor.getSelection();
-    if (selection.length === 0) {
-      new Notice("Select some text first");
-      return;
-    }
-    const charRange = this.computeCharRange(editor, file);
-    if (!charRange) {
-      new Notice("Couldn't resolve selection range");
-      return;
-    }
     const docPath = this.vaultPathToSheafPath(file.path);
     if (!docPath.startsWith("workspaces/")) {
       new Notice(
@@ -143,11 +137,18 @@ export default class SheafPlugin extends Plugin {
       );
       return;
     }
+    const selection = editor.getSelection();
+    // No selection → doc-level comment. With a selection → anchored range.
+    const charRange = selection.length > 0 ? this.computeCharRange(editor) : null;
 
     new CommentModal(this.app, selection, async (message) => {
       try {
         await this.client.addThread(docPath, charRange, message);
-        new Notice("Comment posted; agent will pick it up");
+        new Notice(
+          charRange === null
+            ? "Doc-level comment posted; agent will pick it up"
+            : "Comment posted; agent will pick it up",
+        );
       } catch (err) {
         console.error("sheaf: addThread failed", err);
         const msg =
@@ -163,7 +164,6 @@ export default class SheafPlugin extends Plugin {
 
   private computeCharRange(
     editor: Editor,
-    _file: TFile,
   ): { from: number; to: number } | null {
     const fromOff = editor.posToOffset(editor.getCursor("from"));
     const toOff = editor.posToOffset(editor.getCursor("to"));

@@ -224,9 +224,13 @@ function formatThread(
   lines.push(`${thread.id}  [${thread.status}]  ${fmtTs(thread.created)}`);
   lines.push("targets:");
   for (const t of thread.targets) {
-    lines.push(
-      `  ${t.path}  "${t.anchor.anchored_text.slice(0, 60)}${t.anchor.anchored_text.length > 60 ? "…" : ""}"`,
-    );
+    if (t.scope === "doc") {
+      lines.push(`  ${t.path}  (doc-level)`);
+    } else {
+      lines.push(
+        `  ${t.path}  "${t.anchor.anchored_text.slice(0, 60)}${t.anchor.anchored_text.length > 60 ? "…" : ""}"`,
+      );
+    }
   }
   lines.push("messages:");
   for (const m of thread.messages) {

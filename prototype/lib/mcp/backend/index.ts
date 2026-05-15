@@ -141,10 +141,22 @@ export type DraftSummary = {
   versions_behind: number;
 };
 
-export type ThreadAnchor = {
-  path: DocPath;
-  char_range: { from: number; to: number };
-};
+/**
+ * Input shape passed to `addThread`. Discriminated by `scope`:
+ *   - `doc`   — the comment is about the doc as a whole. No anchor; the
+ *               agent should `Read` the doc and act on it broadly.
+ *   - `range` — anchored to a specific char range in the doc. `scope`
+ *               itself is optional on the range variant; callers that
+ *               include `char_range` and omit `scope` are treated as
+ *               `scope: "range"`. The stored ThreadTarget is always explicit.
+ */
+export type ThreadAnchor =
+  | { path: DocPath; scope: "doc" }
+  | {
+      path: DocPath;
+      scope?: "range";
+      char_range: { from: number; to: number };
+    };
 
 /**
  * One proposed leaf attached to a thread message. `name` is set on each leaf
@@ -170,16 +182,24 @@ export type ThreadMessage = {
   draft_options?: ThreadDraftBody[];
 };
 
-export type ThreadTarget = {
-  path: DocPath;
-  anchor: {
-    rel_pos: string;
-    content_hash: string;
-    anchored_text: string;
-    context_before: string;
-    context_after: string;
-  };
-};
+/**
+ * Stored shape on a thread. `scope=doc` carries no anchor — the comment is
+ * about the doc as a whole. `scope=range` carries the anchor info needed to
+ * locate the original highlight + survive edits.
+ */
+export type ThreadTarget =
+  | { path: DocPath; scope: "doc" }
+  | {
+      path: DocPath;
+      scope: "range";
+      anchor: {
+        rel_pos: string;
+        content_hash: string;
+        anchored_text: string;
+        context_before: string;
+        context_after: string;
+      };
+    };
 
 export type ThreadStatus = "open" | "accepted" | "declined" | "archived";
 
