@@ -1,20 +1,25 @@
 import { requestUrl } from "obsidian";
 
+export type ThreadTarget =
+  | { path: string; scope: "doc" }
+  | {
+      path: string;
+      scope: "range";
+      anchor: {
+        rel_pos: string;
+        content_hash: string;
+        anchored_text: string;
+        context_before: string;
+        context_after: string;
+      };
+    };
+
 export type Thread = {
   id: string;
   created: number;
   status: "open" | "accepted" | "declined" | "archived";
   draft_id?: string;
-  targets: Array<{
-    path: string;
-    anchor: {
-      rel_pos: string;
-      content_hash: string;
-      anchored_text: string;
-      context_before: string;
-      context_after: string;
-    };
-  }>;
+  targets: ThreadTarget[];
   messages: Array<{
     author: string;
     ts: number;
@@ -59,17 +64,21 @@ export class SheafClient {
 
   async addThread(
     docPath: string,
-    charRange: { from: number; to: number },
+    charRange: { from: number; to: number } | null,
     message: string,
   ): Promise<string> {
     const url = `${this.baseUrl}/api/ui/threads?ref=main`;
+    const target =
+      charRange === null
+        ? { scope: "doc" as const }
+        : { scope: "range" as const, char_range: charRange };
     const res = await requestUrl({
       url,
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         path: docPath,
-        targets: [{ char_range: charRange }],
+        targets: [target],
         message,
       }),
       throw: false,

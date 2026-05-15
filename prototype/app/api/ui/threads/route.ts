@@ -18,14 +18,30 @@ const charRangeSchema = z.object({
   to: z.number().int().min(0),
 });
 
-const wideTargetSchema = z.object({
-  path: z.string().min(1).max(512),
-  char_range: charRangeSchema,
-});
+/**
+ * Each target is either doc-level (`scope: "doc"`) or anchored to a char
+ * range (`scope: "range"` + char_range). For backward compatibility, a
+ * target with `char_range` but no `scope` is treated as `scope: "range"`.
+ */
+const wideTargetSchema = z.union([
+  z.object({
+    path: z.string().min(1).max(512),
+    scope: z.literal("doc"),
+  }),
+  z.object({
+    path: z.string().min(1).max(512),
+    scope: z.literal("range").optional(),
+    char_range: charRangeSchema,
+  }),
+]);
 
-const narrowTargetSchema = z.object({
-  char_range: charRangeSchema,
-});
+const narrowTargetSchema = z.union([
+  z.object({ scope: z.literal("doc") }),
+  z.object({
+    scope: z.literal("range").optional(),
+    char_range: charRangeSchema,
+  }),
+]);
 
 const postBodySchema = z.union([
   z.object({
@@ -81,10 +97,27 @@ export async function POST(req: Request): Promise<Response> {
   }
   const body = parsed.data;
   // Normalize: wide form keeps per-target paths; narrow form repeats `path`.
+  // Targets are then mapped into the ThreadAnchor discriminated union.
   const targets =
     "path" in body
-      ? body.targets.map((t) => ({ path: body.path, char_range: t.char_range }))
-      : body.targets.map((t) => ({ path: t.path, char_range: t.char_range }));
+      ? body.targets.map((t) =>
+          t.scope === "doc"
+            ? ({ path: body.path, scope: "doc" as const })
+            : ({
+                path: body.path,
+                scope: "range" as const,
+                char_range: t.char_range,
+              }),
+        )
+      : body.targets.map((t) =>
+          t.scope === "doc"
+            ? ({ path: t.path, scope: "doc" as const })
+            : ({
+                path: t.path,
+                scope: "range" as const,
+                char_range: t.char_range,
+              }),
+        );
   try {
     const id = await getBackend().addThread({
       ref,

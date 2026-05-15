@@ -1,4 +1,4 @@
-import { Editor, MarkdownView, Notice, Plugin, TFile } from "obsidian";
+import { Editor, MarkdownView, Notice, Plugin } from "obsidian";
 
 import { SheafApiError, SheafClient } from "./sheaf-client";
 import { SheafEventStream, type BackendEvent } from "./sheaf-events";
@@ -13,6 +13,7 @@ import { ThreadsView, VIEW_TYPE_SHEAF_THREADS } from "./views/threads-view";
 export default class SheafPlugin extends Plugin {
   settings: SheafSettings = DEFAULT_SETTINGS;
   client!: SheafClient;
+  agentConnected = false;
   private events!: SheafEventStream;
   private statusBar: HTMLElement | null = null;
 
@@ -42,6 +43,7 @@ export default class SheafPlugin extends Plugin {
     this.addCommand({
       id: "sheaf-comment-for-agent",
       name: "Comment for agent",
+      hotkeys: [{ modifiers: ["Mod", "Shift"], key: "M" }],
       editorCallback: (editor, view) => {
         if (view instanceof MarkdownView) {
           this.openCommentModal(editor, view);
@@ -52,10 +54,14 @@ export default class SheafPlugin extends Plugin {
     this.registerEvent(
       this.app.workspace.on("editor-menu", (menu, editor, view) => {
         if (!(view instanceof MarkdownView)) return;
-        if (editor.getSelection().length === 0) return;
+        const hasSelection = editor.getSelection().length > 0;
         menu.addItem((item) => {
           item
-            .setTitle("Sheaf: Comment for agent")
+            .setTitle(
+              hasSelection
+                ? "Sheaf: Comment for agent"
+                : "Sheaf: Comment on doc",
+            )
             .setIcon("message-square")
             .onClick(() => this.openCommentModal(editor, view));
         });
@@ -68,6 +74,14 @@ export default class SheafPlugin extends Plugin {
     this.addSettingTab(new SheafSettingTab(this.app, this));
 
     this.events.start();
+
+    // First-time enable / fresh install: the layout restore won't have a
+    // sheaf-threads leaf, so we add one to the right sidebar. If the user
+    // closes it and reopens the app, Obsidian's layout restore takes over
+    // (leaf is gone, plugin recreates it — mildly opinionated, prototype).
+    this.app.workspace.onLayoutReady(() => {
+      void this.ensureThreadsViewMounted();
+    });
   }
 
   async onunload(): Promise<void> {
@@ -118,20 +132,26 @@ export default class SheafPlugin extends Plugin {
     workspace.revealLeaf(right);
   }
 
+  /**
+   * Auto-mount on plugin load: add a sheaf-threads leaf to the right sidebar
+   * if there isn't one already. Doesn't steal focus from the user's current
+   * leaf — `active: false` keeps whatever they were looking at in front.
+   */
+  private async ensureThreadsViewMounted(): Promise<void> {
+    const { workspace } = this.app;
+    if (workspace.getLeavesOfType(VIEW_TYPE_SHEAF_THREADS).length > 0) return;
+    const right = workspace.getRightLeaf(false);
+    if (!right) return;
+    await right.setViewState({
+      type: VIEW_TYPE_SHEAF_THREADS,
+      active: false,
+    });
+  }
+
   private openCommentModal(editor: Editor, view: MarkdownView): void {
     const file = view.file;
     if (!file) {
       new Notice("Open a markdown file first");
-      return;
-    }
-    const selection = editor.getSelection();
-    if (selection.length === 0) {
-      new Notice("Select some text first");
-      return;
-    }
-    const charRange = this.computeCharRange(editor, file);
-    if (!charRange) {
-      new Notice("Couldn't resolve selection range");
       return;
     }
     const docPath = this.vaultPathToSheafPath(file.path);
@@ -143,11 +163,18 @@ export default class SheafPlugin extends Plugin {
       );
       return;
     }
+    const selection = editor.getSelection();
+    // No selection → doc-level comment. With a selection → anchored range.
+    const charRange = selection.length > 0 ? this.computeCharRange(editor) : null;
 
     new CommentModal(this.app, selection, async (message) => {
       try {
         await this.client.addThread(docPath, charRange, message);
-        new Notice("Comment posted; agent will pick it up");
+        new Notice(
+          charRange === null
+            ? "Doc-level comment posted; agent will pick it up"
+            : "Comment posted; agent will pick it up",
+        );
       } catch (err) {
         console.error("sheaf: addThread failed", err);
         const msg =
@@ -163,7 +190,6 @@ export default class SheafPlugin extends Plugin {
 
   private computeCharRange(
     editor: Editor,
-    _file: TFile,
   ): { from: number; to: number } | null {
     const fromOff = editor.posToOffset(editor.getCursor("from"));
     const toOff = editor.posToOffset(editor.getCursor("to"));
@@ -186,6 +212,7 @@ export default class SheafPlugin extends Plugin {
         this.flashStatus(`edit landed: ${basename(event.path)}`);
         break;
       case "agent_presence":
+        this.agentConnected = event.connected;
         view?.setAgentPresence(event.connected);
         this.updateStatusBar(event.connected);
         break;

@@ -238,6 +238,89 @@ describe("writeDoc/editDoc accept ref=main (thread-on-doc mode)", () => {
   });
 });
 
+describe("doc-level threads (scope=doc)", () => {
+  let root: string;
+  let backend: StubBackend;
+  const docPath = "workspaces/ws/docs/a.md";
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-doc-thread-"));
+    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "hello world",
+    );
+    backend = new StubBackend(root);
+    setBackend(backend);
+  });
+
+  afterEach(async () => {
+    setBackend(null);
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("addThread stores a target with scope=doc and no anchor", async () => {
+    const id = await backend.addThread({
+      targets: [{ path: docPath, scope: "doc" }],
+      message: "rewrite this for tone",
+      author: "user",
+    });
+    const thread = await backend.readThread(id);
+    expect(thread.targets).toHaveLength(1);
+    expect(thread.targets[0].scope).toBe("doc");
+    expect("anchor" in thread.targets[0]).toBe(false);
+  });
+
+  it("HTTP POST without char_range creates a doc-level thread", async () => {
+    const req = new Request("http://localhost/api/ui/threads?ref=main", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        path: docPath,
+        targets: [{ scope: "doc" }],
+        message: "rewrite this for tone",
+      }),
+    });
+    const res = await threadsPOST(req);
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { thread_id: string };
+    const thread = await backend.readThread(body.thread_id);
+    expect(thread.targets[0].scope).toBe("doc");
+  });
+
+  it("HTTP POST with char_range still creates a range thread (back-compat)", async () => {
+    const req = new Request("http://localhost/api/ui/threads?ref=main", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        path: docPath,
+        targets: [{ char_range: { from: 0, to: 5 } }],
+        message: "tighten this",
+      }),
+    });
+    const res = await threadsPOST(req);
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { thread_id: string };
+    const thread = await backend.readThread(body.thread_id);
+    expect(thread.targets[0].scope).toBe("range");
+    if (thread.targets[0].scope === "range") {
+      expect(thread.targets[0].anchor.anchored_text).toBe("hello");
+    }
+  });
+
+  it("rejects addThread when the doc doesn't exist", async () => {
+    await expect(
+      backend.addThread({
+        targets: [{ path: "workspaces/ws/docs/missing.md", scope: "doc" }],
+        message: "fix this",
+        author: "user",
+      }),
+    ).rejects.toThrow();
+  });
+});
+
 describe("backend.readDoc version_counter (Phase B)", () => {
   let root: string;
   let backend: StubBackend;

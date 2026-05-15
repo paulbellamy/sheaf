@@ -74,8 +74,11 @@ export async function POST(req: Request, ctx: Ctx): Promise<Response> {
       if (leaf && thread.targets.length > 0) {
         // Apply each target's anchored_text → leaf.new_md. For Phase F we
         // assume the same `new_md` applies across all targets (cross-cutting
-        // multi-target threads aren't in scope until Phase H).
+        // multi-target threads aren't in scope until Phase H). Doc-level
+        // targets (scope=doc) have no anchored_text to replace; the agent
+        // applies the change directly to main and the leaf is informational.
         for (const target of thread.targets) {
+          if (target.scope !== "range") continue;
           const oldString = target.anchor.anchored_text;
           if (oldString.length === 0) continue;
           try {
