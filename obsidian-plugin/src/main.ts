@@ -13,6 +13,7 @@ import { ThreadsView, VIEW_TYPE_SHEAF_THREADS } from "./views/threads-view";
 export default class SheafPlugin extends Plugin {
   settings: SheafSettings = DEFAULT_SETTINGS;
   client!: SheafClient;
+  agentConnected = false;
   private events!: SheafEventStream;
   private statusBar: HTMLElement | null = null;
 
@@ -186,6 +187,7 @@ export default class SheafPlugin extends Plugin {
         this.flashStatus(`edit landed: ${basename(event.path)}`);
         break;
       case "agent_presence":
+        this.agentConnected = event.connected;
         view?.setAgentPresence(event.connected);
         this.updateStatusBar(event.connected);
         break;

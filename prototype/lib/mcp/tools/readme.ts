@@ -34,19 +34,30 @@ mark the thread resolved. The user sees your edits land in their editor live.
 ## The loop
 
 1. **Subscribe** to events (one-time, see below).
-2. On each \`thread_changed\` event:
+2. On each \`thread_changed\` event for a thread you don't already own:
    a. \`ReadThread(thread_id)\` to get the brief, the targets, and the message.
-   b. Branch on the first target's \`scope\`:
+   b. **Acknowledge immediately**: \`ReplyThread(thread_id, "on it")\` (or a
+      short paraphrase of what you're about to do). This is the signal the
+      plugin shows as "agent working" — without it the user has no feedback
+      between posting the comment and seeing the edit land.
+   c. Branch on the first target's \`scope\`:
       - \`scope: "range"\` — the user highlighted a specific passage. Use
         \`target.anchor.anchored_text\` as \`old_string\` in an \`Edit\` call.
       - \`scope: "doc"\` — the comment is about the whole doc. There is no
         anchor. \`Read\` the doc and apply the change broadly (\`Write\` the
         whole new version, or run multiple \`Edit\` calls).
-   c. \`ResolveThread(thread_id)\` once your edit has landed.
+   d. \`ResolveThread(thread_id)\` once your edit has landed.
 3. Stop with \`TaskStop\` when the session ends.
 
 If the brief is too vague to act on (e.g. *"tighten this"* with no length
 target), \`ReplyThread\` with a clarifying question and skip; do not resolve.
+The reply itself flips the thread into "agent working" — fine, the user can
+see you're waiting on them.
+
+Skip the acknowledgement step when reacting to a \`thread_changed\` you
+triggered yourself (your own ReplyThread or ResolveThread call fires the
+same event). Detect this by checking the latest message author: if it's
+already yours, no further reply is needed.
 
 ## Subscribe to events
 

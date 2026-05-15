@@ -2,6 +2,18 @@ import { ItemView, WorkspaceLeaf, TFile, Notice } from "obsidian";
 import type SheafPlugin from "../main";
 import type { Thread } from "../sheaf-client";
 
+/**
+ * "Working" = thread is open AND the latest message is not from the user.
+ * The agent's convention (per the MCP ReadMe) is to ReplyThread when it
+ * picks up a thread, then Edit/Write, then ResolveThread — so any non-user
+ * message on an open thread means the agent has it.
+ */
+function isWorking(thread: Thread): boolean {
+  if (thread.status !== "open") return false;
+  const last = thread.messages[thread.messages.length - 1];
+  return !!last && last.author !== "user";
+}
+
 export const VIEW_TYPE_SHEAF_THREADS = "sheaf-threads";
 
 export class ThreadsView extends ItemView {
@@ -31,6 +43,9 @@ export class ThreadsView extends ItemView {
   async onOpen(): Promise<void> {
     this.contentEl.empty();
     this.contentEl.addClass("sheaf-threads-view");
+    // Sync to whatever presence the plugin's seen so far — events that
+    // arrived before the view opened would otherwise be lost.
+    this.agentConnected = this.plugin.agentConnected;
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
         void this.onFileOpen(file);
@@ -139,6 +154,17 @@ export class ThreadsView extends ItemView {
     const card = parent.createDiv({ cls: "sheaf-thread" });
     card.style.padding = "0.5em 0.75em";
     card.style.borderBottom = "1px solid var(--background-modifier-border)";
+
+    if (isWorking(thread)) {
+      const badge = card.createDiv();
+      badge.setText("● agent working");
+      badge.style.fontSize = "0.75em";
+      badge.style.color = "var(--text-accent)";
+      badge.style.marginBottom = "0.4em";
+      badge.style.display = "flex";
+      badge.style.alignItems = "center";
+      badge.style.gap = "0.3em";
+    }
 
     const target = thread.targets[0];
     if (target?.scope === "range") {
