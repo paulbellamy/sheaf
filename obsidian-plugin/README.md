@@ -48,18 +48,23 @@ Enable the plugin from Settings → Community plugins.
 
 ### 4. Run a Claude Code session
 
-In a terminal that's open separately:
+In a separate terminal:
 
 ```
-cd ../prototype
-# in your Claude Code session, run sheaf's MCP server + sheaf-event-watcher
-# per ../.claude-plugin/skills/sheaf-event-watcher/SKILL.md
+claude mcp add --transport http sheaf http://localhost:3000/api/mcp
+claude
 ```
 
-When `thread_changed` arrives with no `draft_id`, the agent reads the
-thread, edits the doc via sheaf MCP `Edit` / `Write` with `ref="main"`,
-then calls `ResolveThread`. See `../prototype/AGENTS.md` §"Two modes" for
-the full prompt.
+Then in the session:
+
+```
+> use the sheaf MCP and watch for events
+```
+
+The agent calls sheaf's `ReadMe` tool on connect, which returns the full
+operating guide (the loop, the tools to use, the one-liner Monitor command
+that subscribes to live events). No skill install or AGENTS.md needed —
+the MCP server tells the agent everything.
 
 ## Use
 

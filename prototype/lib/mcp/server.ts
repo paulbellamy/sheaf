@@ -12,6 +12,7 @@ import { registerListDocs } from "./tools/list-docs";
 import { registerMerge } from "./tools/merge";
 import { registerPropose } from "./tools/propose";
 import { registerRead } from "./tools/read";
+import { registerReadMe } from "./tools/readme";
 import { registerThreadTools } from "./tools/threads";
 import { registerWorkspaceTools } from "./tools/workspaces";
 import { registerWrite } from "./tools/write";
@@ -32,10 +33,11 @@ export function buildServer(backend: Backend = getBackend()): McpServer {
     {
       capabilities: { tools: { listChanged: false } },
       instructions:
-        "Sheaf is a collaborative spec-editing system. Docs live at repo-relative paths under 'workspaces/'. Bundled skills and scripts are served read-only under '.claude-plugin/' via Read/Glob/Grep. Before anything else, run `Glob .claude-plugin/skills/**/SKILL.md` and `Read` each result — in particular `.claude-plugin/skills/sheaf-event-watcher/SKILL.md`, which tells you how to stay reactive to thread submissions and draft/doc changes while idle. Two mutation modes: (a) draft flow — call Fork(path, n) to create a draft, pass the draft_id as `ref` on Write/Edit, finalize with Propose; (b) thread-on-doc — write directly to ref='main' (the Obsidian-plugin prototype mode), threads attach to the doc without a draft. Threads anchor conversations (and optional sub-drafts) to char ranges in docs.",
+        "Call `ReadMe` before anything else. It's a single tool call that returns the full operating guide — the loop, the tools to use, and how to subscribe to live events. Everything else flows from there.",
     },
   );
 
+  registerReadMe(server);
   registerRead(server, backend);
   registerWrite(server, backend);
   registerEdit(server, backend);
