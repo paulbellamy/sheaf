@@ -4,13 +4,11 @@ import type SheafPlugin from "./main";
 export type SheafSettings = {
   serverUrl: string;
   defaultAuthor: string;
-  workspaceName: string;
 };
 
 export const DEFAULT_SETTINGS: SheafSettings = {
   serverUrl: "http://localhost:3000",
   defaultAuthor: "user",
-  workspaceName: "obsidian",
 };
 
 export class SheafSettingTab extends PluginSettingTab {
@@ -38,21 +36,6 @@ export class SheafSettingTab extends PluginSettingTab {
             this.plugin.settings.serverUrl = value.trim();
             await this.plugin.saveSettings();
             this.plugin.onConnectionChanged();
-          }),
-      );
-
-    new Setting(containerEl)
-      .setName("Workspace name")
-      .setDesc(
-        "Sheaf workspace this vault maps onto. Vault notes go under workspaces/<name>/docs/.",
-      )
-      .addText((t) =>
-        t
-          .setPlaceholder("obsidian")
-          .setValue(this.plugin.settings.workspaceName)
-          .onChange(async (value) => {
-            this.plugin.settings.workspaceName = value.trim() || "obsidian";
-            await this.plugin.saveSettings();
           }),
       );
 

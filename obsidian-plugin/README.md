@@ -23,14 +23,21 @@ The server listens on http://localhost:3000 by default.
 
 ### 2. Point sheaf at your vault
 
-Sheaf treats `prototype/data/` as the workspace root by default. To use your
-Obsidian vault, set `SHEAF_DATA_ROOT` (or symlink/move your vault under
-`prototype/data/workspaces/<workspace_name>/docs/`). The default workspace
-name the plugin uses is `obsidian` — change it in settings if you want a
-different one.
+**The vault root is the sheaf data root.** Inside your vault, notes live under
+`workspaces/<name>/docs/<doc>.md` — exactly the path sheaf uses on the wire.
+The plugin passes the vault-relative file path through verbatim.
 
-> The vault path → sheaf path mapping is
-> `<vault>/<note>.md` → `workspaces/<workspace_name>/docs/<note>.md`.
+```
+<vault>/
+  workspaces/
+    sheaf/
+      docs/
+        proposal.md   ← open this in Obsidian; sheaf sees it as
+                        workspaces/sheaf/docs/proposal.md
+```
+
+Point sheaf at your vault with `SHEAF_DATA_ROOT=<vault>`. Files outside
+`workspaces/` are unsupported.
 
 ### 3. Install the plugin into your vault
 
