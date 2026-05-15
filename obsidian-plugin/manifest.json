@@ -1,0 +1,10 @@
+{
+  "id": "sheaf",
+  "name": "Sheaf",
+  "version": "0.0.1",
+  "minAppVersion": "1.5.0",
+  "description": "Comment on a doc, an agent edits it inline. Thread-on-doc prototype backed by sheaf.",
+  "author": "Paul Bellamy",
+  "authorUrl": "https://github.com/paulbellamy/sheaf",
+  "isDesktopOnly": true
+}

@@ -133,32 +133,108 @@ describe("backend serves .claude-plugin/ read-only", () => {
   });
 });
 
-describe("threads route refuses ref=main", () => {
-  it("POST returns 400 with a clear error", async () => {
+describe("threads route accepts ref=main (thread-on-doc mode)", () => {
+  let root: string;
+  let backend: StubBackend;
+  const docPath = "workspaces/ws/docs/a.md";
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-threads-main-"));
+    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "hello world",
+    );
+    backend = new StubBackend(root);
+    setBackend(backend);
+  });
+
+  afterEach(async () => {
+    setBackend(null);
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("POST creates a thread anchored to main and returns 201", async () => {
     const req = new Request("http://localhost/api/ui/threads?ref=main", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        path: "workspaces/ws/docs/a.md",
-        targets: [{ char_range: { from: 0, to: 1 } }],
-        message: "hi",
+        path: docPath,
+        targets: [{ char_range: { from: 0, to: 5 } }],
+        message: "tighten this",
       }),
     });
     const res = await threadsPOST(req);
-    expect(res.status).toBe(400);
-    const body = (await res.json()) as { error?: string };
-    expect(body.error).toMatch(/start a draft first/);
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { thread_id?: string };
+    expect(body.thread_id).toMatch(/^thrd_/);
   });
 
-  it("GET returns an empty thread list without hitting the backend", async () => {
+  it("GET returns threads anchored to main", async () => {
+    await backend.addThread({
+      targets: [{ path: docPath, char_range: { from: 0, to: 5 } }],
+      message: "tighten this",
+      author: "user",
+    });
     const req = new Request(
-      "http://localhost/api/ui/threads?path=workspaces/ws/docs/a.md&ref=main",
+      `http://localhost/api/ui/threads?path=${encodeURIComponent(docPath)}&ref=main`,
     );
     const res = await threadsGET(req);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { ref: string; threads: unknown[] };
+    const body = (await res.json()) as {
+      ref: string;
+      threads: { id: string }[];
+    };
     expect(body.ref).toBe("main");
-    expect(body.threads).toEqual([]);
+    expect(body.threads.length).toBeGreaterThan(0);
+  });
+});
+
+describe("writeDoc/editDoc accept ref=main (thread-on-doc mode)", () => {
+  let root: string;
+  let backend: StubBackend;
+  const docPath = "workspaces/ws/docs/a.md";
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-writemain-"));
+    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "hello world",
+    );
+    backend = new StubBackend(root);
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("writeDoc(main) lands on disk and emits doc_changed", async () => {
+    const events: BackendEvent[] = [];
+    backend.subscribe((e) => events.push(e));
+    await backend.writeDoc(docPath, "main", "rewritten");
+    const onDisk = await fs.readFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "utf8",
+    );
+    expect(onDisk).toBe("rewritten");
+    expect(events).toContainEqual({ kind: "doc_changed", path: docPath });
+  });
+
+  it("editDoc(main) replaces in place and emits doc_changed", async () => {
+    const events: BackendEvent[] = [];
+    backend.subscribe((e) => events.push(e));
+    await backend.editDoc(docPath, "main", "world", "obsidian", false);
+    const onDisk = await fs.readFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "utf8",
+    );
+    expect(onDisk).toBe("hello obsidian");
+    expect(events).toContainEqual({ kind: "doc_changed", path: docPath });
   });
 });
 

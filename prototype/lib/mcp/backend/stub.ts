@@ -81,6 +81,18 @@ function assertDraftRef(ref: Ref): asserts ref is DraftId {
 }
 
 /**
+ * Bump the per-doc version counter on a main write. Direct edits to main
+ * (Obsidian-prototype mode: agent writes land without a draft round-trip)
+ * still want a monotonic version number so callers can stale-check.
+ */
+function bumpCounter(
+  counters: Map<DocPath, number>,
+  p: DocPath,
+): void {
+  counters.set(p, (counters.get(p) ?? 0) + 1);
+}
+
+/**
  * `<name> #<4hex>` per the resolved-decisions rule. Suffix comes from the
  * first 4 chars of `draft_id` after stripping the `draft_` prefix; the id
  * remains the unique key, the suffix is just the human-legible disambiguator.
@@ -679,6 +691,14 @@ export class StubBackend implements Backend {
     return this.withLock(() =>
       this.cachedWrite(opId, async () => {
         assertWorkspacePath(p);
+        if (ref === "main") {
+          const abs = this.absMain(p);
+          await this.ensureDir(path.dirname(abs));
+          await writeFileNoFollow(abs, content);
+          bumpCounter(this.versionCounters, p);
+          this.emit({ kind: "doc_changed", path: p });
+          return { version_token: `v-${sha(content).slice(0, 12)}` };
+        }
         assertDraftRef(ref);
         await this.loadDraftMeta(ref);
         const abs = this.absDraft(ref, p);
@@ -705,8 +725,10 @@ export class StubBackend implements Backend {
     return this.withLock(() =>
       this.cachedWrite(opId, async () => {
         assertWorkspacePath(p);
-        assertDraftRef(ref);
-        await this.loadDraftMeta(ref);
+        if (ref !== "main") {
+          assertDraftRef(ref);
+          await this.loadDraftMeta(ref);
+        }
         const current = await this.readDoc(p, ref);
         let next: string;
         if (replaceAll) {
@@ -729,6 +751,14 @@ export class StubBackend implements Backend {
             current.md.slice(0, first) +
             newString +
             current.md.slice(first + oldString.length);
+        }
+        if (ref === "main") {
+          const abs = this.absMain(p);
+          await this.ensureDir(path.dirname(abs));
+          await writeFileNoFollow(abs, next);
+          bumpCounter(this.versionCounters, p);
+          this.emit({ kind: "doc_changed", path: p });
+          return { version_token: `v-${sha(next).slice(0, 12)}` };
         }
         const abs = this.absDraft(ref, p);
         await this.ensureDir(path.dirname(abs));

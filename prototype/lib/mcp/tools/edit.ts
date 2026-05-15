@@ -6,7 +6,9 @@ import { LIMITS, opIdArg, pathArg, refArg } from "../schemas";
 import { toToolError } from "../errors";
 
 /**
- * Edit — mirrors Claude Code's Edit. Exact-string replace on a draft ref.
+ * Edit — mirrors Claude Code's Edit. Exact-string replace. Pass a draft ref
+ * for the standard fork-propose-merge flow; pass ref="main" (or omit) to land
+ * the edit directly on the doc (thread-on-doc prototype mode).
  */
 export function registerEdit(server: McpServer, backend: Backend): void {
   server.registerTool(
@@ -14,7 +16,7 @@ export function registerEdit(server: McpServer, backend: Backend): void {
     {
       title: "Edit",
       description:
-        "Exact-string replace in a sheaf doc on a draft ref. old_string must occur exactly once unless replace_all is true. Errors when the match is missing or ambiguous so you can read the doc and retry.",
+        "Exact-string replace in a sheaf doc. old_string must occur exactly once unless replace_all is true. Pass a draft_id as `ref` to edit a draft; omit `ref` (or pass 'main') to land the edit directly on the doc and emit `doc_changed`.",
       inputSchema: {
         file_path: pathArg,
         old_string: z

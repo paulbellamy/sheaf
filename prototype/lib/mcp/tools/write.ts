@@ -5,8 +5,9 @@ import { contentArg, opIdArg, pathArg, refArg } from "../schemas";
 import { toToolError } from "../errors";
 
 /**
- * Write — mirrors Claude Code's Write. Full-doc rewrite on a draft ref.
- * Writing to main is rejected; Fork first to obtain a draft id.
+ * Write — mirrors Claude Code's Write. Full-doc rewrite. Pass a draft ref for
+ * the standard fork-propose-merge flow; pass ref="main" (or omit) to land the
+ * edit directly on the doc (thread-on-doc prototype mode).
  */
 export function registerWrite(server: McpServer, backend: Backend): void {
   server.registerTool(
@@ -14,7 +15,7 @@ export function registerWrite(server: McpServer, backend: Backend): void {
     {
       title: "Write",
       description:
-        "Overwrite a sheaf doc's full markdown on a draft ref. Writing to main is rejected — call Fork first and pass the returned draft_id as ref.",
+        "Overwrite a sheaf doc's full markdown. Pass a draft_id as `ref` to write to a draft; omit `ref` (or pass 'main') to land the edit directly on the doc and emit `doc_changed`.",
       inputSchema: {
         file_path: pathArg,
         content: contentArg,

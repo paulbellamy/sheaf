@@ -443,6 +443,16 @@ export const backendEventSchema = z.discriminatedUnion("kind", [
     target_paths: z.array(z.string()),
   }),
   z.object({
+    /**
+     * A direct edit to main, with no draft involved. Used by the
+     * thread-on-doc prototype: when an agent calls Write/Edit with
+     * ref="main", consumers see this rather than `draft_changed`.
+     * Distinct from `draft_merged` (which still goes through fork+propose+merge).
+     */
+    kind: z.literal("doc_changed"),
+    path: z.string(),
+  }),
+  z.object({
     kind: z.literal("agent_presence"),
     /** True when at least one `role: "agent"` subscriber is active. */
     connected: z.boolean(),

@@ -45,11 +45,6 @@ export async function GET(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const p = url.searchParams.get("path") ?? undefined;
   const ref = url.searchParams.get("ref") ?? "main";
-  // Threads only live on drafts. GET against main is a read; respond with an
-  // empty list so callers don't need to special-case it.
-  if (ref === "main") {
-    return Response.json({ path: p, ref: "main", threads: [] });
-  }
   try {
     const backend = getBackend();
     const summaries = await backend.listThreads({ path: p, ref });
@@ -65,12 +60,6 @@ export async function GET(req: Request): Promise<Response> {
 export async function POST(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const ref = url.searchParams.get("ref") ?? "main";
-  if (ref === "main") {
-    return Response.json(
-      { error: "threads cannot be created on main; start a draft first" },
-      { status: 400 },
-    );
-  }
   let json: unknown;
   try {
     json = await req.json();

@@ -1,0 +1,19 @@
+{
+  "name": "sheaf-obsidian",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Obsidian plugin for sheaf — comment on a doc, agent edits inline.",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "node esbuild.config.mjs production",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@codemirror/state": "^6.4.1",
+    "@codemirror/view": "^6.26.3",
+    "@types/node": "^20.11.0",
+    "esbuild": "^0.21.0",
+    "obsidian": "^1.5.7",
+    "typescript": "^5.4.0"
+  }
+}
