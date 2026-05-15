@@ -93,14 +93,13 @@ export default class SheafPlugin extends Plugin {
   }
 
   /**
-   * Convert an Obsidian vault path ("notes/proposal.md") into the sheaf-relative
-   * path the backend expects ("workspaces/<ws>/docs/notes/proposal.md").
-   *
-   * For the prototype, the vault is mapped to a single workspace; nested folders
-   * carry over verbatim.
+   * Obsidian vault path → sheaf path. The plugin assumes the vault root is
+   * the sheaf data root: the vault contains `workspaces/<ws>/docs/<doc>.md`
+   * verbatim, so `file.path` is already the sheaf path. Anything outside
+   * `workspaces/` is unsupported.
    */
   vaultPathToSheafPath(vaultPath: string): string {
-    return `workspaces/${this.settings.workspaceName}/docs/${vaultPath}`;
+    return vaultPath;
   }
 
   private async activateThreadsView(): Promise<void> {
@@ -136,6 +135,14 @@ export default class SheafPlugin extends Plugin {
       return;
     }
     const docPath = this.vaultPathToSheafPath(file.path);
+    if (!docPath.startsWith("workspaces/")) {
+      new Notice(
+        "Sheaf: vault path must be under workspaces/<ws>/docs/. " +
+          "The vault root has to be the sheaf data root.",
+        8000,
+      );
+      return;
+    }
 
     new CommentModal(this.app, selection, async (message) => {
       try {
