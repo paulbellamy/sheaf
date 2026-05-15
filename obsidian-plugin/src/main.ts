@@ -43,6 +43,7 @@ export default class SheafPlugin extends Plugin {
     this.addCommand({
       id: "sheaf-comment-for-agent",
       name: "Comment for agent",
+      hotkeys: [{ modifiers: ["Mod", "Shift"], key: "M" }],
       editorCallback: (editor, view) => {
         if (view instanceof MarkdownView) {
           this.openCommentModal(editor, view);
@@ -73,6 +74,14 @@ export default class SheafPlugin extends Plugin {
     this.addSettingTab(new SheafSettingTab(this.app, this));
 
     this.events.start();
+
+    // First-time enable / fresh install: the layout restore won't have a
+    // sheaf-threads leaf, so we add one to the right sidebar. If the user
+    // closes it and reopens the app, Obsidian's layout restore takes over
+    // (leaf is gone, plugin recreates it — mildly opinionated, prototype).
+    this.app.workspace.onLayoutReady(() => {
+      void this.ensureThreadsViewMounted();
+    });
   }
 
   async onunload(): Promise<void> {
@@ -121,6 +130,22 @@ export default class SheafPlugin extends Plugin {
       active: true,
     });
     workspace.revealLeaf(right);
+  }
+
+  /**
+   * Auto-mount on plugin load: add a sheaf-threads leaf to the right sidebar
+   * if there isn't one already. Doesn't steal focus from the user's current
+   * leaf — `active: false` keeps whatever they were looking at in front.
+   */
+  private async ensureThreadsViewMounted(): Promise<void> {
+    const { workspace } = this.app;
+    if (workspace.getLeavesOfType(VIEW_TYPE_SHEAF_THREADS).length > 0) return;
+    const right = workspace.getRightLeaf(false);
+    if (!right) return;
+    await right.setViewState({
+      type: VIEW_TYPE_SHEAF_THREADS,
+      active: false,
+    });
   }
 
   private openCommentModal(editor: Editor, view: MarkdownView): void {
