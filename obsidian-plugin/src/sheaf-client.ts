@@ -22,6 +22,25 @@ export type Thread = {
   }>;
 };
 
+export class SheafApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly body: unknown,
+  ) {
+    super(message);
+    this.name = "SheafApiError";
+  }
+}
+
+function describeError(status: number, body: unknown): string {
+  if (body && typeof body === "object") {
+    const e = body as { error?: string; details?: unknown };
+    if (typeof e.error === "string") return `${status}: ${e.error}`;
+  }
+  return `HTTP ${status}`;
+}
+
 export class SheafClient {
   constructor(private baseUrl: string) {}
 
@@ -31,7 +50,10 @@ export class SheafClient {
 
   async listThreads(docPath: string): Promise<Thread[]> {
     const url = `${this.baseUrl}/api/ui/threads?path=${encodeURIComponent(docPath)}&ref=main`;
-    const res = await requestUrl({ url, method: "GET" });
+    const res = await requestUrl({ url, method: "GET", throw: false });
+    if (res.status >= 400) {
+      throw new SheafApiError(describeError(res.status, res.json), res.status, res.json);
+    }
     return (res.json as { threads: Thread[] }).threads;
   }
 
@@ -50,23 +72,34 @@ export class SheafClient {
         targets: [{ char_range: charRange }],
         message,
       }),
+      throw: false,
     });
+    if (res.status >= 400) {
+      throw new SheafApiError(describeError(res.status, res.json), res.status, res.json);
+    }
     return (res.json as { thread_id: string }).thread_id;
   }
 
   async replyThread(threadId: string, message: string): Promise<void> {
     const url = `${this.baseUrl}/api/ui/threads/${threadId}/reply`;
-    await requestUrl({
+    const res = await requestUrl({
       url,
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ message }),
+      throw: false,
     });
+    if (res.status >= 400) {
+      throw new SheafApiError(describeError(res.status, res.json), res.status, res.json);
+    }
   }
 
   async resolveThread(threadId: string): Promise<void> {
     const url = `${this.baseUrl}/api/ui/threads/${threadId}/resolve`;
-    await requestUrl({ url, method: "POST" });
+    const res = await requestUrl({ url, method: "POST", throw: false });
+    if (res.status >= 400) {
+      throw new SheafApiError(describeError(res.status, res.json), res.status, res.json);
+    }
   }
 
   async ping(): Promise<boolean> {
@@ -82,3 +115,4 @@ export class SheafClient {
     }
   }
 }
+

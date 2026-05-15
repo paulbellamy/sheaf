@@ -177,7 +177,8 @@ export class ThreadsView extends ItemView {
           await this.refreshCurrent();
         } catch (err) {
           console.error("sheaf: resolve failed", err);
-          new Notice("Resolve failed; see console");
+          const msg = err instanceof Error ? err.message : String(err);
+          new Notice(`Sheaf: ${msg}`, 8000);
         }
       });
     } else {

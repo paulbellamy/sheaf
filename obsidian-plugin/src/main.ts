@@ -1,6 +1,6 @@
 import { Editor, MarkdownView, Notice, Plugin, TFile } from "obsidian";
 
-import { SheafClient } from "./sheaf-client";
+import { SheafApiError, SheafClient } from "./sheaf-client";
 import { SheafEventStream, type BackendEvent } from "./sheaf-events";
 import {
   DEFAULT_SETTINGS,
@@ -143,7 +143,13 @@ export default class SheafPlugin extends Plugin {
         new Notice("Comment posted; agent will pick it up");
       } catch (err) {
         console.error("sheaf: addThread failed", err);
-        new Notice("Failed to post comment; see console");
+        const msg =
+          err instanceof SheafApiError
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : String(err);
+        new Notice(`Sheaf: ${msg}`, 8000);
       }
     }).open();
   }
