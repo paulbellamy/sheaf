@@ -69,7 +69,15 @@ export class ThreadsView extends ItemView {
    * the active view is the threads panel, not the editor.
    */
   private navigateToAnchor(thread: Thread): void {
-    if (!this.currentFile) return;
+    console.log("sheaf: navigateToAnchor", {
+      threadId: thread.id,
+      currentFile: this.currentFile?.path,
+      targets: thread.targets,
+    });
+    if (!this.currentFile) {
+      console.log("sheaf: navigate aborted — no currentFile");
+      return;
+    }
     let mdView: MarkdownView | null = null;
     this.app.workspace.iterateAllLeaves((leaf) => {
       const v = leaf.view;
@@ -77,7 +85,13 @@ export class ThreadsView extends ItemView {
         mdView = v;
       }
     });
-    if (!mdView) return;
+    if (!mdView) {
+      console.log(
+        "sheaf: navigate aborted — no MarkdownView for",
+        this.currentFile.path,
+      );
+      return;
+    }
     const editor = (mdView as MarkdownView).editor;
     const target = thread.targets[0];
     if (!target) return;
@@ -291,7 +305,13 @@ export class ThreadsView extends ItemView {
     // and select it; doc threads scroll to the top.
     card.addEventListener("click", (e) => {
       const t = e.target as HTMLElement;
-      if (t.closest("button, textarea, input, a")) return;
+      const interactive = t.closest("button, textarea, input, a");
+      console.log("sheaf: card click", {
+        thread: thread.id,
+        target: t.tagName,
+        interactive: !!interactive,
+      });
+      if (interactive) return;
       this.navigateToAnchor(thread);
     });
 
