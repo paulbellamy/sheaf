@@ -4,11 +4,13 @@ import type SheafPlugin from "./main";
 export type SheafSettings = {
   serverUrl: string;
   defaultAuthor: string;
+  showResolved: boolean;
 };
 
 export const DEFAULT_SETTINGS: SheafSettings = {
   serverUrl: "http://localhost:3000",
   defaultAuthor: "user",
+  showResolved: true,
 };
 
 export class SheafSettingTab extends PluginSettingTab {
@@ -50,6 +52,19 @@ export class SheafSettingTab extends PluginSettingTab {
             this.plugin.settings.defaultAuthor = value.trim() || "user";
             await this.plugin.saveSettings();
           }),
+      );
+
+    new Setting(containerEl)
+      .setName("Show resolved threads")
+      .setDesc(
+        "When off, resolved threads are hidden from the sidebar entirely. When on, they appear in a collapsed Resolved section.",
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.showResolved).onChange(async (value) => {
+          this.plugin.settings.showResolved = value;
+          await this.plugin.saveSettings();
+          this.plugin.refreshThreadsView();
+        }),
       );
   }
 }

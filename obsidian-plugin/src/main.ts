@@ -106,6 +106,11 @@ export default class SheafPlugin extends Plugin {
     this.updateStatusBar();
   }
 
+  /** Re-render the threads panel from current settings. */
+  refreshThreadsView(): void {
+    this.getThreadsView()?.rerender();
+  }
+
   /**
    * Obsidian vault path → sheaf path. The plugin assumes the vault root is
    * the sheaf data root: the vault contains `workspaces/<ws>/docs/<doc>.md`

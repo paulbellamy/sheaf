@@ -1,4 +1,4 @@
-import { ItemView, WorkspaceLeaf, TFile, Notice } from "obsidian";
+import { ItemView, MarkdownView, WorkspaceLeaf, TFile, Notice } from "obsidian";
 import type SheafPlugin from "../main";
 import type { Thread, ThreadDraftBody } from "../sheaf-client";
 
@@ -51,6 +51,47 @@ export class ThreadsView extends ItemView {
   private agentConnected = false;
   // Per-thread selected variant index. Resets when the thread's payload changes.
   private selectedVariant = new Map<string, number>();
+  // Resolved section starts collapsed each session so the panel reads as
+  // "what's outstanding" by default.
+  private resolvedCollapsed = true;
+
+  rerender(): void {
+    this.render();
+  }
+
+  /**
+   * Scroll the active markdown editor to the thread's anchor and select it.
+   * Range threads: search for `anchored_text` in the current doc and
+   * select+scroll. Doc threads: scroll to the top. Drifted (text not found)
+   * threads: show a Notice and leave the editor where it is.
+   */
+  private navigateToAnchor(thread: Thread): void {
+    const mdView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!mdView) return;
+    const editor = mdView.editor;
+    const target = thread.targets[0];
+    if (!target) return;
+
+    if (target.scope === "doc") {
+      editor.scrollIntoView({ from: { line: 0, ch: 0 }, to: { line: 0, ch: 0 } }, true);
+      editor.setCursor({ line: 0, ch: 0 });
+      return;
+    }
+
+    const docText = editor.getValue();
+    const anchored = target.anchor.anchored_text;
+    if (!anchored) return;
+    const idx = docText.indexOf(anchored);
+    if (idx === -1) {
+      new Notice("Anchor drifted — text not in doc", 4000);
+      return;
+    }
+    const from = editor.offsetToPos(idx);
+    const to = editor.offsetToPos(idx + anchored.length);
+    editor.setSelection(from, to);
+    editor.scrollIntoView({ from, to }, true);
+    editor.focus();
+  }
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -193,11 +234,37 @@ export class ThreadsView extends ItemView {
       for (const t of open) this.renderThread(section, t);
     }
 
-    if (closed.length > 0) {
+    // Resolved section. Hidden entirely when settings.showResolved is off;
+    // otherwise collapsible behind a ▶/▼ toggle that defaults to collapsed.
+    if (this.plugin.settings.showResolved && closed.length > 0) {
       const section = el.createDiv();
-      const h = section.createEl("h4", { text: `Resolved (${closed.length})` });
+      const h = section.createEl("h4");
       h.style.margin = "0.75em 0.5em 0.25em";
-      for (const t of closed) this.renderThread(section, t);
+      h.style.cursor = "pointer";
+      h.style.userSelect = "none";
+      h.style.display = "flex";
+      h.style.alignItems = "center";
+      h.style.gap = "0.4em";
+
+      const caret = h.createSpan();
+      caret.setText(this.resolvedCollapsed ? "▶" : "▼");
+      caret.style.fontSize = "0.7em";
+      caret.style.opacity = "0.6";
+
+      const label = h.createSpan();
+      label.setText(`Resolved (${closed.length})`);
+      label.style.opacity = "0.7";
+
+      h.addEventListener("click", () => {
+        this.resolvedCollapsed = !this.resolvedCollapsed;
+        this.render();
+      });
+
+      if (!this.resolvedCollapsed) {
+        const body = section.createDiv();
+        body.style.opacity = "0.55";
+        for (const t of closed) this.renderThread(body, t);
+      }
     }
   }
 
@@ -205,6 +272,16 @@ export class ThreadsView extends ItemView {
     const card = parent.createDiv({ cls: "sheaf-thread" });
     card.style.padding = "0.5em 0.75em";
     card.style.borderBottom = "1px solid var(--background-modifier-border)";
+    card.style.cursor = "pointer";
+
+    // Click anywhere on the card (except buttons/inputs) navigates the
+    // editor to the anchor — range threads scroll to the highlighted text
+    // and select it; doc threads scroll to the top.
+    card.addEventListener("click", (e) => {
+      const t = e.target as HTMLElement;
+      if (t.closest("button, textarea, input, a")) return;
+      this.navigateToAnchor(thread);
+    });
 
     const drifted = isDrifted(thread, this.docText);
 
