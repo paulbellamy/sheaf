@@ -263,6 +263,8 @@ export class ThreadsView extends ItemView {
     }
 
     if (thread.status === "open") {
+      this.renderReplyInput(card, thread);
+
       const actions = card.createDiv();
       actions.style.marginTop = "0.5em";
       actions.style.display = "flex";
@@ -291,6 +293,59 @@ export class ThreadsView extends ItemView {
       status.style.opacity = "0.5";
       status.style.marginTop = "0.25em";
     }
+  }
+
+  private renderReplyInput(parent: HTMLElement, thread: Thread): void {
+    const wrap = parent.createDiv();
+    wrap.style.marginTop = "0.5em";
+    wrap.style.display = "flex";
+    wrap.style.gap = "0.4em";
+    wrap.style.alignItems = "flex-start";
+
+    const input = wrap.createEl("textarea");
+    input.placeholder = "Reply…";
+    input.rows = 1;
+    input.style.flex = "1";
+    input.style.fontSize = "0.85em";
+    input.style.padding = "0.3em 0.4em";
+    input.style.resize = "vertical";
+    input.style.minHeight = "1.8em";
+    input.style.border = "1px solid var(--background-modifier-border)";
+    input.style.borderRadius = "3px";
+    input.style.background = "var(--background-primary)";
+    input.style.color = "var(--text-normal)";
+
+    const send = wrap.createEl("button", { text: "Send" });
+    send.style.fontSize = "0.8em";
+
+    const submit = async () => {
+      const message = input.value.trim();
+      if (!message) return;
+      input.disabled = true;
+      send.disabled = true;
+      try {
+        await this.plugin.client.replyThread(thread.id, message);
+        input.value = "";
+        await this.refreshCurrent();
+      } catch (err) {
+        console.error("sheaf: reply failed", err);
+        const msg = err instanceof Error ? err.message : String(err);
+        new Notice(`Sheaf: ${msg}`, 8000);
+      } finally {
+        input.disabled = false;
+        send.disabled = false;
+      }
+    };
+
+    send.addEventListener("click", () => void submit());
+    input.addEventListener("keydown", (e) => {
+      // Cmd/Ctrl+Enter submits. Plain Enter inserts a newline so the user
+      // can write multi-line replies.
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        void submit();
+      }
+    });
   }
 
   private renderVariants(

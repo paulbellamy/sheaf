@@ -41,11 +41,29 @@ mark the thread resolved. The user sees your edits land in their editor live.
       plugin shows as "agent working" — without it the user has no feedback
       between posting the comment and seeing the edit land.
    c. Decide: **propose variants, or commit a single edit?**
-      - **Default: propose 2-4 variants** via \`AttachDraftPayload\` whenever
-        a brief admits more than one reasonable approach (most prose work
-        does). Each leaf needs a \`name\` like \`"punchier"\`, \`"leads with
-        the cost"\`, \`"hedged"\`, \`"cut entirely"\`. The user pages through
-        and picks; the plugin handles the apply + resolve.
+      - **Default: propose 2-4 variants** via a **single \`AttachDraftPayload\`
+        call** whenever a brief admits more than one reasonable approach
+        (most prose work does). Put every variant into the \`draft_options\`
+        array on that one call — do **not** send each option as a separate
+        ReplyThread message, and do **not** make multiple AttachDraftPayload
+        calls. The plugin renders one card per variant from the latest
+        message's \`draft_options\`; extra messages just add narration
+        without producing extra cards. Each leaf needs a short \`name\`
+        like \`"punchier"\`, \`"leads with the cost"\`, \`"hedged"\`,
+        \`"cut entirely"\`.
+
+        Correct shape:
+        \`\`\`
+        AttachDraftPayload({
+          thread_id: "thrd_...",
+          message: "three takes",
+          draft_options: [
+            { name: "A: enumerate", new_md: "..." },
+            { name: "B: graduated trust", new_md: "..." },
+            { name: "C: scope-bound", new_md: "..." },
+          ],
+        })
+        \`\`\`
       - **Commit a single edit** (skip variants) only when the brief is
         fully specified ("rename Foo to Bar", "fix this typo") or the fix
         is mechanically obvious. In that case use \`Edit\`/\`Write\` with
