@@ -60,21 +60,33 @@ export class ThreadsView extends ItemView {
   }
 
   /**
-   * Scroll the active markdown editor to the thread's anchor and select it.
-   * Range threads: search for `anchored_text` in the current doc and
-   * select+scroll. Doc threads: scroll to the top. Drifted (text not found)
-   * threads: show a Notice and leave the editor where it is.
+   * Scroll the markdown editor showing `this.currentFile` to the thread's
+   * anchor and select it. Range threads: search for `anchored_text` in the
+   * current doc. Doc threads: scroll to the top. Drifted threads: notice.
+   *
+   * Looks up the editor by file rather than by `getActiveViewOfType` — the
+   * click that triggered this navigation moves focus into the sidebar, so
+   * the active view is the threads panel, not the editor.
    */
   private navigateToAnchor(thread: Thread): void {
-    const mdView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!this.currentFile) return;
+    let mdView: MarkdownView | null = null;
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      const v = leaf.view;
+      if (v instanceof MarkdownView && v.file === this.currentFile) {
+        mdView = v;
+      }
+    });
     if (!mdView) return;
-    const editor = mdView.editor;
+    const editor = (mdView as MarkdownView).editor;
     const target = thread.targets[0];
     if (!target) return;
 
     if (target.scope === "doc") {
-      editor.scrollIntoView({ from: { line: 0, ch: 0 }, to: { line: 0, ch: 0 } }, true);
-      editor.setCursor({ line: 0, ch: 0 });
+      const top = { line: 0, ch: 0 };
+      editor.scrollIntoView({ from: top, to: top }, true);
+      editor.setCursor(top);
+      editor.focus();
       return;
     }
 
