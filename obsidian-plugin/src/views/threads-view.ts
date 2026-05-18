@@ -303,7 +303,7 @@ export class ThreadsView extends ItemView {
     wrap.style.alignItems = "flex-start";
 
     const input = wrap.createEl("textarea");
-    input.placeholder = "Reply…";
+    input.placeholder = "Reply… (Shift+Enter for newline)";
     input.rows = 1;
     input.style.flex = "1";
     input.style.fontSize = "0.85em";
@@ -339,9 +339,8 @@ export class ThreadsView extends ItemView {
 
     send.addEventListener("click", () => void submit());
     input.addEventListener("keydown", (e) => {
-      // Cmd/Ctrl+Enter submits. Plain Enter inserts a newline so the user
-      // can write multi-line replies.
-      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      // Enter submits; Shift+Enter inserts a newline for multi-line replies.
+      if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         void submit();
       }

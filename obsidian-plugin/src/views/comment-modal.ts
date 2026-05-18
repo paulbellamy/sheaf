@@ -31,6 +31,12 @@ export class CommentModal extends Modal {
       preview.style.borderLeft = "2px solid var(--text-muted)";
     }
 
+    const submit = () => {
+      if (this.message.trim().length === 0) return;
+      this.onSubmit(this.message.trim());
+      this.close();
+    };
+
     new Setting(contentEl)
       .setName("Comment")
       .setDesc("What should the agent do with this passage?")
@@ -41,19 +47,19 @@ export class CommentModal extends Modal {
         });
         t.inputEl.rows = 4;
         t.inputEl.style.width = "100%";
+        // Enter submits; Shift+Enter inserts a newline for multi-line briefs.
+        t.inputEl.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            submit();
+          }
+        });
         setTimeout(() => t.inputEl.focus(), 0);
       });
 
     new Setting(contentEl)
       .addButton((b) =>
-        b
-          .setButtonText("Send")
-          .setCta()
-          .onClick(() => {
-            if (this.message.trim().length === 0) return;
-            this.onSubmit(this.message.trim());
-            this.close();
-          }),
+        b.setButtonText("Send").setCta().onClick(submit),
       )
       .addButton((b) =>
         b.setButtonText("Cancel").onClick(() => this.close()),
