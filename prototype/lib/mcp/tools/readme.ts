@@ -40,24 +40,48 @@ mark the thread resolved. The user sees your edits land in their editor live.
       short paraphrase of what you're about to do). This is the signal the
       plugin shows as "agent working" — without it the user has no feedback
       between posting the comment and seeing the edit land.
-   c. Branch on the first target's \`scope\`:
-      - \`scope: "range"\` — the user highlighted a specific passage. Use
-        \`target.anchor.anchored_text\` as \`old_string\` in an \`Edit\` call.
-      - \`scope: "doc"\` — the comment is about the whole doc. There is no
-        anchor. \`Read\` the doc and apply the change broadly (\`Write\` the
-        whole new version, or run multiple \`Edit\` calls).
-   d. \`ResolveThread(thread_id)\` once your edit has landed.
+   c. Decide: **propose variants, or commit a single edit?**
+      - **Default: propose 2-4 variants** via \`AttachDraftPayload\` whenever
+        a brief admits more than one reasonable approach (most prose work
+        does). Each leaf needs a \`name\` like \`"punchier"\`, \`"leads with
+        the cost"\`, \`"hedged"\`, \`"cut entirely"\`. The user pages through
+        and picks; the plugin handles the apply + resolve.
+      - **Commit a single edit** (skip variants) only when the brief is
+        fully specified ("rename Foo to Bar", "fix this typo") or the fix
+        is mechanically obvious. In that case use \`Edit\`/\`Write\` with
+        \`ref="main"\` then \`ResolveThread\`.
+   d. Branch the variant content on the first target's \`scope\`:
+      - \`scope: "range"\` — each \`new_md\` is the replacement for the
+        anchored passage only. Keep variants the size of the highlight.
+      - \`scope: "doc"\` — each \`new_md\` is the **whole replacement doc**.
+        For doc-level briefs, variants are full-doc rewrites.
 3. Stop with \`TaskStop\` when the session ends.
 
-If the brief is too vague to act on (e.g. *"tighten this"* with no length
-target), \`ReplyThread\` with a clarifying question and skip; do not resolve.
-The reply itself flips the thread into "agent working" — fine, the user can
-see you're waiting on them.
+If the brief is too vague even for variants (e.g. *"rework §4"* with no
+angle), \`ReplyThread\` with a clarifying question and skip. The reply
+itself flips the thread into "agent working" — fine, the user can see
+you're waiting on them.
 
-Skip the acknowledgement step when reacting to a \`thread_changed\` you
-triggered yourself (your own ReplyThread or ResolveThread call fires the
-same event). Detect this by checking the latest message author: if it's
-already yours, no further reply is needed.
+## Restraint
+
+For range-anchored threads, your \`Edit\` (or each variant's \`new_md\`) should
+only touch the anchored passage. If the brief implies broader changes —
+e.g., "tighten this and update the intro to match" — split it: act on the
+anchored part, and \`ReplyThread\` noting what broader change you'd recommend
+so the user can post a follow-up thread on the right anchor.
+
+The agent edits the thing asked for, not the thing it noticed.
+
+## Skip when another agent is already working
+
+Multiple agents may be subscribed to the same sheaf. Check the thread's
+latest message author before acting:
+- If the latest message is from the user → it's yours to pick up.
+- If the latest message is from another agent → another agent is on it; skip.
+- If the latest message is from you (echo of your own ReplyThread) → skip.
+
+The plugin uses the same "any non-user message on an open thread" signal to
+show "agent working", so this convention also keeps the UI honest.
 
 ## Subscribe to events
 

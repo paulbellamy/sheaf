@@ -14,17 +14,23 @@ export type ThreadTarget =
       };
     };
 
+export type ThreadDraftBody = { new_md: string; name?: string };
+
+export type ThreadMessage = {
+  author: string;
+  ts: number;
+  body: string;
+  draft?: ThreadDraftBody;
+  draft_options?: ThreadDraftBody[];
+};
+
 export type Thread = {
   id: string;
   created: number;
   status: "open" | "accepted" | "declined" | "archived";
   draft_id?: string;
   targets: ThreadTarget[];
-  messages: Array<{
-    author: string;
-    ts: number;
-    body: string;
-  }>;
+  messages: ThreadMessage[];
 };
 
 export class SheafApiError extends Error {
@@ -103,8 +109,17 @@ export class SheafClient {
     }
   }
 
-  async resolveThread(threadId: string): Promise<void> {
-    const url = `${this.baseUrl}/api/ui/threads/${threadId}/resolve`;
+  /**
+   * Resolve a thread. Pass `optionIndex` to apply that variant from the
+   * latest `draft_options` payload before resolving; omit to dismiss the
+   * thread without applying anything (uses `?apply=false` so threads with
+   * variants don't surprise-apply option 0).
+   */
+  async resolveThread(threadId: string, optionIndex?: number): Promise<void> {
+    const url =
+      optionIndex === undefined
+        ? `${this.baseUrl}/api/ui/threads/${threadId}/resolve?apply=false`
+        : `${this.baseUrl}/api/ui/threads/${threadId}/resolve?option_index=${optionIndex}`;
     const res = await requestUrl({ url, method: "POST", throw: false });
     if (res.status >= 400) {
       throw new SheafApiError(describeError(res.status, res.json), res.status, res.json);

@@ -1,6 +1,8 @@
 import { ItemView, WorkspaceLeaf, TFile, Notice } from "obsidian";
 import type SheafPlugin from "../main";
-import type { Thread } from "../sheaf-client";
+import type { Thread, ThreadDraftBody } from "../sheaf-client";
+
+export const VIEW_TYPE_SHEAF_THREADS = "sheaf-threads";
 
 /**
  * "Working" = thread is open AND the latest message is not from the user.
@@ -14,12 +16,41 @@ function isWorking(thread: Thread): boolean {
   return !!last && last.author !== "user";
 }
 
-export const VIEW_TYPE_SHEAF_THREADS = "sheaf-threads";
+/**
+ * Latest message that carries variant options. Returns the message + the
+ * leaves to render. Walks newest-first so newer proposals shadow older ones.
+ * A single-leaf `draft` payload is treated as a one-element option list.
+ */
+function latestVariants(thread: Thread): ThreadDraftBody[] | null {
+  for (let i = thread.messages.length - 1; i >= 0; i--) {
+    const m = thread.messages[i];
+    if (m.draft_options && m.draft_options.length > 0) return m.draft_options;
+    if (m.draft) return [m.draft];
+  }
+  return null;
+}
+
+/**
+ * Drift = thread is range-anchored but its anchored_text isn't found in the
+ * current doc text. Anchor needs re-resolution or the thread is stale.
+ */
+function isDrifted(thread: Thread, docText: string | null): boolean {
+  if (docText === null) return false;
+  const target = thread.targets[0];
+  if (target?.scope !== "range") return false;
+  const anchored = target.anchor.anchored_text;
+  if (!anchored) return false;
+  return !docText.includes(anchored);
+}
 
 export class ThreadsView extends ItemView {
   private currentDocPath: string | null = null;
+  private currentFile: TFile | null = null;
+  private docText: string | null = null;
   private threads: Thread[] = [];
   private agentConnected = false;
+  // Per-thread selected variant index. Resets when the thread's payload changes.
+  private selectedVariant = new Map<string, number>();
 
   constructor(
     leaf: WorkspaceLeaf,
@@ -43,12 +74,17 @@ export class ThreadsView extends ItemView {
   async onOpen(): Promise<void> {
     this.contentEl.empty();
     this.contentEl.addClass("sheaf-threads-view");
-    // Sync to whatever presence the plugin's seen so far — events that
-    // arrived before the view opened would otherwise be lost.
     this.agentConnected = this.plugin.agentConnected;
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
         void this.onFileOpen(file);
+      }),
+    );
+    this.registerEvent(
+      this.app.vault.on("modify", (file) => {
+        if (file instanceof TFile && file === this.currentFile) {
+          void this.refreshDocText();
+        }
       }),
     );
     const active = this.app.workspace.getActiveFile();
@@ -81,11 +117,27 @@ export class ThreadsView extends ItemView {
   }
 
   private async onFileOpen(file: TFile | null): Promise<void> {
+    this.currentFile = file;
     this.currentDocPath = file ? this.plugin.vaultPathToSheafPath(file.path) : null;
     this.threads = [];
+    this.docText = null;
+    this.selectedVariant.clear();
     this.render();
+    if (this.currentFile) {
+      await this.refreshDocText();
+    }
     if (this.currentDocPath) {
       await this.refreshCurrent();
+    }
+  }
+
+  private async refreshDocText(): Promise<void> {
+    if (!this.currentFile) return;
+    try {
+      this.docText = await this.app.vault.cachedRead(this.currentFile);
+      this.render();
+    } catch (err) {
+      console.error("sheaf: read file failed", err);
     }
   }
 
@@ -99,9 +151,7 @@ export class ThreadsView extends ItemView {
 
     const presence = header.createDiv();
     presence.setText(
-      this.agentConnected
-        ? "● agent connected"
-        : "○ no agent listening",
+      this.agentConnected ? "● agent connected" : "○ no agent listening",
     );
     presence.style.fontSize = "0.85em";
     presence.style.opacity = this.agentConnected ? "1" : "0.6";
@@ -125,7 +175,9 @@ export class ThreadsView extends ItemView {
 
     if (this.threads.length === 0) {
       const empty = el.createDiv({ cls: "sheaf-empty" });
-      empty.setText("No threads. Select text and run \"Sheaf: Comment for agent\".");
+      empty.setText(
+        'No threads. Select text and run "Sheaf: Comment for agent" (Cmd/Ctrl+Shift+M).',
+      );
       empty.style.padding = "1em";
       empty.style.opacity = "0.6";
       return;
@@ -136,16 +188,15 @@ export class ThreadsView extends ItemView {
 
     if (open.length > 0) {
       const section = el.createDiv();
-      section.createEl("h4", { text: `Open (${open.length})` }).style.margin =
-        "0.75em 0.5em 0.25em";
+      const h = section.createEl("h4", { text: `Open (${open.length})` });
+      h.style.margin = "0.75em 0.5em 0.25em";
       for (const t of open) this.renderThread(section, t);
     }
 
     if (closed.length > 0) {
       const section = el.createDiv();
-      section.createEl("h4", {
-        text: `Resolved (${closed.length})`,
-      }).style.margin = "0.75em 0.5em 0.25em";
+      const h = section.createEl("h4", { text: `Resolved (${closed.length})` });
+      h.style.margin = "0.75em 0.5em 0.25em";
       for (const t of closed) this.renderThread(section, t);
     }
   }
@@ -155,15 +206,22 @@ export class ThreadsView extends ItemView {
     card.style.padding = "0.5em 0.75em";
     card.style.borderBottom = "1px solid var(--background-modifier-border)";
 
+    const drifted = isDrifted(thread, this.docText);
+
     if (isWorking(thread)) {
       const badge = card.createDiv();
       badge.setText("● agent working");
       badge.style.fontSize = "0.75em";
       badge.style.color = "var(--text-accent)";
       badge.style.marginBottom = "0.4em";
-      badge.style.display = "flex";
-      badge.style.alignItems = "center";
-      badge.style.gap = "0.3em";
+    }
+
+    if (drifted) {
+      const badge = card.createDiv();
+      badge.setText("⚠ anchor drifted");
+      badge.style.fontSize = "0.75em";
+      badge.style.color = "var(--text-warning)";
+      badge.style.marginBottom = "0.4em";
     }
 
     const target = thread.targets[0];
@@ -199,12 +257,20 @@ export class ThreadsView extends ItemView {
       m.style.marginBottom = "0.25em";
     }
 
+    const variants = latestVariants(thread);
+    if (variants && thread.status === "open") {
+      this.renderVariants(card, thread, variants);
+    }
+
     if (thread.status === "open") {
       const actions = card.createDiv();
       actions.style.marginTop = "0.5em";
       actions.style.display = "flex";
       actions.style.gap = "0.5em";
 
+      // "Resolve" without applying. Use when the agent already did its work
+      // via Edit/Write directly, or when the user wants to dismiss without
+      // taking any of the variants.
       const resolve = actions.createEl("button", { text: "Resolve" });
       resolve.style.fontSize = "0.8em";
       resolve.addEventListener("click", async () => {
@@ -225,5 +291,91 @@ export class ThreadsView extends ItemView {
       status.style.opacity = "0.5";
       status.style.marginTop = "0.25em";
     }
+  }
+
+  private renderVariants(
+    parent: HTMLElement,
+    thread: Thread,
+    variants: ThreadDraftBody[],
+  ): void {
+    const selected = Math.min(
+      this.selectedVariant.get(thread.id) ?? 0,
+      variants.length - 1,
+    );
+
+    const wrap = parent.createDiv();
+    wrap.style.marginTop = "0.5em";
+    wrap.style.padding = "0.4em";
+    wrap.style.border = "1px solid var(--background-modifier-border)";
+    wrap.style.borderRadius = "4px";
+    wrap.style.background = "var(--background-secondary)";
+
+    // Variant tabs (titles in a row, click to switch).
+    const tabs = wrap.createDiv();
+    tabs.style.display = "flex";
+    tabs.style.gap = "0.25em";
+    tabs.style.flexWrap = "wrap";
+    tabs.style.marginBottom = "0.4em";
+
+    variants.forEach((v, i) => {
+      const tab = tabs.createEl("button", {
+        text: v.name ?? `option ${i + 1}`,
+      });
+      tab.style.fontSize = "0.75em";
+      tab.style.padding = "0.15em 0.5em";
+      tab.style.border = "1px solid var(--background-modifier-border)";
+      tab.style.borderRadius = "3px";
+      tab.style.cursor = "pointer";
+      if (i === selected) {
+        tab.style.background = "var(--interactive-accent)";
+        tab.style.color = "var(--text-on-accent)";
+      } else {
+        tab.style.background = "var(--background-primary)";
+      }
+      tab.addEventListener("click", () => {
+        this.selectedVariant.set(thread.id, i);
+        this.render();
+      });
+    });
+
+    // Preview of the selected variant's text.
+    const preview = wrap.createDiv();
+    preview.setText(
+      variants[selected].new_md.length > 240
+        ? variants[selected].new_md.slice(0, 240) + "…"
+        : variants[selected].new_md,
+    );
+    preview.style.fontSize = "0.85em";
+    preview.style.fontFamily = "var(--font-monospace)";
+    preview.style.padding = "0.4em";
+    preview.style.background = "var(--background-primary)";
+    preview.style.borderRadius = "3px";
+    preview.style.whiteSpace = "pre-wrap";
+    preview.style.maxHeight = "200px";
+    preview.style.overflow = "auto";
+
+    // Apply this variant.
+    const applyBar = wrap.createDiv();
+    applyBar.style.display = "flex";
+    applyBar.style.gap = "0.5em";
+    applyBar.style.marginTop = "0.4em";
+    const apply = applyBar.createEl("button", {
+      text: `Apply "${variants[selected].name ?? `option ${selected + 1}`}"`,
+    });
+    apply.style.fontSize = "0.8em";
+    apply.style.background = "var(--interactive-accent)";
+    apply.style.color = "var(--text-on-accent)";
+    apply.addEventListener("click", async () => {
+      try {
+        await this.plugin.client.resolveThread(thread.id, selected);
+        new Notice(`Applied "${variants[selected].name ?? `option ${selected + 1}`}"`);
+        this.selectedVariant.delete(thread.id);
+        await this.refreshCurrent();
+      } catch (err) {
+        console.error("sheaf: apply failed", err);
+        const msg = err instanceof Error ? err.message : String(err);
+        new Notice(`Sheaf: ${msg}`, 8000);
+      }
+    });
   }
 }

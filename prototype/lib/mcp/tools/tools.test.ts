@@ -13,6 +13,7 @@ import { GET as draftIdGET } from "../../../app/api/ui/drafts/[id]/route";
 import { POST as acceptPOST } from "../../../app/api/ui/drafts/[id]/accept/route";
 import { POST as payloadPOST } from "../../../app/api/ui/threads/[id]/payload/route";
 import { POST as reopenPOST } from "../../../app/api/ui/threads/[id]/reopen/route";
+import { POST as resolvePOST } from "../../../app/api/ui/threads/[id]/resolve/route";
 import { GET as versionsGET } from "../../../app/api/ui/doc-versions/[...path]/route";
 import { setBackend } from "../backend/factory";
 import type { BackendEvent } from "../backend";
@@ -318,6 +319,119 @@ describe("doc-level threads (scope=doc)", () => {
         author: "user",
       }),
     ).rejects.toThrow();
+  });
+});
+
+describe("resolve route applies variants to main (thread-on-doc)", () => {
+  let root: string;
+  let backend: StubBackend;
+  const docPath = "workspaces/ws/docs/a.md";
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-apply-"));
+    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "hello world",
+    );
+    backend = new StubBackend(root);
+    setBackend(backend);
+  });
+
+  afterEach(async () => {
+    setBackend(null);
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("applies the chosen variant to main for a range-anchored thread", async () => {
+    const threadId = await backend.addThread({
+      targets: [{ path: docPath, scope: "range", char_range: { from: 0, to: 5 } }],
+      message: "punchier",
+      author: "user",
+    });
+    await backend.attachDraftPayload(threadId, {
+      author: "agent",
+      message: "two takes",
+      draft_options: [
+        { name: "shout", new_md: "HELLO" },
+        { name: "soft", new_md: "hey" },
+      ],
+    });
+
+    const req = new Request(
+      `http://localhost/api/ui/threads/${threadId}/resolve?option_index=1`,
+      { method: "POST" },
+    );
+    const ctx = { params: Promise.resolve({ id: threadId }) };
+    const res = await resolvePOST(req, ctx);
+    expect(res.status).toBe(200);
+    const onDisk = await fs.readFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "utf8",
+    );
+    expect(onDisk).toBe("hey world");
+    const thread = await backend.readThread(threadId);
+    expect(thread.status).toBe("accepted");
+  });
+
+  it("applies the chosen variant as full-doc rewrite for a doc-scope thread", async () => {
+    const threadId = await backend.addThread({
+      targets: [{ path: docPath, scope: "doc" }],
+      message: "rewrite",
+      author: "user",
+    });
+    await backend.attachDraftPayload(threadId, {
+      author: "agent",
+      draft_options: [
+        { name: "minimal", new_md: "# A\nMinimal.\n" },
+        { name: "verbose", new_md: "# A\nVery verbose version.\n" },
+      ],
+    });
+
+    const req = new Request(
+      `http://localhost/api/ui/threads/${threadId}/resolve?option_index=0`,
+      { method: "POST" },
+    );
+    const ctx = { params: Promise.resolve({ id: threadId }) };
+    const res = await resolvePOST(req, ctx);
+    expect(res.status).toBe(200);
+    const onDisk = await fs.readFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "utf8",
+    );
+    expect(onDisk).toBe("# A\nMinimal.\n");
+  });
+
+  it("?apply=false resolves without applying any variant", async () => {
+    const threadId = await backend.addThread({
+      targets: [{ path: docPath, scope: "range", char_range: { from: 0, to: 5 } }],
+      message: "fix",
+      author: "user",
+    });
+    await backend.attachDraftPayload(threadId, {
+      author: "agent",
+      draft_options: [
+        { name: "a", new_md: "AAA" },
+        { name: "b", new_md: "BBB" },
+      ],
+    });
+
+    const req = new Request(
+      `http://localhost/api/ui/threads/${threadId}/resolve?apply=false`,
+      { method: "POST" },
+    );
+    const ctx = { params: Promise.resolve({ id: threadId }) };
+    const res = await resolvePOST(req, ctx);
+    expect(res.status).toBe(200);
+    const onDisk = await fs.readFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "utf8",
+    );
+    expect(onDisk).toBe("hello world"); // unchanged
+    const thread = await backend.readThread(threadId);
+    expect(thread.status).toBe("accepted");
   });
 });
 

@@ -62,39 +62,44 @@ export async function POST(req: Request, ctx: Ctx): Promise<Response> {
     return Response.json({ error: "invalid option_index" }, { status: 400 });
   }
   const optionIndex = optionParsed.data;
+  // `?apply=false` resolves without applying any variant. Lets the plugin
+  // expose a plain "Resolve" button on threads that have variants but the
+  // user wants to dismiss without taking any of them.
+  const skipApply = url.searchParams.get("apply") === "false";
 
   try {
     const backend = getBackend();
-    // Apply the chosen leaf's `new_md` to the thread's draft ref before
-    // resolving. Done in this order so a failure on apply leaves the thread
-    // open for retry rather than silently resolving without the edit.
+    // Apply the chosen leaf's `new_md` before resolving. Done in this order
+    // so a failure on apply leaves the thread open for retry rather than
+    // silently resolving without the edit.
+    //
+    // Applies to the thread's draft ref if it has one (draft mode); falls
+    // back to "main" for thread-on-doc threads. Range targets get an `Edit`
+    // (anchored_text → leaf.new_md). Doc-level targets get a full `Write`
+    // of the leaf's new_md.
     const thread = await backend.readThread(id);
-    if (thread.draft_id) {
-      const leaf = pickLeaf(thread.messages, optionIndex);
-      if (leaf && thread.targets.length > 0) {
-        // Apply each target's anchored_text → leaf.new_md. For Phase F we
-        // assume the same `new_md` applies across all targets (cross-cutting
-        // multi-target threads aren't in scope until Phase H). Doc-level
-        // targets (scope=doc) have no anchored_text to replace; the agent
-        // applies the change directly to main and the leaf is informational.
-        for (const target of thread.targets) {
-          if (target.scope !== "range") continue;
-          const oldString = target.anchor.anchored_text;
-          if (oldString.length === 0) continue;
-          try {
+    const leaf = skipApply ? null : pickLeaf(thread.messages, optionIndex);
+    const applyRef = thread.draft_id ?? "main";
+    if (leaf && thread.targets.length > 0) {
+      for (const target of thread.targets) {
+        try {
+          if (target.scope === "range") {
+            const oldString = target.anchor.anchored_text;
+            if (oldString.length === 0) continue;
             await backend.editDoc(
               target.path,
-              thread.draft_id,
+              applyRef,
               oldString,
               leaf.new_md,
               false,
             );
-          } catch {
-            // Anchored text drifted (someone else edited the same range).
-            // Leave the apply to whatever overlap-detection lands in Phase J;
-            // for now, fall through to the resolve so the thread doesn't get
-            // stuck on a stale anchor.
+          } else {
+            // scope=doc: rewrite the whole doc with the leaf's new_md.
+            await backend.writeDoc(target.path, applyRef, leaf.new_md);
           }
+        } catch {
+          // Anchored text drifted, or the write conflicted. Fall through to
+          // resolve so the thread doesn't get stuck on a stale anchor.
         }
       }
     }
