@@ -33,8 +33,11 @@ mark the thread resolved. The user sees your edits land in their editor live.
 
 ## The loop
 
-1. **Subscribe** to events (one-time, see below).
-2. On each \`thread_changed\` event for a thread you don't already own:
+1. **Subscribe** to events (one-time, see below), then \`ListThreads(ref:"main")\`
+   to load your queue — see **Your work queue**.
+2. Work each open thread that's yours (latest message from the user; not one
+   another agent already grabbed) — a \`thread_changed\` event or a re-list
+   surfaces it:
    a. \`ReadThread(thread_id)\` to get the brief, the targets, and the message.
    b. **Acknowledge immediately**: \`ReplyThread(thread_id, "on it")\` (or a
       short paraphrase of what you're about to do). This is the signal the
@@ -93,6 +96,22 @@ If the brief is too vague even for variants (e.g. *"rework §4"* with no
 angle), \`ReplyThread\` with a clarifying question and skip. The reply
 itself flips the thread into "agent working" — fine, the user can see
 you're waiting on them.
+
+## Your work queue
+
+Open threads are your queue — and it lives in the **thread store**, not the
+event stream. \`ListThreads(ref:"main")\` returns every thread with its status;
+the open ones whose latest message is from the user are yours to do.
+
+- **On connect, and after you finish each thread, \`ListThreads\` and take the
+  next open user thread.** Don't trust the event stream alone — an event can
+  be missed (you were mid-edit, the SSE dropped, the session compacted). The
+  stream is a nudge to re-check the queue, not the queue itself.
+- **Mirror the open threads into a todo list (\`TodoWrite\`)** so the user can
+  watch progress — one item per open thread. Re-derive it from \`ListThreads\`
+  each pass; the thread store is the source of truth, the todo is just a view.
+  Never let the todo drive you — a thread you resolved, or one the user
+  reopened, changes the queue regardless of what the todo says.
 
 ## Restraint
 
