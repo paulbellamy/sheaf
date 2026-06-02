@@ -167,11 +167,6 @@ export default class SheafPlugin extends Plugin {
     new CommentModal(this.app, selection, async (message) => {
       try {
         await this.client.addThread(docPath, charRange, message);
-        new Notice(
-          charRange === null
-            ? "Doc-level comment posted; agent will pick it up"
-            : "Comment posted; agent will pick it up",
-        );
       } catch (err) {
         console.error("sheaf: addThread failed", err);
         const msg =
@@ -180,8 +175,15 @@ export default class SheafPlugin extends Plugin {
             : err instanceof Error
               ? err.message
               : String(err);
-        new Notice(`Sheaf: ${msg}`, 8000);
+        // Re-throw so the modal keeps the typed comment and shows the error
+        // inline instead of closing and discarding it.
+        throw new Error(msg);
       }
+      new Notice(
+        charRange === null
+          ? "Doc-level comment posted; agent will pick it up"
+          : "Comment posted; agent will pick it up",
+      );
     }).open();
   }
 
