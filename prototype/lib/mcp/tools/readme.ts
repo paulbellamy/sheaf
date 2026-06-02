@@ -55,9 +55,12 @@ mark the thread resolved. The user sees your edits land in their editor live.
         per option from the latest message's \`draft_options\`. Extra messages
         just add narration without producing extra cards. Each leaf needs a
         short \`name\` like \`"punchier"\`, \`"leads with the cost"\`,
-        \`"hedged"\`, \`"cut entirely"\`, and a \`new_md\` that **shows the
-        user what that direction reads like** — a representative sample is
-        fine; it does **not** have to be the final, literal replacement text.
+        \`"hedged"\`, \`"cut entirely"\`; an optional one-line \`description\`
+        — the trade-off / "why", shown above the sample so the user can
+        choose without reading every preview; and a \`new_md\` that **shows
+        the user what that direction reads like** — a representative sample
+        is fine; it does **not** have to be the final, literal replacement
+        text.
 
         Correct shape:
         \`\`\`
@@ -65,9 +68,9 @@ mark the thread resolved. The user sees your edits land in their editor live.
           thread_id: "thrd_...",
           message: "three takes",
           draft_options: [
-            { name: "A: enumerate", new_md: "..." },
-            { name: "B: graduated trust", new_md: "..." },
-            { name: "C: scope-bound", new_md: "..." },
+            { name: "A: enumerate", description: "lists every rule; longest", new_md: "..." },
+            { name: "B: graduated trust", description: "tiered; drops edge cases", new_md: "..." },
+            { name: "C: scope-bound", description: "tightest; defers the rest", new_md: "..." },
           ],
         })
         \`\`\`

@@ -1124,15 +1124,16 @@ describe("backend.attachDraftPayload (Phase F)", () => {
     await backend.attachDraftPayload(t.id, {
       message: "two angles; pick one",
       draft_options: [
-        { name: "option a", new_md: "depth\n" },
+        { name: "option a", description: "deeper, longer", new_md: "depth\n" },
         { name: "option b", new_md: "breadth\n" },
       ],
     });
 
     const after = await backend.readThread(t.id);
     const last = after.messages[after.messages.length - 1];
+    // The optional per-option `description` round-trips; absent on others.
     expect(last.draft_options).toEqual([
-      { name: "option a", new_md: "depth\n" },
+      { name: "option a", description: "deeper, longer", new_md: "depth\n" },
       { name: "option b", new_md: "breadth\n" },
     ]);
     expect(last.draft).toBeUndefined();

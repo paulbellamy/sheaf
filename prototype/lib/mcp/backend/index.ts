@@ -170,7 +170,12 @@ export type ThreadAnchor =
  * when a message carries multiple options (so the UI can label them); single-
  * payload uses don't bother with a name.
  */
-export type ThreadDraftBody = { new_md: string; name?: string };
+export type ThreadDraftBody = {
+  new_md: string;
+  name?: string;
+  /** Short trade-off blurb shown above the preview (the option's "why"). */
+  description?: string;
+};
 
 export type ThreadMessage = {
   author: string;

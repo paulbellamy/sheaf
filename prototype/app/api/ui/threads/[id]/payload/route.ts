@@ -12,11 +12,13 @@ type Ctx = { params: Promise<{ id: string }> };
 const draftBodySchema = z.object({
   new_md: z.string().max(1_000_000),
   name: z.string().min(1).max(256).optional(),
+  description: z.string().max(1_000).optional(),
 });
 
 const draftOptionSchema = z.object({
   name: z.string().min(1).max(256),
   new_md: z.string().max(1_000_000),
+  description: z.string().max(1_000).optional(),
 });
 
 const bodySchema = z.object({

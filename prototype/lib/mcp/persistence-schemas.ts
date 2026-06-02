@@ -65,6 +65,7 @@ export const threadAnchorSchema = z.discriminatedUnion("scope", [
 const threadDraftBodySchema = z.object({
   new_md: z.string().max(1_000_000),
   name: z.string().max(256).optional(),
+  description: z.string().max(1_000).optional(),
 });
 
 export const threadMessageSchema = z.object({

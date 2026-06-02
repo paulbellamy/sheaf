@@ -19,6 +19,8 @@ export const LIMITS = {
   message: 10_000,
   intent: 2_048,
   name: 256,
+  /** Option trade-off blurb — a sentence or two, not prose. */
+  description: 1_000,
   /** Document markdown — we're storing small specs, not documents. */
   content: 1_000_000,
   /** Grep pattern — ReDoS-prone inputs get longer timeouts but the input
@@ -101,6 +103,13 @@ export const threadDraftSchema = z
       .describe(
         "Optional leaf label. Set when the message carries multiple options.",
       ),
+    description: z
+      .string()
+      .max(LIMITS.description)
+      .optional()
+      .describe(
+        "Optional short explanation of this option's trade-off, shown to the user. Distinct from new_md, which is a sample of the result.",
+      ),
   })
   .describe("Optional attached draft (counter-proposal / edit suggestion).");
 
@@ -118,7 +127,16 @@ export const threadDraftOptionSchema = z.object({
   new_md: z
     .string()
     .max(LIMITS.content)
-    .describe("Proposed replacement markdown for this option."),
+    .describe(
+      "Sample of the result for this option — a preview the user reads to choose. Need not be the final, literal replacement text.",
+    ),
+  description: z
+    .string()
+    .max(LIMITS.description)
+    .optional()
+    .describe(
+      "Short explanation of this option's trade-off (the 'why'), shown above the preview. Distinct from new_md.",
+    ),
 });
 
 /** Shared bounded-content schema for Write/Edit tool payloads. */

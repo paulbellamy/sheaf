@@ -14,7 +14,11 @@ export type ThreadTarget =
       };
     };
 
-export type ThreadDraftBody = { new_md: string; name?: string };
+export type ThreadDraftBody = {
+  new_md: string;
+  name?: string;
+  description?: string;
+};
 
 export type ThreadMessage = {
   author: string;
