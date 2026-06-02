@@ -39,12 +39,18 @@ function pickLeaf(
 }
 
 /**
- * Phase F: extended to optionally apply a chosen `draft_options[option_index]`
- * (or a single `draft` body) to the thread's draft ref before resolving.
+ * Phase F: optionally apply a chosen `draft_options[option_index]` (or a single
+ * `draft` body) before resolving — but only for **draft-mode** threads, where
+ * the chosen leaf lands on the draft ref the human still reviews before merge.
  *
- * The application step is best-effort: if no payload is present (plain
- * comment thread) or the anchored text no longer matches (the doc was edited
- * out from under the thread), the route still resolves the thread.
+ * Thread-on-doc threads (no `draft_id`) never auto-apply: an option is a
+ * *choice routed back to the agent* (AskUserQuestion-style), and the agent
+ * makes the real edit. The option `new_md` may be an illustrative sample, not
+ * a literal replacement, so applying it verbatim would clobber the doc.
+ *
+ * The application step is best-effort: if no payload is present (plain comment
+ * thread) or the anchored text no longer matches (the doc was edited out from
+ * under the thread), the route still resolves the thread.
  */
 export async function POST(req: Request, ctx: Ctx): Promise<Response> {
   const { id } = await ctx.params;
@@ -73,14 +79,15 @@ export async function POST(req: Request, ctx: Ctx): Promise<Response> {
     // so a failure on apply leaves the thread open for retry rather than
     // silently resolving without the edit.
     //
-    // Applies to the thread's draft ref if it has one (draft mode); falls
-    // back to "main" for thread-on-doc threads. Range targets get an `Edit`
-    // (anchored_text → leaf.new_md). Doc-level targets get a full `Write`
-    // of the leaf's new_md.
+    // Draft mode only: the leaf lands on the thread's draft ref, which the
+    // human reviews before merge. Thread-on-doc threads (no `draft_id`) never
+    // auto-apply — the pick is routed back to the agent, which makes the real
+    // edit (see resolve-route doc comment). Range targets get an `Edit`
+    // (anchored_text → leaf.new_md); doc-level targets get a full `Write`.
     const thread = await backend.readThread(id);
-    const leaf = skipApply ? null : pickLeaf(thread.messages, optionIndex);
-    const applyRef = thread.draft_id ?? "main";
-    if (leaf && thread.targets.length > 0) {
+    const applyRef = thread.draft_id;
+    const leaf = skipApply || !applyRef ? null : pickLeaf(thread.messages, optionIndex);
+    if (leaf && applyRef && thread.targets.length > 0) {
       for (const target of thread.targets) {
         try {
           if (target.scope === "range") {

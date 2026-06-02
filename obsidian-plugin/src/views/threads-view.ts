@@ -497,25 +497,27 @@ export class ThreadsView extends ItemView {
     preview.style.maxHeight = "200px";
     preview.style.overflow = "auto";
 
-    // Apply this variant.
-    const applyBar = wrap.createDiv();
-    applyBar.style.display = "flex";
-    applyBar.style.gap = "0.5em";
-    applyBar.style.marginTop = "0.4em";
-    const apply = applyBar.createEl("button", {
-      text: `Apply "${variants[selected].name ?? `option ${selected + 1}`}"`,
-    });
-    apply.style.fontSize = "0.8em";
-    apply.style.background = "var(--interactive-accent)";
-    apply.style.color = "var(--text-on-accent)";
-    apply.addEventListener("click", async () => {
+    // Choose this option. Unlike "apply", this does NOT write the option's
+    // text to the doc — it sends the pick back to the agent (like answering
+    // an AskUserQuestion), and the agent makes the real edit. The previews
+    // may be illustrative samples, not literal replacements.
+    const label = variants[selected].name ?? `option ${selected + 1}`;
+    const chooseBar = wrap.createDiv();
+    chooseBar.style.display = "flex";
+    chooseBar.style.gap = "0.5em";
+    chooseBar.style.marginTop = "0.4em";
+    const choose = chooseBar.createEl("button", { text: `Choose "${label}"` });
+    choose.style.fontSize = "0.8em";
+    choose.style.background = "var(--interactive-accent)";
+    choose.style.color = "var(--text-on-accent)";
+    choose.addEventListener("click", async () => {
       try {
-        await this.plugin.client.resolveThread(thread.id, selected);
-        new Notice(`Applied "${variants[selected].name ?? `option ${selected + 1}`}"`);
+        await this.plugin.client.chooseVariant(thread.id, selected + 1, label);
+        new Notice(`Sent your pick "${label}" to the agent`);
         this.selectedVariant.delete(thread.id);
         await this.refreshCurrent();
       } catch (err) {
-        console.error("sheaf: apply failed", err);
+        console.error("sheaf: choose failed", err);
         const msg = err instanceof Error ? err.message : String(err);
         new Notice(`Sheaf: ${msg}`, 8000);
       }

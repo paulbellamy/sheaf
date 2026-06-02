@@ -36,11 +36,11 @@ There are two modes for landing changes. Pick per integration; don't mix them on
 
 **Draft mode (default for the web UI).** Threads live on drafts. Alice clicks Start Draft, pending threads get persisted onto the draft ref, the agent does α/β work against the draft, alice merges. See "Drafts are agent-originated" and "α vs β" below. In this mode, `AddThread` / `ReplyThread` / `ResolveThread` are called against the draft ref, not main.
 
-**Thread-on-doc mode (Obsidian-plugin prototype).** No drafts. Threads anchor to the doc on main, the agent edits the doc directly via `Write` / `Edit` with `ref="main"` (or omitted), then `ResolveThread`. The event-watcher delivers `thread_changed` (a new comment) and `doc_changed` (the agent's edit landed). This mode exists so the Obsidian plugin can race human-and-agent edits on the same on-disk markdown without a review gate; the draft model is unused.
+**Thread-on-doc mode (Obsidian-plugin prototype).** No drafts. Threads anchor to the doc on main. For a single clear change the agent edits the doc directly via `Write` / `Edit` with `ref="main"` (or omitted), then `ResolveThread`. When a brief has more than one reasonable answer and the human should pick, the agent instead attaches inline options with `AttachDraftPayload` (`draft_options`, each a `{ new_md, name }`) and stops — presenting options doesn't touch the doc. The pick comes back as a new user reply (*Selected option N*); the agent then makes the real `Edit`/`Write` and resolves. The option `new_md` is a preview the human reads to choose, **not** applied verbatim. The event-watcher delivers `thread_changed` (a new comment) and `doc_changed` (the agent's edit landed). This mode exists so the Obsidian plugin can race human-and-agent edits on the same on-disk markdown without a review gate; the draft model (Fork/Propose/Merge) is unused.
 
 When you see a `thread_changed` event, branch on the thread's `draft_id`:
 - **`draft_id` set → draft mode.** Apply α or β against that draft ref.
-- **`draft_id` absent → thread-on-doc mode.** `Read` the doc, `Edit` / `Write` with `ref="main"`, then `ResolveThread`. No fork, no propose, no merge.
+- **`draft_id` absent → thread-on-doc mode.** `Read` the doc, then either edit directly (`Edit` / `Write` with `ref="main"`, then `ResolveThread`) or — when the human should choose between options — `AttachDraftPayload` with inline `draft_options` (each `{ new_md, name }`) and wait; the pick returns as a user reply, then you edit and resolve. No fork, no propose, no merge.
 
 When reading a brief, pass the right ref: `ListThreads(path, ref=draft_id)` for draft mode, `ListThreads(path, ref="main")` (or omit `ref`) for thread-on-doc.
 
@@ -73,6 +73,8 @@ AttachDraftPayload(
 ```
 
 Each leaf is a real sub-draft ref the agent can edit independently. Alice picks one; the others auto-decline and stay in git history.
+
+That's the **draft-mode** form. In thread-on-doc mode there's no draft to fork: pass the options inline as `draft_options` with `new_md` (plus a `name`) instead of sub-draft `ref`s. The pick is **not** auto-applied to main — it comes back as a user reply, and you make the real edit then resolve (the inline `new_md` is just a preview).
 
 # Broad-thread decomposition
 

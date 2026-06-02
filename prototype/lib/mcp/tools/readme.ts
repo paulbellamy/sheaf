@@ -40,17 +40,21 @@ mark the thread resolved. The user sees your edits land in their editor live.
       short paraphrase of what you're about to do). This is the signal the
       plugin shows as "agent working" — without it the user has no feedback
       between posting the comment and seeing the edit land.
-   c. Decide: **propose variants, or commit a single edit?**
-      - **Default: propose 2-4 variants** via a **single \`AttachDraftPayload\`
-        call** whenever a brief admits more than one reasonable approach
-        (most prose work does). Put every variant into the \`draft_options\`
-        array on that one call — do **not** send each option as a separate
-        ReplyThread message, and do **not** make multiple AttachDraftPayload
-        calls. The plugin renders one card per variant from the latest
-        message's \`draft_options\`; extra messages just add narration
-        without producing extra cards. Each leaf needs a short \`name\`
-        like \`"punchier"\`, \`"leads with the cost"\`, \`"hedged"\`,
-        \`"cut entirely"\`.
+   c. Decide: **present options for the user to choose, or commit a single
+      edit?** The test is whether the user should make a choice: if the brief
+      has more than one reasonable answer (most prose work does), give them
+      options. If there's one clear change, just make it.
+      - **Present 2-4 options** — whenever the user should pick between
+        approaches — via a **single \`AttachDraftPayload\` call**. Put every
+        option into the \`draft_options\` array on that one call — do **not**
+        send each option as a separate ReplyThread message, and do **not**
+        make multiple AttachDraftPayload calls. The plugin renders one card
+        per option from the latest message's \`draft_options\`. Extra messages
+        just add narration without producing extra cards. Each leaf needs a
+        short \`name\` like \`"punchier"\`, \`"leads with the cost"\`,
+        \`"hedged"\`, \`"cut entirely"\`, and a \`new_md\` that **shows the
+        user what that direction reads like** — a representative sample is
+        fine; it does **not** have to be the final, literal replacement text.
 
         Correct shape:
         \`\`\`
@@ -64,15 +68,25 @@ mark the thread resolved. The user sees your edits land in their editor live.
           ],
         })
         \`\`\`
-      - **Commit a single edit** (skip variants) only when the brief is
-        fully specified ("rename Foo to Bar", "fix this typo") or the fix
-        is mechanically obvious. In that case use \`Edit\`/\`Write\` with
-        \`ref="main"\` then \`ResolveThread\`.
-   d. Branch the variant content on the first target's \`scope\`:
-      - \`scope: "range"\` — each \`new_md\` is the replacement for the
-        anchored passage only. Keep variants the size of the highlight.
-      - \`scope: "doc"\` — each \`new_md\` is the **whole replacement doc**.
-        For doc-level briefs, variants are full-doc rewrites.
+
+        **Then stop — do not resolve.** Presenting options is asking a
+        question, not landing a change. Nothing is written to the doc yet.
+        The user's pick comes back as the *next* \`thread_changed\`: a new
+        user reply on the thread reading *Selected option N: "<name>"*. Only
+        then do you make the real edit and resolve (step d). Treat the chosen
+        sample as the **direction to execute**, not bytes to paste.
+      - **Commit a single edit** (no options) when there's just one clear
+        change — the brief is fully specified ("rename Foo to Bar", "fix
+        this typo"), or one approach is plainly right. Use \`Edit\`/\`Write\`
+        with \`ref="main"\` then \`ResolveThread\`.
+   d. **When the user picks an option** (a *Selected option N* reply on a
+      thread where you proposed options), make the actual change now, scoped
+      to the first target — then \`ResolveThread\`:
+      - \`scope: "range"\` — \`Edit\` the anchored passage only. Keep it the
+        size of the highlight.
+      - \`scope: "doc"\` — \`Write\` the whole doc.
+      Produce the real, final text here (the option's \`new_md\` was only a
+      preview); the doc is **not** updated until you make this edit.
 3. Stop with \`TaskStop\` when the session ends.
 
 If the brief is too vague even for variants (e.g. *"rework §4"* with no
@@ -160,9 +174,9 @@ the doc first, then make the change with \`Write\` (full rewrite) or several
 
 ## What not to do
 
-- Don't call \`Fork\`, \`Propose\`, \`Merge\`, \`DeclineDraft\`, or
-  \`AttachDraftPayload\`. Those tools exist for a different sheaf workflow
-  that this prototype doesn't use.
+- Don't call \`Fork\`, \`Propose\`, \`Merge\`, or \`DeclineDraft\` — those drive
+  the draft-review workflow this prototype doesn't use. (\`AttachDraftPayload\`
+  is *not* in that list: it's how you present options — see the loop above.)
 - Don't write to \`.\`-prefixed paths (dotfiles, \`.drafts/\`, \`.obsidian/\`) — those are rejected.
 - Don't loop on \`doc_changed\` events you emitted yourself.
 

@@ -110,16 +110,29 @@ export class SheafClient {
   }
 
   /**
-   * Resolve a thread. Pass `optionIndex` to apply that variant from the
-   * latest `draft_options` payload before resolving; omit to dismiss the
-   * thread without applying anything (uses `?apply=false` so threads with
-   * variants don't surprise-apply option 0).
+   * Send the user's option pick back to the agent (AskUserQuestion-style):
+   * post it as a reply so the agent gets a `thread_changed` and makes the
+   * real edit. The option's `new_md` is a preview, not applied verbatim — it
+   * may be an illustrative sample, so we never write it to the doc here.
    */
-  async resolveThread(threadId: string, optionIndex?: number): Promise<void> {
-    const url =
-      optionIndex === undefined
-        ? `${this.baseUrl}/api/ui/threads/${threadId}/resolve?apply=false`
-        : `${this.baseUrl}/api/ui/threads/${threadId}/resolve?option_index=${optionIndex}`;
+  async chooseVariant(
+    threadId: string,
+    optionNumber: number,
+    name: string,
+  ): Promise<void> {
+    await this.replyThread(
+      threadId,
+      `Selected option ${optionNumber}: "${name}". Please action this choice, then resolve the thread.`,
+    );
+  }
+
+  /**
+   * Resolve (dismiss) a thread without applying anything — used by the plain
+   * "Resolve" button, including on threads that carry variants the user chose
+   * not to take. Uses `?apply=false` so nothing is written to the doc.
+   */
+  async resolveThread(threadId: string): Promise<void> {
+    const url = `${this.baseUrl}/api/ui/threads/${threadId}/resolve?apply=false`;
     const res = await requestUrl({ url, method: "POST", throw: false });
     if (res.status >= 400) {
       throw new SheafApiError(describeError(res.status, res.json), res.status, res.json);

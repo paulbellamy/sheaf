@@ -322,7 +322,7 @@ describe("doc-level threads (scope=doc)", () => {
   });
 });
 
-describe("resolve route applies variants to main (thread-on-doc)", () => {
+describe("resolve route does NOT auto-apply variants to main (thread-on-doc)", () => {
   let root: string;
   let backend: StubBackend;
   const docPath = "workspaces/ws/docs/a.md";
@@ -345,7 +345,10 @@ describe("resolve route applies variants to main (thread-on-doc)", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("applies the chosen variant to main for a range-anchored thread", async () => {
+  // Thread-on-doc options are a choice routed back to the agent, not a literal
+  // diff. Picking one must NOT write the option's new_md to the doc — the agent
+  // makes the real edit. (Auto-apply is a draft-mode-only behavior; see below.)
+  it("leaves a range-anchored doc untouched when an option is chosen", async () => {
     const threadId = await backend.addThread({
       targets: [{ path: docPath, scope: "range", char_range: { from: 0, to: 5 } }],
       message: "punchier",
@@ -371,12 +374,12 @@ describe("resolve route applies variants to main (thread-on-doc)", () => {
       path.join(root, "workspaces", "ws", "docs", "a.md"),
       "utf8",
     );
-    expect(onDisk).toBe("hey world");
+    expect(onDisk).toBe("hello world"); // unchanged — agent will make the edit
     const thread = await backend.readThread(threadId);
     expect(thread.status).toBe("accepted");
   });
 
-  it("applies the chosen variant as full-doc rewrite for a doc-scope thread", async () => {
+  it("leaves a doc-scope doc untouched when an option is chosen", async () => {
     const threadId = await backend.addThread({
       targets: [{ path: docPath, scope: "doc" }],
       message: "rewrite",
@@ -401,7 +404,7 @@ describe("resolve route applies variants to main (thread-on-doc)", () => {
       path.join(root, "workspaces", "ws", "docs", "a.md"),
       "utf8",
     );
-    expect(onDisk).toBe("# A\nMinimal.\n");
+    expect(onDisk).toBe("hello world"); // unchanged
   });
 
   it("?apply=false resolves without applying any variant", async () => {
@@ -432,6 +435,65 @@ describe("resolve route applies variants to main (thread-on-doc)", () => {
     expect(onDisk).toBe("hello world"); // unchanged
     const thread = await backend.readThread(threadId);
     expect(thread.status).toBe("accepted");
+  });
+});
+
+describe("resolve route applies the chosen variant to the draft ref (draft mode)", () => {
+  let root: string;
+  let backend: StubBackend;
+  const docPath = "workspaces/ws/docs/a.md";
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-apply-draft-"));
+    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "hello world",
+    );
+    backend = new StubBackend(root);
+    setBackend(backend);
+  });
+
+  afterEach(async () => {
+    setBackend(null);
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("applies the chosen option to the draft, leaving main untouched", async () => {
+    const [draftId] = await backend.fork(docPath, 1);
+    const threadId = await backend.addThread({
+      targets: [{ path: docPath, scope: "doc" }],
+      message: "rewrite",
+      author: "user",
+      ref: draftId,
+    });
+    await backend.attachDraftPayload(threadId, {
+      author: "agent",
+      draft_options: [
+        { name: "minimal", new_md: "# A\nMinimal.\n" },
+        { name: "verbose", new_md: "# A\nVerbose.\n" },
+      ],
+    });
+
+    const req = new Request(
+      `http://localhost/api/ui/threads/${threadId}/resolve?option_index=1`,
+      { method: "POST" },
+    );
+    const ctx = { params: Promise.resolve({ id: threadId }) };
+    const res = await resolvePOST(req, ctx);
+    expect(res.status).toBe(200);
+
+    // main is untouched — draft mode applies to the draft ref, reviewable.
+    const mainOnDisk = await fs.readFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "utf8",
+    );
+    expect(mainOnDisk).toBe("hello world");
+    // ...but the draft carries the chosen leaf.
+    const draftView = await backend.readDoc(docPath, draftId);
+    expect(draftView.md).toBe("# A\nVerbose.\n");
   });
 });
 
