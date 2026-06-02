@@ -15,6 +15,7 @@ import {
   type GrepOptions,
   type GrepResult,
   type OpId,
+  type Origin,
   type Ref,
   type Thread,
   type ThreadAnchor,
@@ -325,8 +326,14 @@ export class StubBackend implements Backend {
     };
   }
 
-  private emit(event: BackendEvent): void {
+  private emit(event: BackendEvent, origin: Origin = "ui"): void {
     for (const listener of this.subscribers) {
+      // Don't echo an agent's own mutations back to agent subscribers: the
+      // event-watcher would otherwise wake the agent on its own edits and
+      // replies. UI subscribers still see everything (they want the agent's
+      // edits to land in the panel). User-originated events (default origin)
+      // reach everyone, including the agent.
+      if (origin === "agent" && this.agentSubscribers.has(listener)) continue;
       try {
         listener(event);
       } catch {
@@ -686,6 +693,7 @@ export class StubBackend implements Backend {
     ref: Ref,
     content: string,
     opId?: OpId,
+    origin: Origin = "ui",
   ): Promise<WriteResult> {
     return this.withLock(() =>
       this.cachedWrite(opId, async () => {
@@ -695,7 +703,7 @@ export class StubBackend implements Backend {
           await this.ensureDir(path.dirname(abs));
           await writeFileNoFollow(abs, content);
           bumpCounter(this.versionCounters, p);
-          this.emit({ kind: "doc_changed", path: p });
+          this.emit({ kind: "doc_changed", path: p }, origin);
           return { version_token: `v-${sha(content).slice(0, 12)}` };
         }
         assertDraftRef(ref);
@@ -707,7 +715,7 @@ export class StubBackend implements Backend {
         const result: WriteResult = {
           version_token: `v-${sha(content).slice(0, 12)}`,
         };
-        this.emit({ kind: "draft_changed", draft_id: ref, path: p });
+        this.emit({ kind: "draft_changed", draft_id: ref, path: p }, origin);
         return result;
       }),
     );
@@ -720,6 +728,7 @@ export class StubBackend implements Backend {
     newString: string,
     replaceAll: boolean,
     opId?: OpId,
+    origin: Origin = "ui",
   ): Promise<WriteResult> {
     return this.withLock(() =>
       this.cachedWrite(opId, async () => {
@@ -756,7 +765,7 @@ export class StubBackend implements Backend {
           await this.ensureDir(path.dirname(abs));
           await writeFileNoFollow(abs, next);
           bumpCounter(this.versionCounters, p);
-          this.emit({ kind: "doc_changed", path: p });
+          this.emit({ kind: "doc_changed", path: p }, origin);
           return { version_token: `v-${sha(next).slice(0, 12)}` };
         }
         const abs = this.absDraft(ref, p);
@@ -766,7 +775,7 @@ export class StubBackend implements Backend {
         const result: WriteResult = {
           version_token: `v-${sha(next).slice(0, 12)}`,
         };
-        this.emit({ kind: "draft_changed", draft_id: ref, path: p });
+        this.emit({ kind: "draft_changed", draft_id: ref, path: p }, origin);
         return result;
       }),
     );
@@ -1263,6 +1272,7 @@ export class StubBackend implements Backend {
     author?: string;
     draft?: ThreadDraftBody;
     ref?: Ref;
+    origin?: Origin;
   }): Promise<ThreadId> {
     return this.withLock(async () => {
       if (opts.targets.length === 0) {
@@ -1329,11 +1339,14 @@ export class StubBackend implements Backend {
           thread.targets.map((t) => t.path),
         );
       }
-      this.emit({
-        kind: "thread_changed",
-        thread_id: id,
-        target_paths: thread.targets.map((t) => t.path),
-      });
+      this.emit(
+        {
+          kind: "thread_changed",
+          thread_id: id,
+          target_paths: thread.targets.map((t) => t.path),
+        },
+        opts.origin,
+      );
       return id;
     });
   }
@@ -1341,7 +1354,7 @@ export class StubBackend implements Backend {
   replyThread(
     id: ThreadId,
     message: string,
-    opts?: { author?: string; draft?: ThreadDraftBody },
+    opts?: { author?: string; draft?: ThreadDraftBody; origin?: Origin },
   ): Promise<void> {
     return this.withLock(async () => {
       const thread = await this.loadThread(id);
@@ -1352,24 +1365,30 @@ export class StubBackend implements Backend {
         draft: opts?.draft,
       });
       await this.saveThread(thread);
-      this.emit({
-        kind: "thread_changed",
-        thread_id: id,
-        target_paths: thread.targets.map((t) => t.path),
-      });
+      this.emit(
+        {
+          kind: "thread_changed",
+          thread_id: id,
+          target_paths: thread.targets.map((t) => t.path),
+        },
+        opts?.origin,
+      );
     });
   }
 
-  resolveThread(id: ThreadId): Promise<void> {
+  resolveThread(id: ThreadId, origin: Origin = "ui"): Promise<void> {
     return this.withLock(async () => {
       const thread = await this.loadThread(id);
       thread.status = "accepted";
       await this.saveThread(thread);
-      this.emit({
-        kind: "thread_changed",
-        thread_id: id,
-        target_paths: thread.targets.map((t) => t.path),
-      });
+      this.emit(
+        {
+          kind: "thread_changed",
+          thread_id: id,
+          target_paths: thread.targets.map((t) => t.path),
+        },
+        origin,
+      );
     });
   }
 
@@ -1429,6 +1448,7 @@ export class StubBackend implements Backend {
       draft?: ThreadDraftBody;
       draft_options?: ThreadDraftBody[];
       author?: string;
+      origin?: Origin;
     },
   ): Promise<void> {
     return this.withLock(async () => {
@@ -1458,11 +1478,14 @@ export class StubBackend implements Backend {
         draft_options: opts.draft_options,
       });
       await this.saveThread(thread);
-      this.emit({
-        kind: "thread_changed",
-        thread_id: threadId,
-        target_paths: thread.targets.map((t) => t.path),
-      });
+      this.emit(
+        {
+          kind: "thread_changed",
+          thread_id: threadId,
+          target_paths: thread.targets.map((t) => t.path),
+        },
+        opts.origin,
+      );
     });
   }
 }

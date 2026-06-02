@@ -18,6 +18,14 @@ export type DraftId = string;
 export type ThreadId = string;
 export type OpId = string;
 
+/**
+ * Who triggered a mutation. Stamped on the emitted event so agent subscribers
+ * (the event-watcher) don't get woken by their own edits/replies — see
+ * `subscribe`/`emit`. Defaults to `"ui"` (human-originated) everywhere except
+ * the MCP tool handlers, which pass `"agent"`.
+ */
+export type Origin = "agent" | "ui";
+
 export type DocSummary = {
   path: DocPath;
   title: string;
@@ -235,6 +243,7 @@ export interface Backend {
     ref: Ref,
     content: string,
     opId?: OpId,
+    origin?: Origin,
   ): Promise<WriteResult>;
 
   editDoc(
@@ -244,6 +253,7 @@ export interface Backend {
     newString: string,
     replaceAll: boolean,
     opId?: OpId,
+    origin?: Origin,
   ): Promise<WriteResult>;
 
   /**
@@ -351,15 +361,16 @@ export interface Backend {
     author?: string;
     draft?: ThreadDraftBody;
     ref?: Ref;
+    origin?: Origin;
   }): Promise<ThreadId>;
 
   replyThread(
     id: ThreadId,
     message: string,
-    opts?: { author?: string; draft?: ThreadDraftBody },
+    opts?: { author?: string; draft?: ThreadDraftBody; origin?: Origin },
   ): Promise<void>;
 
-  resolveThread(id: ThreadId): Promise<void>;
+  resolveThread(id: ThreadId, origin?: Origin): Promise<void>;
 
   /**
    * Append a system-style message to an existing thread carrying one or more
@@ -377,6 +388,7 @@ export interface Backend {
       draft?: ThreadDraftBody;
       draft_options?: ThreadDraftBody[];
       author?: string;
+      origin?: Origin;
     },
   ): Promise<void>;
 

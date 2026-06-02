@@ -1000,6 +1000,58 @@ describe("backend.subscribe agent_presence (Phase E)", () => {
   });
 });
 
+describe("emit does not echo agent-origin mutations back to the agent", () => {
+  let root: string;
+  let backend: StubBackend;
+  const docPath = "workspaces/ws/docs/a.md";
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-echo-"));
+    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "hello world",
+    );
+    backend = new StubBackend(root);
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("suppresses an agent-origin edit for the agent but not the UI", async () => {
+    const uiEvents: BackendEvent[] = [];
+    const agentEvents: BackendEvent[] = [];
+    backend.subscribe((e) => uiEvents.push(e), { role: "ui" });
+    backend.subscribe((e) => agentEvents.push(e), { role: "agent" });
+
+    await backend.writeDoc(docPath, "main", "v2", undefined, "agent");
+    expect(uiEvents.filter((e) => e.kind === "doc_changed")).toHaveLength(1);
+    expect(agentEvents.filter((e) => e.kind === "doc_changed")).toHaveLength(0);
+
+    // A user-origin edit (default) is still delivered to the agent.
+    await backend.writeDoc(docPath, "main", "v3");
+    expect(agentEvents.filter((e) => e.kind === "doc_changed")).toHaveLength(1);
+  });
+
+  it("delivers a user comment to the agent but not the agent's own reply", async () => {
+    const agentEvents: BackendEvent[] = [];
+    backend.subscribe((e) => agentEvents.push(e), { role: "agent" });
+
+    const id = await backend.addThread({
+      targets: [{ path: docPath, scope: "doc" }],
+      message: "do something",
+      author: "user",
+    });
+    await backend.replyThread(id, "on it", { author: "agent", origin: "agent" });
+
+    // Only the user's addThread should reach the agent — not its own reply.
+    expect(agentEvents.filter((e) => e.kind === "thread_changed")).toHaveLength(1);
+  });
+});
+
 describe("backend.attachDraftPayload (Phase F)", () => {
   let root: string;
   let backend: StubBackend;

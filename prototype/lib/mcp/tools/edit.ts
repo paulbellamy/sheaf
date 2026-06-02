@@ -57,6 +57,7 @@ export function registerEdit(server: McpServer, backend: Backend): void {
           new_string,
           !!replace_all,
           op_id,
+          "agent",
         );
         return {
           content: [

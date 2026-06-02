@@ -26,7 +26,13 @@ export function registerWrite(server: McpServer, backend: Backend): void {
     },
     async ({ file_path, content, ref, op_id }) => {
       try {
-        const result = await backend.writeDoc(file_path, ref, content, op_id);
+        const result = await backend.writeDoc(
+          file_path,
+          ref,
+          content,
+          op_id,
+          "agent",
+        );
         return {
           content: [
             {

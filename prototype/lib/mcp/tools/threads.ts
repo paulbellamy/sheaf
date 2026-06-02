@@ -115,6 +115,7 @@ export function registerThreadTools(
           author,
           draft,
           ref,
+          origin: "agent",
         });
         return {
           content: [{ type: "text", text: `created thread ${id}` }],
@@ -142,7 +143,11 @@ export function registerThreadTools(
     },
     async ({ thread_id, message, author, draft }) => {
       try {
-        await backend.replyThread(thread_id, message, { author, draft });
+        await backend.replyThread(thread_id, message, {
+          author,
+          draft,
+          origin: "agent",
+        });
         return {
           content: [{ type: "text", text: `replied on ${thread_id}` }],
           structuredContent: { thread_id },
@@ -182,6 +187,7 @@ export function registerThreadTools(
           draft,
           draft_options,
           author,
+          origin: "agent",
         });
         return {
           content: [
@@ -205,7 +211,7 @@ export function registerThreadTools(
     },
     async ({ thread_id }) => {
       try {
-        await backend.resolveThread(thread_id);
+        await backend.resolveThread(thread_id, "agent");
         return {
           content: [{ type: "text", text: `resolved ${thread_id}` }],
           structuredContent: { thread_id },
