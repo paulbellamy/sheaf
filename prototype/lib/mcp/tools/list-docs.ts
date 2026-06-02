@@ -6,53 +6,42 @@ import { toToolError } from "../errors";
 
 /**
  * ListDocs — mirrors the UI `/api/ui/docs` surface so agents can enumerate
- * docs by workspace without pattern-matching `workspaces/<ws>/**\/*.md`.
+ * docs without pattern-matching `**\/*.md`.
  *
- * Returned items include the `workspace` name so callers can filter/group
- * without re-parsing the path.
+ * Returned items include a `folder` label (the doc's top-level folder, or
+ * "(root)") so callers can group without re-parsing the path.
  */
+function folderOf(p: string): string {
+  return p.includes("/") ? p.slice(0, p.indexOf("/")) : "(root)";
+}
+
 export function registerListDocs(server: McpServer, backend: Backend): void {
   server.registerTool(
     "ListDocs",
     {
       title: "ListDocs",
       description:
-        "List docs on main, optionally filtered to one workspace. Each item includes path, title, workspace, updated_at.",
+        "List docs on main, optionally filtered to a path prefix. Each item includes path, title, folder, updated_at.",
       inputSchema: {
-        workspace: z
+        prefix: z
           .string()
-          .regex(/^[A-Za-z0-9._-]{1,64}$/)
+          .max(256)
           .optional()
-          .describe("Optional workspace name to filter to."),
+          .describe("Optional repo-root-relative path prefix to filter to, e.g. 'notes/'."),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ workspace }) => {
+    async ({ prefix }) => {
       try {
-        const workspaces = await backend.listWorkspaces();
-        const targets = workspace
-          ? workspaces.filter((w) => w.name === workspace)
-          : workspaces;
-        const docs: {
-          path: string;
-          title: string;
-          workspace: string;
-          updated_at: number;
-        }[] = [];
-        for (const ws of targets) {
-          const wsDocs = await backend.listDocs(ws.name);
-          for (const d of wsDocs) {
-            docs.push({
-              path: d.path,
-              title: d.title,
-              workspace: ws.name,
-              updated_at: d.updated_at,
-            });
-          }
-        }
-        docs.sort((a, b) => a.path.localeCompare(b.path));
+        const found = await backend.listDocs(prefix);
+        const docs = found.map((d) => ({
+          path: d.path,
+          title: d.title,
+          folder: folderOf(d.path),
+          updated_at: d.updated_at,
+        }));
         const text = docs
-          .map((d) => `${d.path}  (${d.workspace}) — ${d.title}`)
+          .map((d) => `${d.path}  (${d.folder}) — ${d.title}`)
           .join("\n");
         return {
           content: [

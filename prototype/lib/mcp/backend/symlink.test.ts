@@ -43,7 +43,7 @@ describe("StubBackend symlink safety", () => {
       "/etc/passwd",
       path.join(root, "workspaces", "ws", "docs", "link.md"),
     );
-    const docs = await backend.listDocs("ws");
+    const docs = await backend.listDocs();
     const paths = docs.map((d) => d.path);
     expect(paths).toContain("workspaces/ws/docs/real.md");
     expect(paths).not.toContain("workspaces/ws/docs/link.md");

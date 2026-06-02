@@ -9,13 +9,16 @@ import { err } from "./errors";
  * later used in `path.join`, directory walks, or filesystem reads. The guiding
  * invariants:
  *
- * - Workspace doc paths MUST resolve under `<root>/workspaces/`.
+ * - Doc paths MUST be repo-root-relative and contain no `.`-prefixed segment.
+ *   Obsidian hides anything beginning with a dot, so this one rule scopes
+ *   sheaf to the *visible* vault and simultaneously blocks `..` traversal and
+ *   infra dirs (`.drafts/`, `.op_log.json`, `.obsidian/`, `.git/`, `.trash/`).
  * - Draft ids MUST match `DRAFT_ID_RE` before being used as path segments.
  * - Thread ids MUST match `THREAD_ID_RE` before being used as path segments.
  *
- * Substring checks like `startsWith("workspaces/")` or `!includes("..")` are
- * insufficient: null bytes, Unicode dot variants (U+2024), and percent-encoded
- * traversal all bypass them.
+ * A bare `!includes("..")` check is insufficient: null bytes and absolute
+ * segments must be rejected explicitly, which is why we split-and-inspect
+ * every segment rather than substring-match.
  */
 
 // Keep tight: alphanumerics, underscores, hyphens, and dots for segment
@@ -45,14 +48,25 @@ export function safeJoin(rootAbs: string, rel: string): string {
 }
 
 /**
- * Assert a path is a well-formed workspace doc path. Workspace paths are
- * stored/passed as repo-root-relative strings under `workspaces/` and must
- * not contain null bytes, absolute segments, or parent-traversal segments.
+ * Assert a path is a well-formed vault doc path: a repo-root-relative string
+ * with forward slashes whose every segment is a "visible" name. Obsidian hides
+ * anything starting with `.`, so rejecting `.`-prefixed segments both scopes
+ * sheaf to the visible vault and rules out `..` traversal, null bytes, and the
+ * infra trees in one pass.
  *
  * This check is invariant-only — it does not touch the filesystem.
  */
-export function assertWorkspacePath(p: string): void {
-  assertPathWithPrefixes(p, ["workspaces/"]);
+export function assertVaultPath(p: string): void {
+  if (typeof p !== "string" || p.length === 0) throw err.invalidPath(p);
+  if (p.includes("\0")) throw err.invalidPath(p);
+  if (path.isAbsolute(p) || /^[A-Za-z]:[\\/]/.test(p)) throw err.invalidPath(p);
+  // Inspect the raw (pre-normalize) segments: a leading `.` covers dotfiles,
+  // `.drafts`, `.obsidian`, and `..` traversal; an empty segment covers `//`
+  // and trailing slashes. Don't normalize first — that would silently resolve
+  // `a/../b` into a path we never validated.
+  if (p.split("/").some((seg) => seg.length === 0 || seg.startsWith("."))) {
+    throw err.invalidPath(p);
+  }
 }
 
 /**
@@ -68,12 +82,16 @@ export function isPluginPath(p: string): boolean {
 }
 
 /**
- * Assert a path is readable via the MCP. Accepts either a workspace doc
- * path or a plugin-tree path. Use for read-only tool inputs; mutations must
- * still call `assertWorkspacePath` so they cannot target the plugin tree.
+ * Assert a path is readable via the MCP. Accepts either a vault doc path or a
+ * plugin-tree path. Use for read-only tool inputs; mutations must still call
+ * `assertVaultPath` so they cannot target the (dot-prefixed) plugin tree.
  */
 export function assertReadablePath(p: string): void {
-  assertPathWithPrefixes(p, ["workspaces/", PLUGIN_PATH_PREFIX]);
+  if (isPluginPath(p)) {
+    assertPathWithPrefixes(p, [PLUGIN_PATH_PREFIX]);
+    return;
+  }
+  assertVaultPath(p);
 }
 
 function assertPathWithPrefixes(p: string, prefixes: string[]): void {

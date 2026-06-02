@@ -23,7 +23,6 @@ import {
   type ThreadSummary,
   type VersionHistoryEntry,
   type WriteResult,
-  type Workspace,
 } from "./index";
 import { McpError, err, type MergeConflictDetail } from "../errors";
 import {
@@ -32,7 +31,7 @@ import {
   assertDraftId,
   assertReadablePath,
   assertThreadId,
-  assertWorkspacePath,
+  assertVaultPath,
   isPluginPath,
   safeJoin,
 } from "../paths";
@@ -45,12 +44,16 @@ import {
 /**
  * Filesystem-backed stub backend for the prototype.
  *
- * Layout (all under `<root>`, default `<repo>/prototype/data`):
- *   workspaces/<ws>/docs/<name>.md
- *   workspaces/<ws>/docs/<name>.threads/thrd_<id>.yaml
+ * `<root>` is the Obsidian vault root. Any visible markdown file under it is a
+ * sheaf doc — `<dir>/<name>.md` at any depth. Dot-prefixed entries (`.drafts/`,
+ * `.op_log.json`, `.obsidian/`, …) are infra and never surfaced as docs.
+ *
+ * Layout (all under `<root>`):
+ *   <dir>/<name>.md
+ *   <dir>/<name>.threads/thrd_<id>.yaml                    # sidecar next to its doc
  *   .drafts/<draft_id>/meta.json
- *   .drafts/<draft_id>/workspaces/<ws>/docs/<name>.md         # changed files only
- *   .drafts/<draft_id>/workspaces/<ws>/docs/<name>.threads/thrd_<id>.yaml
+ *   .drafts/<draft_id>/<dir>/<name>.md                     # changed files only
+ *   .drafts/<draft_id>/<dir>/<name>.threads/thrd_<id>.yaml
  *   .op_log.json
  *
  * No yjs, no git, no case-2 sync. Every "commit" is a new uuid so clients
@@ -157,6 +160,12 @@ async function walk(root: string): Promise<string[]> {
       continue;
     }
     for (const e of entries) {
+      // Skip dot-prefixed entries: Obsidian hides them, and they hold our own
+      // infra (`.drafts/`, `.op_log.json`) plus vault config (`.obsidian/`).
+      // This is what scopes the vault walk to visible docs. The `.drafts` and
+      // plugin trees are walked from inside (their roots are passed in), so
+      // their non-dot contents are unaffected.
+      if (e.name.startsWith(".")) continue;
       const full = path.join(dir, e.name);
       // Silently skip symlinks/devices/sockets/FIFOs — `isFile()` /
       // `isDirectory()` already return false for them, but the explicit
@@ -334,13 +343,13 @@ export class StubBackend implements Backend {
   }
 
   private absMain(p: DocPath): string {
-    assertWorkspacePath(p);
+    assertVaultPath(p);
     return safeJoin(this.root, p);
   }
 
   private absDraft(draftId: DraftId, p: DocPath): string {
     assertDraftId(draftId);
-    assertWorkspacePath(p);
+    assertVaultPath(p);
     const draftRoot = path.join(this.root, ".drafts", draftId);
     return safeJoin(draftRoot, p);
   }
@@ -461,26 +470,17 @@ export class StubBackend implements Backend {
     await this.saveDraftMeta(meta);
   }
 
-  async listWorkspaces(): Promise<Workspace[]> {
-    const wsRoot = path.join(this.root, "workspaces");
-    try {
-      const entries = await fs.readdir(wsRoot, { withFileTypes: true });
-      return entries
-        .filter((e) => e.isDirectory())
-        .map((e) => ({ name: e.name, path: `workspaces/${e.name}` }));
-    } catch {
-      return [];
-    }
-  }
-
-  async listDocs(workspace: string, prefix?: string): Promise<DocSummary[]> {
-    const base = path.join(this.root, "workspaces", workspace);
-    const files = await walk(base);
+  /**
+   * Every visible markdown doc on main. `walk` already skips dot-prefixed
+   * entries (`.drafts/`, `.obsidian/`, …), so this is the whole vault minus
+   * infra. The single source of truth for discovery (`listDocs`, `listAllDocs`).
+   */
+  private async listMainDocs(): Promise<DocSummary[]> {
+    const files = await walk(this.root);
     const results: DocSummary[] = [];
     for (const f of files) {
       if (!f.endsWith(".md")) continue;
       const rel = path.relative(this.root, f).replace(/\\/g, "/");
-      if (prefix && !rel.startsWith(prefix)) continue;
       const stat = await fs.lstat(f);
       const md = await readFileNoFollow(f);
       results.push({
@@ -492,6 +492,11 @@ export class StubBackend implements Backend {
     return results.sort((a, b) => a.path.localeCompare(b.path));
   }
 
+  async listDocs(prefix?: string): Promise<DocSummary[]> {
+    const docs = await this.listMainDocs();
+    return prefix ? docs.filter((d) => d.path.startsWith(prefix)) : docs;
+  }
+
   async glob(pattern: string, ref: Ref = "main"): Promise<DocSummary[]> {
     const re = globToRegex(pattern);
     const all = await this.listAllDocs(ref);
@@ -499,12 +504,7 @@ export class StubBackend implements Backend {
   }
 
   private async listAllDocs(ref: Ref): Promise<DocSummary[]> {
-    const main: DocSummary[] = [];
-    const workspaces = await this.listWorkspaces();
-    for (const ws of workspaces) {
-      const docs = await this.listDocs(ws.name);
-      for (const d of docs) main.push(d);
-    }
+    const main = await this.listMainDocs();
     const plugin = await this.listPluginFiles();
     if (ref === "main") return [...main, ...plugin];
     const meta = await this.loadDraftMeta(ref);
@@ -514,7 +514,6 @@ export class StubBackend implements Backend {
     for (const f of draftFiles) {
       if (!f.endsWith(".md")) continue;
       const rel = path.relative(draftBase, f).replace(/\\/g, "/");
-      if (!rel.startsWith("workspaces/")) continue;
       const stat = await fs.lstat(f);
       const md = await readFileNoFollow(f);
       overridden.set(rel, {
@@ -690,7 +689,7 @@ export class StubBackend implements Backend {
   ): Promise<WriteResult> {
     return this.withLock(() =>
       this.cachedWrite(opId, async () => {
-        assertWorkspacePath(p);
+        assertVaultPath(p);
         if (ref === "main") {
           const abs = this.absMain(p);
           await this.ensureDir(path.dirname(abs));
@@ -724,7 +723,7 @@ export class StubBackend implements Backend {
   ): Promise<WriteResult> {
     return this.withLock(() =>
       this.cachedWrite(opId, async () => {
-        assertWorkspacePath(p);
+        assertVaultPath(p);
         if (ref !== "main") {
           assertDraftRef(ref);
           await this.loadDraftMeta(ref);
@@ -781,7 +780,7 @@ export class StubBackend implements Backend {
     parent?: DraftId,
   ): Promise<DraftId[]> {
     return this.withLock(async () => {
-      assertWorkspacePath(p);
+      assertVaultPath(p);
       let parentMeta: DraftMeta | undefined;
       let seedContent: string | undefined;
       if (parent !== undefined) {
@@ -881,7 +880,7 @@ export class StubBackend implements Backend {
     display_name: string;
     base_version: number;
   }> {
-    assertWorkspacePath(opts.base_path);
+    assertVaultPath(opts.base_path);
     // Create the draft inside the lock so the meta is committed before any
     // thread save races against listing.
     const author = opts.author ?? "user";
@@ -989,8 +988,8 @@ export class StubBackend implements Backend {
       const considerPath = async (rel: DocPath): Promise<void> => {
         if (seen.has(rel)) return;
         seen.add(rel);
-        if (!rel.startsWith("workspaces/") || !rel.endsWith(".md")) return;
-        assertWorkspacePath(rel);
+        if (!rel.endsWith(".md")) return;
+        assertVaultPath(rel);
         const src = this.absDraft(draftId, rel);
         try {
           const stat = await fs.lstat(src);
@@ -1084,7 +1083,7 @@ export class StubBackend implements Backend {
   }
 
   async listVersionHistory(p: DocPath): Promise<VersionHistoryEntry[]> {
-    assertWorkspacePath(p);
+    assertVaultPath(p);
     const entries = this.versionHistory.get(p) ?? [];
     return entries.slice();
   }
@@ -1097,7 +1096,7 @@ export class StubBackend implements Backend {
     const draftRoot = path.join(this.root, ".drafts", draftId);
     const out: { path: DocPath; main_md: string; draft_md: string }[] = [];
     for (const rel of touches) {
-      if (!rel.startsWith("workspaces/") || !rel.endsWith(".md")) continue;
+      if (!rel.endsWith(".md")) continue;
       let main_md = "";
       try {
         main_md = await readFileNoFollow(this.absMain(rel));
@@ -1158,7 +1157,7 @@ export class StubBackend implements Backend {
   }
 
   private threadSidecarPath(homeDoc: DocPath, t: Thread): string {
-    assertWorkspacePath(homeDoc);
+    assertVaultPath(homeDoc);
     assertThreadId(t.id);
     const base = homeDoc.replace(/\.md$/, ".threads");
     const rel = `${base}/${t.id}.yaml`;
@@ -1171,7 +1170,10 @@ export class StubBackend implements Backend {
   }
 
   private async allThreadFiles(): Promise<string[]> {
-    const mainFiles = await walk(path.join(this.root, "workspaces"));
+    // Main sidecars live next to their docs anywhere in the visible vault;
+    // `walk(root)` skips dot-dirs (including `.drafts`), so draft-scoped
+    // sidecars are gathered separately from the draft tree.
+    const mainFiles = await walk(this.root);
     const draftFiles = await walk(path.join(this.root, ".drafts"));
     return [...mainFiles, ...draftFiles].filter((f) =>
       /\.threads\/thrd_[A-Za-z0-9-]+\.yaml$/.test(f),
@@ -1209,7 +1211,7 @@ export class StubBackend implements Backend {
     if (t.targets.length === 0) {
       throw new McpError("invalid_path", "thread has no targets to save");
     }
-    assertWorkspacePath(t.targets[0].path);
+    assertVaultPath(t.targets[0].path);
     assertThreadId(t.id);
     const sidecar = this.threadSidecarPath(t.targets[0].path, t);
     await this.ensureDir(path.dirname(sidecar));

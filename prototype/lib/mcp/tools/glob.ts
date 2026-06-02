@@ -6,8 +6,8 @@ import { refOptionalArg } from "../schemas";
 import { toToolError } from "../errors";
 
 /**
- * Glob — mirrors Claude Code's Glob. Matches paths under workspaces/**.md.
- * Threads are surfaced via ListThreads / ReadThread, not Glob.
+ * Glob — mirrors Claude Code's Glob. Matches doc paths anywhere in the vault,
+ * e.g. **\/*.md. Threads are surfaced via ListThreads / ReadThread, not Glob.
  */
 export function registerGlob(server: McpServer, backend: Backend): void {
   server.registerTool(
@@ -15,7 +15,7 @@ export function registerGlob(server: McpServer, backend: Backend): void {
     {
       title: "Glob",
       description:
-        "Find sheaf docs by glob pattern, e.g. 'workspaces/**/*.md'. Pass ref to glob inside a draft (draft file overrides take precedence over main).",
+        "Find sheaf docs by glob pattern, e.g. '**/*.md' or 'notes/**/*.md'. Pass ref to glob inside a draft (draft file overrides take precedence over main).",
       inputSchema: {
         pattern: z
           .string()

@@ -494,17 +494,22 @@ describe("backend.readDoc version_counter (Phase B)", () => {
   });
 });
 
-describe("backend.listDocs workspace filter", () => {
+describe("backend.listDocs", () => {
   let root: string;
   let backend: StubBackend;
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
-    for (const ws of ["alpha", "beta"]) {
-      const dir = path.join(root, "workspaces", ws, "docs");
-      await fs.mkdir(dir, { recursive: true });
-      await fs.writeFile(path.join(dir, "x.md"), `# ${ws}/x\n`);
+    // Docs at the vault root, in a plain folder, and under the (now ordinary)
+    // workspaces/ folder — all visible, all discoverable.
+    await fs.writeFile(path.join(root, "README.md"), "# readme\n");
+    for (const dir of ["notes", path.join("workspaces", "alpha", "docs")]) {
+      await fs.mkdir(path.join(root, dir), { recursive: true });
+      await fs.writeFile(path.join(root, dir, "x.md"), `# ${dir}/x\n`);
     }
+    // Infra / hidden dirs must never surface.
+    await fs.mkdir(path.join(root, ".obsidian"), { recursive: true });
+    await fs.writeFile(path.join(root, ".obsidian", "config.md"), "# hidden\n");
     backend = new StubBackend(root);
   });
 
@@ -512,15 +517,66 @@ describe("backend.listDocs workspace filter", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("returns only docs under the requested workspace", async () => {
-    const alphaDocs = await backend.listDocs("alpha");
-    expect(alphaDocs.map((d) => d.path)).toEqual([
+  it("lists every visible doc and skips dot-dirs", async () => {
+    const docs = await backend.listDocs();
+    // Sorted by localeCompare (case-insensitive): "notes" < "README".
+    expect(docs.map((d) => d.path)).toEqual([
+      "notes/x.md",
+      "README.md",
       "workspaces/alpha/docs/x.md",
     ]);
-    const betaDocs = await backend.listDocs("beta");
-    expect(betaDocs.map((d) => d.path)).toEqual([
-      "workspaces/beta/docs/x.md",
-    ]);
+  });
+
+  it("filters by path prefix", async () => {
+    const notes = await backend.listDocs("notes/");
+    expect(notes.map((d) => d.path)).toEqual(["notes/x.md"]);
+    const ws = await backend.listDocs("workspaces/alpha");
+    expect(ws.map((d) => d.path)).toEqual(["workspaces/alpha/docs/x.md"]);
+  });
+});
+
+describe("operates on any vault doc (not just workspaces/)", () => {
+  let root: string;
+  let backend: StubBackend;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-anydoc-"));
+    await fs.writeFile(path.join(root, "note.md"), "hello world");
+    await fs.mkdir(path.join(root, "notes"), { recursive: true });
+    await fs.writeFile(path.join(root, "notes", "x.md"), "hello world");
+    backend = new StubBackend(root);
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("reads and edits a root-level doc on main", async () => {
+    expect((await backend.readDoc("note.md", "main")).md).toBe("hello world");
+    await backend.editDoc("note.md", "main", "world", "vault", false);
+    const onDisk = await fs.readFile(path.join(root, "note.md"), "utf8");
+    expect(onDisk).toBe("hello vault");
+  });
+
+  it("AddThread on a non-workspaces doc lands a sidecar next to the doc", async () => {
+    const id = await backend.addThread({
+      targets: [{ path: "notes/x.md", scope: "doc" }],
+      message: "comment on any doc",
+      author: "user",
+    });
+    const sidecar = path.join(root, "notes", "x.threads", `${id}.yaml`);
+    await expect(fs.stat(sidecar)).resolves.toBeTruthy();
+    const threads = await backend.listThreads({ path: "notes/x.md", ref: "main" });
+    expect(threads.map((t) => t.id)).toContain(id);
+  });
+
+  it("rejects writes to dot-prefixed (infra) paths", async () => {
+    await expect(
+      backend.writeDoc(".drafts/evil.md", "main", "x"),
+    ).rejects.toThrow();
+    await expect(
+      backend.writeDoc(".obsidian/x.md", "main", "x"),
+    ).rejects.toThrow();
   });
 });
 

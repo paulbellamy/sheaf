@@ -4,27 +4,21 @@ import { respondError } from "@/lib/mcp/errors";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
+/** Group label for the doc list: the doc's top-level folder, or "(root)". */
+function folderOf(p: string): string {
+  return p.includes("/") ? p.slice(0, p.indexOf("/")) : "(root)";
+}
+
 export async function GET(): Promise<Response> {
   const backend = getBackend();
   try {
-    const workspaces = await backend.listWorkspaces();
-    const docs: {
-      path: string;
-      title: string;
-      workspace: string;
-      updated_at: number;
-    }[] = [];
-    for (const ws of workspaces) {
-      const wsDocs = await backend.listDocs(ws.name);
-      for (const d of wsDocs) {
-        docs.push({
-          path: d.path,
-          title: d.title,
-          workspace: ws.name,
-          updated_at: d.updated_at,
-        });
-      }
-    }
+    const allDocs = await backend.listDocs();
+    const docs = allDocs.map((d) => ({
+      path: d.path,
+      title: d.title,
+      workspace: folderOf(d.path),
+      updated_at: d.updated_at,
+    }));
     docs.sort((a, b) => b.updated_at - a.updated_at);
 
     const allDrafts = await backend.listDrafts();
@@ -46,7 +40,7 @@ export async function GET(): Promise<Response> {
           name: d.name,
           state: d.state,
           author: d.author,
-          workspace: primaryPath.split("/")[1] ?? "",
+          workspace: folderOf(primaryPath),
           created_at: d.created_at,
         };
       }),

@@ -214,7 +214,7 @@ export class ThreadsView extends ItemView {
 
     if (!this.currentDocPath) {
       const empty = el.createDiv({ cls: "sheaf-empty" });
-      empty.setText("Open a doc under workspaces/.");
+      empty.setText("Open a markdown doc to see its threads.");
       empty.style.padding = "1em";
       empty.style.opacity = "0.6";
       return;

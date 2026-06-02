@@ -113,9 +113,9 @@ export default class SheafPlugin extends Plugin {
 
   /**
    * Obsidian vault path → sheaf path. The plugin assumes the vault root is
-   * the sheaf data root: the vault contains `workspaces/<ws>/docs/<doc>.md`
-   * verbatim, so `file.path` is already the sheaf path. Anything outside
-   * `workspaces/` is unsupported.
+   * the sheaf data root, so `file.path` (vault-relative) is already the sheaf
+   * path. Any markdown doc in the vault is supported — sheaf rejects only
+   * dot-prefixed paths (its own infra), which Obsidian doesn't surface anyway.
    */
   vaultPathToSheafPath(vaultPath: string): string {
     return vaultPath;
@@ -160,14 +160,6 @@ export default class SheafPlugin extends Plugin {
       return;
     }
     const docPath = this.vaultPathToSheafPath(file.path);
-    if (!docPath.startsWith("workspaces/")) {
-      new Notice(
-        "Sheaf: vault path must be under workspaces/<ws>/docs/. " +
-          "The vault root has to be the sheaf data root.",
-        8000,
-      );
-      return;
-    }
     const selection = editor.getSelection();
     // No selection → doc-level comment. With a selection → anchored range.
     const charRange = selection.length > 0 ? this.computeCharRange(editor) : null;

@@ -121,8 +121,8 @@ bar — keep it.
 Each notification is one event of the form:
 
 \`\`\`
-{"kind":"thread_changed","thread_id":"thrd_...","target_paths":["workspaces/.../foo.md"]}
-{"kind":"doc_changed","path":"workspaces/.../foo.md"}
+{"kind":"thread_changed","thread_id":"thrd_...","target_paths":["notes/foo.md"]}
+{"kind":"doc_changed","path":"notes/foo.md"}
 {"kind":"agent_presence","connected":true}
 \`\`\`
 
@@ -143,7 +143,7 @@ and can be ignored.
 - \`Write(file_path, content)\` — full-doc rewrite. Pass \`ref="main"\` (or omit). Use this for doc-level briefs or when many edits would be needed.
 - \`ReplyThread(thread_id, message)\` — add a message to the thread. Use for clarifying questions.
 - \`ResolveThread(thread_id)\` — mark thread done. Call this once your edit has landed.
-- \`Glob(pattern)\` / \`Grep({pattern, ...})\` — search the workspace.
+- \`Glob(pattern)\` / \`Grep({pattern, ...})\` — search the vault.
 
 ## Range vs doc-level
 
@@ -163,7 +163,7 @@ the doc first, then make the change with \`Write\` (full rewrite) or several
 - Don't call \`Fork\`, \`Propose\`, \`Merge\`, \`DeclineDraft\`, or
   \`AttachDraftPayload\`. Those tools exist for a different sheaf workflow
   that this prototype doesn't use.
-- Don't write outside \`workspaces/\` — those paths are rejected.
+- Don't write to \`.\`-prefixed paths (dotfiles, \`.drafts/\`, \`.obsidian/\`) — those are rejected.
 - Don't loop on \`doc_changed\` events you emitted yourself.
 
 That's the whole workflow. Subscribe, react, edit, resolve.`;

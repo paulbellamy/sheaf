@@ -91,7 +91,7 @@ export const err = {
   invalidPath: (path: string) =>
     new SheafError(
       "invalid_path",
-      `path must be repo-root-relative under workspaces/: got ${path}`,
+      `path must be a repo-root-relative vault path with no '.'-prefixed segment (no dotfiles, no '..'): got ${path}`,
     ),
   invalidRef: (ref: string) =>
     new SheafError(

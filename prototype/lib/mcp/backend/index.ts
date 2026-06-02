@@ -6,8 +6,9 @@
  * with no real CRDT or git; the production backend will plug in yjs, git,
  * and case-2 sync (design §4.2) without touching any tool code.
  *
- * Paths are always repo-root-relative, e.g. "workspaces/infra/docs/proposal.md".
- * Refs are either "main" or a draft id of the form "draft_<uuid>".
+ * Paths are always repo-root-relative (vault-relative), e.g. "notes/proposal.md"
+ * or "proposal.md" at the vault root. Refs are either "main" or a draft id of
+ * the form "draft_<uuid>".
  */
 
 export type Ref = "main" | string;
@@ -16,8 +17,6 @@ export type DocPath = string;
 export type DraftId = string;
 export type ThreadId = string;
 export type OpId = string;
-
-export type Workspace = { name: string; path: string };
 
 export type DocSummary = {
   path: DocPath;
@@ -113,7 +112,7 @@ export type DraftSummary = {
    */
   display_name?: string;
   /**
-   * Workspace paths the draft has touched. Initialized to `[base_path]` at
+   * Doc paths the draft has touched. Initialized to `[base_path]` at
    * fork time; Phase H expands as cross-cutting edits land.
    */
   touches: DocPath[];
@@ -223,8 +222,8 @@ export type ThreadSummary = {
 };
 
 export interface Backend {
-  listWorkspaces(): Promise<Workspace[]>;
-  listDocs(workspace: string, prefix?: string): Promise<DocSummary[]>;
+  /** All visible docs on main, optionally filtered to a path prefix. */
+  listDocs(prefix?: string): Promise<DocSummary[]>;
 
   glob(pattern: string, ref?: Ref): Promise<DocSummary[]>;
   grep(opts: GrepOptions): Promise<GrepResult>;

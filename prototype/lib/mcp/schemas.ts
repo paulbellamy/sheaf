@@ -32,7 +32,7 @@ export const pathArg = z
   .min(1)
   .max(LIMITS.path)
   .describe(
-    "Repo-root-relative doc path, e.g. 'workspaces/infra/docs/proposal.md'.",
+    "Repo-root-relative (vault-relative) doc path, e.g. 'notes/proposal.md' or 'proposal.md'.",
   );
 
 export const refArg = z

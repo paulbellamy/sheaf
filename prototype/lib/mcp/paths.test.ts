@@ -4,55 +4,59 @@ import {
   assertDraftId,
   assertReadablePath,
   assertThreadId,
-  assertWorkspacePath,
+  assertVaultPath,
   isPluginPath,
   safeJoin,
 } from "./paths";
 
-describe("assertWorkspacePath", () => {
-  it("accepts a clean workspace path", () => {
-    expect(() =>
-      assertWorkspacePath("workspaces/infra/docs/proposal.md"),
-    ).not.toThrow();
+describe("assertVaultPath", () => {
+  it("accepts any visible vault path", () => {
+    expect(() => assertVaultPath("notes/proposal.md")).not.toThrow();
+    expect(() => assertVaultPath("README.md")).not.toThrow();
+    // `workspaces/` is just an ordinary folder now.
+    expect(() => assertVaultPath("workspaces/infra/docs/proposal.md")).not.toThrow();
+    expect(() => assertVaultPath("etc/passwd")).not.toThrow();
   });
 
-  it("accepts legitimate double-dots in a segment", () => {
-    expect(() =>
-      assertWorkspacePath("workspaces/foo/..bar/doc.md"),
-    ).not.toThrow();
-  });
-
-  it("rejects paths that do not start with workspaces/", () => {
-    expect(() => assertWorkspacePath("etc/passwd")).toThrow();
-    expect(() => assertWorkspacePath(".drafts/x/meta.json")).toThrow();
+  it("rejects dot-prefixed segments (infra + Obsidian-hidden)", () => {
+    expect(() => assertVaultPath(".drafts/x/meta.json")).toThrow();
+    expect(() => assertVaultPath(".obsidian/workspace.json")).toThrow();
+    expect(() => assertVaultPath("notes/.hidden/x.md")).toThrow();
+    // A leading-dot segment anywhere is hidden by Obsidian, so rejected.
+    expect(() => assertVaultPath("workspaces/foo/..bar/doc.md")).toThrow();
   });
 
   it("rejects traversal segments", () => {
-    expect(() => assertWorkspacePath("workspaces/../etc/passwd")).toThrow();
-    expect(() => assertWorkspacePath("workspaces/foo/../../etc")).toThrow();
+    expect(() => assertVaultPath("workspaces/../etc/passwd")).toThrow();
+    expect(() => assertVaultPath("workspaces/foo/../../etc")).toThrow();
+    expect(() => assertVaultPath("../outside.md")).toThrow();
+  });
+
+  it("rejects empty segments", () => {
+    expect(() => assertVaultPath("notes//x.md")).toThrow();
+    expect(() => assertVaultPath("notes/")).toThrow();
   });
 
   it("rejects null-byte injection", () => {
-    expect(() => assertWorkspacePath("workspaces/\0/x.md")).toThrow();
+    expect(() => assertVaultPath("notes/\0/x.md")).toThrow();
   });
 
   it("rejects absolute paths", () => {
-    expect(() => assertWorkspacePath("/workspaces/x.md")).toThrow();
-    expect(() => assertWorkspacePath("C:\\workspaces\\x.md")).toThrow();
+    expect(() => assertVaultPath("/notes/x.md")).toThrow();
+    expect(() => assertVaultPath("C:\\notes\\x.md")).toThrow();
   });
 
   it("rejects empty and non-string inputs", () => {
-    expect(() => assertWorkspacePath("")).toThrow();
+    expect(() => assertVaultPath("")).toThrow();
     // @ts-expect-error runtime fuzz
-    expect(() => assertWorkspacePath(undefined)).toThrow();
+    expect(() => assertVaultPath(undefined)).toThrow();
   });
 });
 
 describe("assertReadablePath", () => {
-  it("accepts workspace paths", () => {
-    expect(() =>
-      assertReadablePath("workspaces/infra/docs/proposal.md"),
-    ).not.toThrow();
+  it("accepts vault paths", () => {
+    expect(() => assertReadablePath("notes/proposal.md")).not.toThrow();
+    expect(() => assertReadablePath("README.md")).not.toThrow();
   });
 
   it("accepts plugin paths", () => {
@@ -64,14 +68,13 @@ describe("assertReadablePath", () => {
     ).not.toThrow();
   });
 
-  it("rejects paths that match neither prefix", () => {
-    expect(() => assertReadablePath("etc/passwd")).toThrow();
+  it("rejects non-plugin dot-prefixed paths", () => {
     expect(() => assertReadablePath(".drafts/x/meta.json")).toThrow();
     expect(() => assertReadablePath(".claude/settings.json")).toThrow();
   });
 
   it("rejects traversal segments under either prefix", () => {
-    expect(() => assertReadablePath("workspaces/../etc/passwd")).toThrow();
+    expect(() => assertReadablePath("notes/../etc/passwd")).toThrow();
     expect(() =>
       assertReadablePath(".claude-plugin/../etc/passwd"),
     ).toThrow();
@@ -94,8 +97,8 @@ describe("isPluginPath", () => {
     expect(isPluginPath(".claude-plugin/skills/foo/SKILL.md")).toBe(true);
   });
 
-  it("returns false for workspace paths", () => {
-    expect(isPluginPath("workspaces/infra/docs/proposal.md")).toBe(false);
+  it("returns false for vault paths", () => {
+    expect(isPluginPath("notes/proposal.md")).toBe(false);
   });
 
   it("returns false for non-string inputs", () => {

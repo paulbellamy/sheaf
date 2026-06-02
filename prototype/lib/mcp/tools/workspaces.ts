@@ -5,39 +5,13 @@ import { pathArg } from "../schemas";
 import { toToolError } from "../errors";
 
 /**
- * Discovery tools: list available workspaces and active drafts.
+ * Discovery tool: list active drafts. (Docs are discovered via ListDocs /
+ * Glob / Grep; there is no workspace concept — any visible vault doc counts.)
  */
 export function registerWorkspaceTools(
   server: McpServer,
   backend: Backend,
 ): void {
-  server.registerTool(
-    "ListWorkspaces",
-    {
-      title: "ListWorkspaces",
-      description: "List the sheaf workspaces available to the agent.",
-      annotations: { readOnlyHint: true, openWorldHint: false },
-    },
-    async () => {
-      try {
-        const ws = await backend.listWorkspaces();
-        return {
-          content: [
-            {
-              type: "text",
-              text: ws.length
-                ? ws.map((w) => `${w.name}  (${w.path})`).join("\n")
-                : "(no workspaces)",
-            },
-          ],
-          structuredContent: { workspaces: ws },
-        };
-      } catch (e) {
-        return toToolError(e);
-      }
-    },
-  );
-
   server.registerTool(
     "ListDrafts",
     {
