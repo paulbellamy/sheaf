@@ -1,4 +1,11 @@
-import { ItemView, MarkdownView, WorkspaceLeaf, TFile, Notice } from "obsidian";
+import {
+  ItemView,
+  MarkdownRenderer,
+  MarkdownView,
+  WorkspaceLeaf,
+  TFile,
+  Notice,
+} from "obsidian";
 import type SheafPlugin from "../main";
 import type { Thread, ThreadDraftBody } from "../sheaf-client";
 
@@ -17,16 +24,17 @@ function isWorking(thread: Thread): boolean {
 }
 
 /**
- * Latest message that carries variant options. Returns the message + the
- * leaves to render. Walks newest-first so newer proposals shadow older ones.
+ * Option leaves to render as a picker — but only while they're the *latest*
+ * word on the thread. Once anyone posts after them (e.g. the user's "Selected
+ * option N" pick, routed back to the agent), the picker hides: the ball is in
+ * the agent's court now, and a lingering picker would invite a double-pick.
  * A single-leaf `draft` payload is treated as a one-element option list.
  */
 function latestVariants(thread: Thread): ThreadDraftBody[] | null {
-  for (let i = thread.messages.length - 1; i >= 0; i--) {
-    const m = thread.messages[i];
-    if (m.draft_options && m.draft_options.length > 0) return m.draft_options;
-    if (m.draft) return [m.draft];
-  }
+  const m = thread.messages[thread.messages.length - 1];
+  if (!m) return null;
+  if (m.draft_options && m.draft_options.length > 0) return m.draft_options;
+  if (m.draft) return [m.draft];
   return null;
 }
 
@@ -338,12 +346,22 @@ export class ThreadsView extends ItemView {
 
     for (const msg of thread.messages) {
       const m = card.createDiv();
-      const author = m.createSpan({ text: `${msg.author}: ` });
+      m.style.marginBottom = "0.5em";
+      const author = m.createDiv({ text: `${msg.author}:` });
       author.style.fontWeight = "600";
       author.style.fontSize = "0.85em";
-      const body = m.createSpan({ text: msg.body });
+      // Render the comment body as markdown so lists, code, bold, and links
+      // read properly instead of as raw source. `this` is the owning
+      // Component so Obsidian cleans up the rendered subtree with the view.
+      const body = m.createDiv({ cls: "sheaf-md" });
       body.style.fontSize = "0.9em";
-      m.style.marginBottom = "0.25em";
+      void MarkdownRenderer.render(
+        this.app,
+        msg.body,
+        body,
+        this.currentDocPath ?? "",
+        this,
+      );
     }
 
     const variants = latestVariants(thread);
