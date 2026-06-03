@@ -1,4 +1,4 @@
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { App, PluginSettingTab, Setting, TextComponent } from "obsidian";
 import type SheafPlugin from "./main";
 
 /**
@@ -185,10 +185,12 @@ export class SheafSettingTab extends PluginSettingTab {
         .setButtonText("Add role")
         .setCta()
         .onClick(async () => {
-          const id = this.uniquePersonaId("role");
+          // Seed id and name in sync so the id auto-follows the name until the
+          // user customises either (see the name field's wasAuto check).
+          const name = "New role";
           this.plugin.settings.personas.push({
-            id,
-            name: "New role",
+            id: this.uniquePersonaId(name),
+            name,
             brief: "",
             enabled: true,
           });
@@ -212,33 +214,60 @@ export class SheafSettingTab extends PluginSettingTab {
     }
 
     personas.forEach((persona, index) => {
-      const row = new Setting(list)
-        .setName(`review:${persona.id}`)
-        .addToggle((t) =>
-          t.setValue(persona.enabled).onChange(async (v) => {
-            persona.enabled = v;
+      const row = new Setting(list).setName(`review:${persona.id}`);
+
+      row.addToggle((t) =>
+        t.setValue(persona.enabled).onChange(async (v) => {
+          persona.enabled = v;
+          await this.plugin.saveSettings();
+        }),
+      );
+
+      // Id field. Slugified + deduped on blur so the typed value stays editable
+      // until you commit it; the row label mirrors the resulting handle.
+      let idComp!: TextComponent;
+      row.addText((t) => {
+        idComp = t;
+        t.setPlaceholder("id").setValue(persona.id);
+        t.inputEl.addEventListener("blur", async () => {
+          const next = this.uniquePersonaId(t.getValue(), persona);
+          persona.id = next;
+          t.setValue(next);
+          row.setName(`review:${next}`);
+          await this.plugin.saveSettings();
+        });
+      });
+
+      row.addText((t) =>
+        t
+          .setPlaceholder("Display name")
+          .setValue(persona.name)
+          .onChange(async (v) => {
+            // While the id still matches the slug of the old name it's
+            // "auto" — keep it following the name. Once the id diverges
+            // (custom id, or a deduped suffix), stop touching it.
+            const wasAuto = persona.id === slugifyPersonaId(persona.name);
+            persona.name = v;
+            if (wasAuto) {
+              const next = this.uniquePersonaId(v, persona);
+              persona.id = next;
+              idComp.setValue(next);
+              row.setName(`review:${next}`);
+            }
             await this.plugin.saveSettings();
           }),
-        )
-        .addText((t) =>
-          t
-            .setPlaceholder("Display name")
-            .setValue(persona.name)
-            .onChange(async (v) => {
-              persona.name = v;
-              await this.plugin.saveSettings();
-            }),
-        )
-        .addExtraButton((b) =>
-          b
-            .setIcon("trash")
-            .setTooltip("Remove role")
-            .onClick(async () => {
-              this.plugin.settings.personas.splice(index, 1);
-              await this.plugin.saveSettings();
-              this.renderPersonaList(list);
-            }),
-        );
+      );
+
+      row.addExtraButton((b) =>
+        b
+          .setIcon("trash")
+          .setTooltip("Remove role")
+          .onClick(async () => {
+            this.plugin.settings.personas.splice(index, 1);
+            await this.plugin.saveSettings();
+            this.renderPersonaList(list);
+          }),
+      );
 
       // Brief: a full-width textarea under the name row.
       const brief = row.controlEl.createEl("textarea");
@@ -256,8 +285,12 @@ export class SheafSettingTab extends PluginSettingTab {
     });
   }
 
-  private uniquePersonaId(base: string): string {
-    const taken = new Set(this.plugin.settings.personas.map((p) => p.id));
+  private uniquePersonaId(base: string, exclude?: ReviewPersona): string {
+    const taken = new Set(
+      this.plugin.settings.personas
+        .filter((p) => p !== exclude)
+        .map((p) => p.id),
+    );
     let candidate = slugifyPersonaId(base) || "role";
     let n = 1;
     while (taken.has(candidate)) candidate = `${slugifyPersonaId(base) || "role"}-${++n}`;
