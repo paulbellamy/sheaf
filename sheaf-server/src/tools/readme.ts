@@ -144,15 +144,16 @@ and emits one JSON line per event; \`Monitor\` wakes the session on each line:
 
 \`\`\`
 Monitor({
-  command: "while true; do curl -sN 'http://localhost:3000/api/ui/drafts/stream?role=agent' | sed -n -u 's/^data: //p'; sleep 1; done",
+  command: "while true; do curl -sN 'http://localhost:31415/api/ui/drafts/stream?role=agent' | sed -n -u 's/^data: //p'; sleep 1; done",
   description: "sheaf events",
   persistent: true,
 })
 \`\`\`
 
-If sheaf isn't on \`localhost:3000\`, swap the URL. The \`role=agent\` query
-param is what makes the user's plugin show "agent connected" in its status
-bar — keep it.
+Use the **same host:port you reached this MCP server on** — the example uses
+the Obsidian-plugin default (\`localhost:31415\`); the web prototype runs on
+\`localhost:3000\`. The \`role=agent\` query param is what makes the user's
+plugin show "agent connected" in its status bar — keep it.
 
 Each notification is one event of the form:
 

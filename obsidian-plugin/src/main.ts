@@ -125,9 +125,9 @@ export default class SheafPlugin extends Plugin {
   serverPort(): number {
     try {
       const p = new URL(this.settings.serverUrl).port;
-      return p ? Number(p) : 3000;
+      return p ? Number(p) : 31415;
     } catch {
-      return 3000;
+      return 31415;
     }
   }
 

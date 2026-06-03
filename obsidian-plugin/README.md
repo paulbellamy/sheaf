@@ -29,7 +29,7 @@ Or for dev with hot reload, `pnpm --filter sheaf-obsidian dev` (watches and
 writes `main.js`); use a symlink instead of `cp`.
 
 Enable the plugin from Settings → Community plugins. On enable it starts the
-sheaf server on `http://localhost:3000` (change the port in the plugin's
+sheaf server on `http://localhost:31415` (change the port in the plugin's
 settings; or turn the embedded server off there to point at one you run
 yourself). Any markdown doc in your vault is a sheaf doc — dot-prefixed paths
 (`.obsidian/`, etc.) are infra and ignored.
@@ -40,7 +40,7 @@ Open the **Sheaf threads** panel (ribbon icon). While no agent is listening it
 shows a copy button for the connect command — or run it yourself:
 
 ```
-claude mcp add --transport http sheaf http://localhost:3000/api/mcp
+claude mcp add --transport http sheaf http://localhost:31415/api/mcp
 claude
 ```
 

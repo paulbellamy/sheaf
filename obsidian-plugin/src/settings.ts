@@ -10,7 +10,7 @@ export type SheafSettings = {
 };
 
 export const DEFAULT_SETTINGS: SheafSettings = {
-  serverUrl: "http://localhost:3000",
+  serverUrl: "http://localhost:31415",
   defaultAuthor: "user",
   showResolved: true,
   runServer: true,
@@ -44,11 +44,11 @@ export class SheafSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Sheaf server URL")
       .setDesc(
-        "Where sheaf is reachable. When the embedded server is on, its port comes from this URL (default http://localhost:3000).",
+        "Where sheaf is reachable. When the embedded server is on, its port comes from this URL (default http://localhost:31415).",
       )
       .addText((t) =>
         t
-          .setPlaceholder("http://localhost:3000")
+          .setPlaceholder("http://localhost:31415")
           .setValue(this.plugin.settings.serverUrl)
           .onChange(async (value) => {
             this.plugin.settings.serverUrl = value.trim();

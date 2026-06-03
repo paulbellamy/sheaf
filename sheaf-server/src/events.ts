@@ -102,6 +102,14 @@ export function pipeEvents(
 
   unsubscribe = backend.subscribe(send, { role: opts.role });
 
+  // `subscribe` can emit synchronously (presence replay), so `send` — and thus
+  // `cleanup` — may already have run while `unsubscribe` was still the no-op.
+  // If so, unsubscribe the real listener now and don't arm the keep-alive.
+  if (closed) {
+    unsubscribe();
+    return cleanup;
+  }
+
   // keep-alive comment every 20s to survive idle proxy closes
   ping = setInterval(() => {
     if (closed) return;

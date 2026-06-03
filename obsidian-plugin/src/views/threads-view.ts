@@ -89,6 +89,7 @@ export class ThreadsView extends ItemView {
   // Distinguishes "server down" from "server up but no agent listening".
   private serverUp: boolean | null = null;
   private pinging = false;
+  private lastPing = 0;
 
   rerender(): void {
     this.render();
@@ -327,8 +328,13 @@ export class ThreadsView extends ItemView {
    * connect panel tell "server down" apart from "server up, no agent".
    */
   private checkServer(): void {
-    if (this.pinging) return;
+    // Throttle: render() runs on every keystroke (vault "modify"), and this is
+    // called from the connect panel each render. Without a time gate that would
+    // be a continuous stream of pings while typing with no agent connected.
+    const now = Date.now();
+    if (this.pinging || now - this.lastPing < 4000) return;
     this.pinging = true;
+    this.lastPing = now;
     void this.plugin.client.ping().then((up) => {
       this.pinging = false;
       if (up !== this.serverUp) {

@@ -33,7 +33,9 @@ export class SheafServerHost {
    */
   async start(root: string, port: number): Promise<void> {
     await this.stop();
-    const backend = new StubBackend(root);
+    // pluginRoot = root (not the default parent dir) so the backend's
+    // read-only `.claude-plugin/` serving can never reach above the vault.
+    const backend = new StubBackend(root, root);
     const app = buildSheafApp(backend);
     await app.listen({ port, host: "127.0.0.1" });
     this.app = app;
