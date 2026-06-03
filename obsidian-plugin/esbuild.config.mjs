@@ -6,6 +6,12 @@ const prod = process.argv[2] === "production";
 const ctx = await esbuild.context({
   entryPoints: ["src/main.ts"],
   bundle: true,
+  // Node platform: the plugin bundles the sheaf server (fastify + MCP SDK +
+  // backend), and runs in Obsidian's Node-enabled renderer. This keeps node
+  // builtins (fs, http, crypto, …) external — provided by Electron at runtime
+  // — while everything else (fastify, zod, yaml, sheaf-server) is bundled into
+  // the single main.js, so the plugin stays a zero-dependency drop-in.
+  platform: "node",
   external: [
     "obsidian",
     "electron",

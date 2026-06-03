@@ -25,7 +25,7 @@ export type MergeConflictDetail = {
 
 /**
  * Thrown by the sheaf backend and tool layer. Surfaces through MCP
- * `toToolError` to agents and through `respondError` to UI route handlers.
+ * `toToolError` to agents and through `errorResult` to UI route handlers.
  *
  * Previously named `McpError`; kept as an export alias for back-compat while
  * existing imports migrate.
@@ -197,25 +197,42 @@ export function statusForCode(code: SheafErrorCode): number {
 }
 
 /**
- * Convert any thrown value into a JSON `Response`. Use at the top of every
- * `/api/ui/*` catch block to keep error shape + status mapping consistent.
+ * Result of a UI handler that errored: an HTTP status plus the JSON body.
+ * Framework-agnostic — both the Next route adapters and the Fastify routes
+ * serialize this the same way, so the error shape + status mapping has a
+ * single source of truth.
  */
-export function respondError(e: unknown): Response {
+export type ErrorResult = {
+  status: number;
+  json: {
+    error: string;
+    code: string;
+    conflicts?: MergeConflictDetail[];
+    open_count?: number;
+  };
+};
+
+/**
+ * Convert any thrown value into an `{status, json}` error result. Use at the
+ * top of every `/api/ui/*` catch block to keep error shape + status mapping
+ * consistent across runtimes.
+ */
+export function errorResult(e: unknown): ErrorResult {
   if (e instanceof SheafError) {
-    const body: Record<string, unknown> = { error: e.message, code: e.code };
-    if (e.conflicts) body.conflicts = e.conflicts;
-    if (e.open_count !== undefined) body.open_count = e.open_count;
-    return Response.json(body, { status: statusForCode(e.code) });
+    const json: ErrorResult["json"] = { error: e.message, code: e.code };
+    if (e.conflicts) json.conflicts = e.conflicts;
+    if (e.open_count !== undefined) json.open_count = e.open_count;
+    return { status: statusForCode(e.code), json };
   }
   if (e instanceof Error) {
     console.error("[ui] internal error", e);
   } else {
     console.error("[ui] internal error (non-Error thrown)", e);
   }
-  return Response.json(
-    { error: "internal server error", code: "internal" },
-    { status: 500 },
-  );
+  return {
+    status: 500,
+    json: { error: "internal server error", code: "internal" },
+  };
 }
 
 /**

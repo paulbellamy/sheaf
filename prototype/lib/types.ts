@@ -1,4 +1,4 @@
-import type { ThreadMessage } from "@/lib/mcp/backend";
+import type { ThreadMessage } from "sheaf-server/types";
 
 export type { ThreadMessage };
 

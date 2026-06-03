@@ -5,12 +5,15 @@ export type SheafSettings = {
   serverUrl: string;
   defaultAuthor: string;
   showResolved: boolean;
+  /** Run the sheaf server (backend + MCP + API) inside Obsidian itself. */
+  runServer: boolean;
 };
 
 export const DEFAULT_SETTINGS: SheafSettings = {
   serverUrl: "http://localhost:3000",
   defaultAuthor: "user",
   showResolved: true,
+  runServer: true,
 };
 
 export class SheafSettingTab extends PluginSettingTab {
@@ -26,9 +29,22 @@ export class SheafSettingTab extends PluginSettingTab {
     containerEl.empty();
 
     new Setting(containerEl)
+      .setName("Run sheaf server inside Obsidian")
+      .setDesc(
+        "Host the backend, MCP server, and API in the plugin — no separate process to start. The vault is the data root. Turn off to connect to a server you run yourself at the URL below.",
+      )
+      .addToggle((t) =>
+        t.setValue(this.plugin.settings.runServer).onChange(async (value) => {
+          this.plugin.settings.runServer = value;
+          await this.plugin.saveSettings();
+          await this.plugin.onConnectionChanged();
+        }),
+      );
+
+    new Setting(containerEl)
       .setName("Sheaf server URL")
       .setDesc(
-        "Where the sheaf server is reachable. Defaults to http://localhost:3000 (the prototype's `next dev` port).",
+        "Where sheaf is reachable. When the embedded server is on, its port comes from this URL (default http://localhost:3000).",
       )
       .addText((t) =>
         t
@@ -37,7 +53,7 @@ export class SheafSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.serverUrl = value.trim();
             await this.plugin.saveSettings();
-            this.plugin.onConnectionChanged();
+            await this.plugin.onConnectionChanged();
           }),
       );
 
@@ -65,6 +81,14 @@ export class SheafSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
           this.plugin.refreshThreadsView();
         }),
+      );
+
+    // Surface the connect command so it's copy-pasteable from settings too.
+    const mcpUrl = `${this.plugin.settings.serverUrl.replace(/\/$/, "")}/api/mcp`;
+    new Setting(containerEl)
+      .setName("Connect an agent")
+      .setDesc(
+        `In a terminal: claude mcp add --transport http sheaf ${mcpUrl} — then run \`claude\` and say "use the sheaf MCP and watch for events".`,
       );
   }
 }

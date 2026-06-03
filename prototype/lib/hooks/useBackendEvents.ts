@@ -2,10 +2,10 @@
 
 import { useEffect } from "react";
 
-import {
-  backendEventSchema,
-  type BackendEvent,
-} from "@/lib/mcp/backend/index";
+// Browser-safe subpath: types + the zod event schema only, no node backend
+// (importing the package root would pull StubBackend's `node:fs` into the
+// client bundle).
+import { backendEventSchema, type BackendEvent } from "sheaf-server/types";
 
 type Listener = (event: BackendEvent) => void;
 

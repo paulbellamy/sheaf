@@ -2,60 +2,42 @@
 
 Prototype Obsidian plugin for [sheaf](../prototype). Pair-write with a Claude
 Code agent on the same markdown file: you select text, write a comment, hit
-send — the agent (running externally with sheaf's MCP server attached) reads
-the thread, edits the doc, and resolves. You see the edits land in the
-editor.
+send — the agent reads the thread, edits the doc, and resolves. You see the
+edits land in the editor.
+
+**The plugin runs the whole sheaf server itself** — backend, MCP endpoint, and
+event stream all live inside Obsidian (shared code with the web prototype, in
+[`../sheaf-server`](../sheaf-server)). There's no second process to start and
+no `SHEAF_DATA_ROOT` to set: your vault is the data root. Install is two steps —
+drop in the plugin, then copy-paste one command into your agent.
 
 Thread-on-doc mode only — no drafts, no propose, no merge. This is the
 "see how it feels" prototype the plan file describes.
 
 ## Setup
 
-### 1. Run sheaf
+### 1. Install the plugin into your vault
 
 ```
-cd ../prototype
-pnpm install
-pnpm dev
-```
-
-The server listens on http://localhost:3000 by default.
-
-### 2. Point sheaf at your vault
-
-**The vault root is the sheaf data root.** Inside your vault, notes live under
-`workspaces/<name>/docs/<doc>.md` — exactly the path sheaf uses on the wire.
-The plugin passes the vault-relative file path through verbatim.
-
-```
-<vault>/
-  workspaces/
-    sheaf/
-      docs/
-        proposal.md   ← open this in Obsidian; sheaf sees it as
-                        workspaces/sheaf/docs/proposal.md
-```
-
-Point sheaf at your vault with `SHEAF_DATA_ROOT=<vault>`. Files outside
-`workspaces/` are unsupported.
-
-### 3. Install the plugin into your vault
-
-```
-pnpm install
-pnpm build
+pnpm install        # from the repo root (pnpm workspace)
+pnpm --filter sheaf-obsidian build
 mkdir -p <vault>/.obsidian/plugins/sheaf
 cp manifest.json main.js <vault>/.obsidian/plugins/sheaf/
 ```
 
-Or for dev with hot reload, `pnpm dev` (watches and writes `main.js`); use a
-symlink instead of `cp`.
+Or for dev with hot reload, `pnpm --filter sheaf-obsidian dev` (watches and
+writes `main.js`); use a symlink instead of `cp`.
 
-Enable the plugin from Settings → Community plugins.
+Enable the plugin from Settings → Community plugins. On enable it starts the
+sheaf server on `http://localhost:3000` (change the port in the plugin's
+settings; or turn the embedded server off there to point at one you run
+yourself). Any markdown doc in your vault is a sheaf doc — dot-prefixed paths
+(`.obsidian/`, etc.) are infra and ignored.
 
-### 4. Run a Claude Code session
+### 2. Connect your agent
 
-In a separate terminal:
+Open the **Sheaf threads** panel (ribbon icon). While no agent is listening it
+shows a copy button for the connect command — or run it yourself:
 
 ```
 claude mcp add --transport http sheaf http://localhost:3000/api/mcp
@@ -69,9 +51,10 @@ Then in the session:
 ```
 
 The agent calls sheaf's `ReadMe` tool on connect, which returns the full
-operating guide (the loop, the tools to use, the one-liner Monitor command
+operating guide (the loop, the tools to use, the one-liner `Monitor` command
 that subscribes to live events). No skill install or AGENTS.md needed —
-the MCP server tells the agent everything.
+the MCP server tells the agent everything. Once it subscribes, the panel flips
+to "agent connected".
 
 ## Use
 

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 
 import type { Thread, ThreadDraftOption } from "@/lib/types";
-import type { Thread as BackendThread } from "@/lib/mcp/backend";
+import type { Thread as BackendThread } from "sheaf-server/types";
 import { subscribeBackendEvents } from "./useBackendEvents";
 
 /**
