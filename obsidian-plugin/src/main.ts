@@ -150,8 +150,14 @@ export default class SheafPlugin extends Plugin {
       return;
     }
     const port = this.serverPort();
+    // Allow the plugin's own renderer origin to read the SSE stream
+    // cross-origin (its `fetch` carries exactly this Origin); every other
+    // origin is refused, so a web page can't read vault contents.
+    const origins = window.location?.origin
+      ? [window.location.origin]
+      : undefined;
     try {
-      await this.host.start(root, port);
+      await this.host.start(root, port, origins);
     } catch (err) {
       console.error("sheaf: embedded server failed to start", err);
       const msg = err instanceof Error ? err.message : String(err);

@@ -26,6 +26,9 @@ async function dispatch(req: Request): Promise<RouteRes> {
   req.headers.forEach((v, k) => {
     headers[k] = v;
   });
+  // Web `Request` doesn't expose Host; set it from the URL so the app's
+  // loopback Host guard passes (test URLs use http://localhost/...).
+  headers.host = url.host;
   const bodyText =
     req.method === "GET" || req.method === "HEAD" ? "" : await req.text();
   try {

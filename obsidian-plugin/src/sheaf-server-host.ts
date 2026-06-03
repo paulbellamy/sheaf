@@ -31,12 +31,19 @@ export class SheafServerHost {
    * vault at `root`. Throws if the port can't be bound (e.g. already in use);
    * callers surface that to the user.
    */
-  async start(root: string, port: number): Promise<void> {
+  async start(
+    root: string,
+    port: number,
+    allowedOrigins?: string[],
+  ): Promise<void> {
     await this.stop();
     // pluginRoot = root (not the default parent dir) so the backend's
     // read-only `.claude-plugin/` serving can never reach above the vault.
     const backend = new StubBackend(root, root);
-    const app = buildSheafApp(backend);
+    const app = buildSheafApp(
+      backend,
+      allowedOrigins ? { allowedOrigins } : {},
+    );
     await app.listen({ port, host: "127.0.0.1" });
     this.app = app;
     this.startedAt = { root, port };

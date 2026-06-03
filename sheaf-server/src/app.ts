@@ -38,12 +38,45 @@ import {
  * worker-thread transport (which doesn't bundle cleanly into the Obsidian
  * single-file build).
  */
-export function buildSheafApp(backend: Backend = getBackend()): FastifyInstance {
+/**
+ * True if the HTTP `Host` header names a loopback address (any port). The
+ * server only binds 127.0.0.1, but a DNS-rebinding attack (attacker domain →
+ * 127.0.0.1) still arrives carrying the attacker's Host; rejecting anything but
+ * loopback defeats it. Handles `localhost`, `127.0.0.1`, and `[::1]` forms.
+ */
+function isLoopbackHost(hostHeader: string | undefined): boolean {
+  if (!hostHeader) return false;
+  let host = hostHeader.trim();
+  if (host.startsWith("[")) {
+    const end = host.indexOf("]");
+    host = end === -1 ? host.slice(1) : host.slice(1, end);
+  } else {
+    const colon = host.indexOf(":");
+    if (colon !== -1) host = host.slice(0, colon);
+  }
+  host = host.toLowerCase();
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
+export function buildSheafApp(
+  backend: Backend = getBackend(),
+  opts: { allowedOrigins?: string[] } = {},
+): FastifyInstance {
   const app = Fastify({
     logger: false,
     // Thread bodies / draft payloads can approach 1 MB; give headroom.
     bodyLimit: 8 * 1024 * 1024,
   });
+
+  // Browser origins trusted to read responses cross-origin. The only one in
+  // the shipped plugin is Obsidian's renderer (its SSE uses `fetch`); the REST
+  // client uses Obsidian's CORS-exempt `requestUrl`, and the agent's MCP client
+  // isn't a browser — so the default allowlist is just the Obsidian origin.
+  const allowedOrigins = new Set(
+    (opts.allowedOrigins ?? ["app://obsidian.md"]).map((o) => o.toLowerCase()),
+  );
+  const allowedAcao = (origin: string | undefined): string | undefined =>
+    origin && allowedOrigins.has(origin.toLowerCase()) ? origin : undefined;
 
   // Tolerate empty-bodied POSTs (resolve/accept/decline send none) even when a
   // client sets `content-type: application/json`.
@@ -61,10 +94,24 @@ export function buildSheafApp(backend: Backend = getBackend()): FastifyInstance 
     },
   );
 
-  // Permissive CORS for the localhost dev server. REST goes through Obsidian's
-  // `requestUrl` (CORS-exempt), but the plugin's SSE uses `fetch`, so allow it.
-  app.addHook("onSend", async (_req, reply) => {
-    reply.header("access-control-allow-origin", "*");
+  // DNS-rebinding guard: refuse any request whose Host isn't loopback.
+  app.addHook("onRequest", async (req, reply) => {
+    if (!isLoopbackHost(req.headers.host)) {
+      reply
+        .code(403)
+        .send({ error: "forbidden host", code: "forbidden_host" });
+    }
+  });
+
+  // Reflect an allowed Origin rather than a wildcard, so a hostile page in the
+  // user's browser can't read vault contents cross-origin. Other origins get
+  // no CORS header at all (the browser then blocks the read).
+  app.addHook("onSend", async (req, reply) => {
+    const acao = allowedAcao(req.headers.origin);
+    if (acao) {
+      reply.header("access-control-allow-origin", acao);
+      reply.header("vary", "origin");
+    }
   });
 
   const run = async (
@@ -196,13 +243,20 @@ export function buildSheafApp(backend: Backend = getBackend()): FastifyInstance 
       return;
     }
     reply.hijack();
-    reply.raw.writeHead(200, {
+    const sseHeaders: Record<string, string> = {
       "Content-Type": "text/event-stream; charset=utf-8",
       "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",
       "X-Accel-Buffering": "no",
-      "Access-Control-Allow-Origin": "*",
-    });
+    };
+    // This route hijacks the reply, so the onSend CORS hook doesn't run —
+    // apply the same allowed-origin reflection here for the plugin's SSE fetch.
+    const acao = allowedAcao(req.headers.origin);
+    if (acao) {
+      sseHeaders["Access-Control-Allow-Origin"] = acao;
+      sseHeaders["Vary"] = "Origin";
+    }
+    reply.raw.writeHead(200, sseHeaders);
     const sink: SseSink = {
       write: (chunk) => reply.raw.write(chunk),
       close: () => reply.raw.end(),

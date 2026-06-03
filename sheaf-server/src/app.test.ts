@@ -87,3 +87,53 @@ describe("buildSheafApp over a real socket", () => {
     ctrl.abort();
   });
 });
+
+describe("buildSheafApp request hardening", () => {
+  let root: string;
+  let app: ReturnType<typeof buildSheafApp>;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-cors-"));
+    app = buildSheafApp(new StubBackend(root));
+    await app.ready();
+  });
+
+  afterEach(async () => {
+    await app.close();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("rejects a non-loopback Host (DNS-rebinding guard)", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/ui/docs",
+      headers: { host: "evil.example:31415" },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("allows a loopback Host", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/ui/docs",
+      headers: { host: "127.0.0.1:31415" },
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("reflects an allowed Origin but omits CORS for others", async () => {
+    const ok = await app.inject({
+      method: "GET",
+      url: "/api/ui/docs",
+      headers: { host: "localhost:31415", origin: "app://obsidian.md" },
+    });
+    expect(ok.headers["access-control-allow-origin"]).toBe("app://obsidian.md");
+
+    const evil = await app.inject({
+      method: "GET",
+      url: "/api/ui/docs",
+      headers: { host: "localhost:31415", origin: "https://evil.example" },
+    });
+    expect(evil.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+});
