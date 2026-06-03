@@ -9,7 +9,9 @@ import {
   SheafSettingTab,
 } from "./settings";
 import { CommentModal } from "./views/comment-modal";
+import { ReviewModal } from "./views/review-modal";
 import { ThreadsView, VIEW_TYPE_SHEAF_THREADS } from "./views/threads-view";
+import { buildPanelRequestMessage } from "./review";
 
 export default class SheafPlugin extends Plugin {
   settings: SheafSettings = DEFAULT_SETTINGS;
@@ -53,6 +55,19 @@ export default class SheafPlugin extends Plugin {
       },
     });
 
+    this.addCommand({
+      id: "sheaf-request-review",
+      name: "Request panel review",
+      checkCallback: (checking) => {
+        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!view?.file) return false;
+        if (!checking) {
+          this.openReviewModalForPath(this.vaultPathToSheafPath(view.file.path));
+        }
+        return true;
+      },
+    });
+
     this.registerEvent(
       this.app.workspace.on("editor-menu", (menu, editor, view) => {
         if (!(view instanceof MarkdownView)) return;
@@ -66,6 +81,18 @@ export default class SheafPlugin extends Plugin {
             )
             .setIcon("message-square")
             .onClick(() => this.openCommentModal(editor, view));
+        });
+        menu.addItem((item) => {
+          item
+            .setTitle("Sheaf: Request panel review")
+            .setIcon("users")
+            .onClick(() => {
+              if (view.file) {
+                this.openReviewModalForPath(
+                  this.vaultPathToSheafPath(view.file.path),
+                );
+              }
+            });
         });
       }),
     );
@@ -225,7 +252,31 @@ export default class SheafPlugin extends Plugin {
     const selection = editor.getSelection();
     // No selection → doc-level comment. With a selection → anchored range.
     const charRange = selection.length > 0 ? this.computeCharRange(editor) : null;
+    this.composeComment(docPath, charRange, selection);
+  }
 
+  /**
+   * "New thread" from the threads panel. The panel isn't an editor, so we look
+   * up the open editor for `docPath` and anchor to its live selection if there
+   * is one; otherwise it's a doc-level comment.
+   */
+  commentFromPanel(docPath: string): void {
+    const editor = this.editorForPath(docPath);
+    const selection = editor ? editor.getSelection() : "";
+    const charRange =
+      editor && selection.length > 0 ? this.computeCharRange(editor) : null;
+    this.composeComment(docPath, charRange, selection);
+  }
+
+  /**
+   * Open the comment composer and post the result as a thread on `docPath`.
+   * Shared by the editor-menu path and the panel "New thread" button.
+   */
+  private composeComment(
+    docPath: string,
+    charRange: { from: number; to: number } | null,
+    selection: string,
+  ): void {
     new CommentModal(this.app, selection, async (message) => {
       try {
         await this.client.addThread(docPath, charRange, message);
@@ -247,6 +298,53 @@ export default class SheafPlugin extends Plugin {
           : "Comment posted; agent will pick it up",
       );
     }).open();
+  }
+
+  /**
+   * Ask the connected agent to run a panel review of `docPath`. Posts a single
+   * doc-level request thread carrying the selected roles; the agent channels
+   * each and posts anchored `review:<id>` comments back for triage. No
+   * selection needed — the panel reads the whole doc.
+   */
+  openReviewModalForPath(docPath: string): void {
+    if (!this.agentConnected) {
+      new Notice("No agent connected — start a Claude Code session first");
+      return;
+    }
+
+    new ReviewModal(this.app, this.settings.personas, async (selected) => {
+      const message = buildPanelRequestMessage(selected);
+      try {
+        await this.client.addThread(docPath, null, message);
+      } catch (err) {
+        const msg =
+          err instanceof SheafApiError
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : String(err);
+        throw new Error(msg);
+      }
+      new Notice(
+        `Panel review requested (${selected.length} role${selected.length === 1 ? "" : "s"}); comments will appear as the agent posts them`,
+      );
+    }).open();
+  }
+
+  /** The editor of an open markdown view whose file maps to `docPath`, if any. */
+  private editorForPath(docPath: string): Editor | null {
+    let found: Editor | null = null;
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      const v = leaf.view;
+      if (
+        v instanceof MarkdownView &&
+        v.file &&
+        this.vaultPathToSheafPath(v.file.path) === docPath
+      ) {
+        found = v.editor;
+      }
+    });
+    return found;
   }
 
   private computeCharRange(

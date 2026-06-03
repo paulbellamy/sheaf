@@ -39,6 +39,9 @@ mark the thread resolved. The user sees your edits land in their editor live.
    another agent already grabbed) — a \`thread_changed\` event or a re-list
    surfaces it:
    a. \`ReadThread(thread_id)\` to get the brief, the targets, and the message.
+      If the message starts with \`[sheaf:panel-review]\`, this is a review
+      request, not an edit brief — follow **Panel review** below instead of
+      steps b–d.
    b. **Acknowledge immediately**: \`ReplyThread(thread_id, "on it")\` (or a
       short paraphrase of what you're about to do). This is the signal the
       plugin shows as "agent working" — without it the user has no feedback
@@ -133,6 +136,9 @@ latest message author before acting:
 - If the latest message is from the user → it's yours to pick up.
 - If the latest message is from another agent → another agent is on it; skip.
 - If the latest message is from you (echo of your own ReplyThread) → skip.
+- If the thread is authored \`review:*\` and a persona has the last word → it's
+  a virtual review comment parked for the human, not another agent's WIP. Skip
+  it; act only if the *user* replies (see **Panel review**).
 
 The plugin uses the same "any non-user message on an open thread" signal to
 show "agent working", so this convention also keeps the UI honest.
@@ -194,6 +200,48 @@ to disambiguate.
 the doc as a whole (e.g. *"rewrite this for tone"*, *"add a conclusion"*). Read
 the doc first, then make the change with \`Write\` (full rewrite) or several
 \`Edit\` calls. There is no anchored text to use as \`old_string\`.
+
+## Panel review
+
+A thread whose first message starts with \`[sheaf:panel-review]\` is a request
+to *review* the doc as a panel of roles — not an edit brief. The message lists
+the roles, each as \`review:<id> — <Name>: <brief>\`.
+
+1. \`ReplyThread(request_thread, "running panel review")\` so the user sees you
+   picked it up.
+2. \`Read\` the doc.
+3. For **each role**, channel that perspective and decide what — if anything —
+   is worth raising. Silence is golden: a role with nothing material to add
+   posts nothing. A short, sharp panel beats an exhaustive one — aim for a few
+   high-value comments overall, not a quota per role.
+4. Post each point as its **own new thread**, anchored to the passage it's
+   about and authored as the role:
+   \`AddThread({ targets:[{ path, char_range:{ from, to } }], message:"…", author:"review:<id>" })\`.
+   Compute \`char_range\` from the doc text you read; keep each comment to the
+   one passage it concerns. A genuinely doc-wide point can use a \`scope:"doc"\`
+   target instead.
+5. When done, \`ReplyThread\` the request thread with a one-line tally ("posted
+   5 comments: 2 sre, 1 security, 2 newcomer") and \`ResolveThread\` it.
+
+**During a panel review you do not edit the doc, and you do not resolve the
+\`review:*\` threads you create.** They are the user's to triage.
+
+### Review threads are output, not queue
+
+Threads authored \`review:*\` are your own output. They sit *outside* your work
+queue — their latest message is a persona, never the user, so the
+"latest message is from the user" rule already skips them. Never act on one on
+your own, and after posting a panel, **stop**: do not loop back and start
+processing the comments you just made.
+
+A \`review:*\` thread becomes actionable only when a **user** message lands on
+it:
+- A **directive** ("Address this — make the change …, then resolve") is the
+  user approving that comment. Make the edit, scoped to the thread's anchor,
+  then \`ResolveThread\` — same as any range thread from here.
+- A **plain reply** (a question, pushback, discussion) is conversation: answer
+  with \`ReplyThread\` and **do not touch the doc**. Reply in the role's voice
+  if it helps. Nothing in the doc changes until the user explicitly asks.
 
 ## What not to do
 
