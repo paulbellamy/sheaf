@@ -91,6 +91,9 @@ export class ThreadsView extends ItemView {
   // Resolved section starts collapsed each session so the panel reads as
   // "what's outstanding" by default.
   private resolvedCollapsed = true;
+  // Per-thread collapse state (thread ids that are collapsed to a one-liner).
+  // Instance-held so it survives the full re-render on every backend event.
+  private collapsed = new Set<string>();
 
   rerender(): void {
     this.render();
@@ -365,6 +368,31 @@ export class ThreadsView extends ItemView {
       this.navigateToAnchor(thread);
     });
 
+    // Collapse toggle: a chevron pinned top-right. Collapsing hides the
+    // conversation, drafts, reply box, and actions, leaving the badges + a
+    // one-line preview so a busy panel stays scannable.
+    card.style.position = "relative";
+    const isCollapsed = this.collapsed.has(thread.id);
+    const chevron = card.createSpan();
+    chevron.setText(isCollapsed ? "▶" : "▼");
+    chevron.setAttribute(
+      "aria-label",
+      isCollapsed ? "expand thread" : "collapse thread",
+    );
+    chevron.style.position = "absolute";
+    chevron.style.top = "0.5em";
+    chevron.style.right = "0.6em";
+    chevron.style.fontSize = "0.7em";
+    chevron.style.opacity = "0.5";
+    chevron.style.cursor = "pointer";
+    chevron.style.userSelect = "none";
+    chevron.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (this.collapsed.has(thread.id)) this.collapsed.delete(thread.id);
+      else this.collapsed.add(thread.id);
+      this.render();
+    });
+
     const drifted = isDrifted(thread, this.docText);
 
     // Virtual review comment: a thread the agent authored as a `review:<id>`
@@ -440,6 +468,30 @@ export class ThreadsView extends ItemView {
       tag.style.letterSpacing = "0.05em";
       tag.style.opacity = "0.5";
       tag.style.marginBottom = "0.5em";
+    }
+
+    // Collapsed: stop here with a one-line preview of the thread's content.
+    if (isCollapsed) {
+      const firstBody = panelReq
+        ? "Panel review requested"
+        : (thread.messages.find((m) => m.body.trim().length > 0)?.body ?? "");
+      const oneLine = firstBody.replace(/\s+/g, " ").trim();
+      const preview = card.createDiv();
+      preview.setText(oneLine.length > 90 ? oneLine.slice(0, 90) + "…" : oneLine);
+      preview.style.fontSize = "0.85em";
+      preview.style.opacity = "0.7";
+      preview.style.whiteSpace = "nowrap";
+      preview.style.overflow = "hidden";
+      preview.style.textOverflow = "ellipsis";
+      preview.style.paddingRight = "1.2em";
+      if (thread.messages.length > 1) {
+        const more = card.createDiv();
+        more.setText(`${thread.messages.length} messages`);
+        more.style.fontSize = "0.7em";
+        more.style.opacity = "0.45";
+        more.style.marginTop = "0.2em";
+      }
+      return;
     }
 
     thread.messages.forEach((msg, i) => {
