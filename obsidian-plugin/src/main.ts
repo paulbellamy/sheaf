@@ -1,7 +1,8 @@
-import { Editor, MarkdownView, Notice, Plugin } from "obsidian";
+import { Editor, FileSystemAdapter, MarkdownView, Notice, Plugin } from "obsidian";
 
 import { SheafApiError, SheafClient } from "./sheaf-client";
 import { SheafEventStream, type BackendEvent } from "./sheaf-events";
+import { SheafServerHost } from "./sheaf-server-host";
 import {
   DEFAULT_SETTINGS,
   type SheafSettings,
@@ -18,6 +19,7 @@ export default class SheafPlugin extends Plugin {
   agentConnected = false;
   private events!: SheafEventStream;
   private statusBar: HTMLElement | null = null;
+  private host = new SheafServerHost();
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -100,6 +102,10 @@ export default class SheafPlugin extends Plugin {
 
     this.addSettingTab(new SheafSettingTab(this.app, this));
 
+    // Start the embedded server (if enabled) before opening the event stream
+    // so the first SSE connect lands on a live server.
+    await this.startServerIfEnabled();
+
     this.events.start();
 
     // First-time enable / fresh install: the layout restore won't have a
@@ -113,6 +119,7 @@ export default class SheafPlugin extends Plugin {
 
   async onunload(): Promise<void> {
     this.events?.stop();
+    await this.host.stop();
   }
 
   async loadSettings(): Promise<void> {
@@ -127,10 +134,65 @@ export default class SheafPlugin extends Plugin {
     await this.saveData(this.settings);
   }
 
-  onConnectionChanged(): void {
+  async onConnectionChanged(): Promise<void> {
+    // Re-point (or stop) the embedded server first, then the client/stream.
+    await this.startServerIfEnabled();
     this.client.setBaseUrl(this.settings.serverUrl);
     this.events.setBaseUrl(this.settings.serverUrl);
     this.updateStatusBar();
+  }
+
+  /** Absolute path of the vault on disk, or null on a non-filesystem vault. */
+  vaultRoot(): string | null {
+    const adapter = this.app.vault.adapter;
+    return adapter instanceof FileSystemAdapter ? adapter.getBasePath() : null;
+  }
+
+  /** Port the embedded server binds — parsed from the configured server URL. */
+  serverPort(): number {
+    try {
+      const p = new URL(this.settings.serverUrl).port;
+      return p ? Number(p) : 31415;
+    } catch {
+      return 31415;
+    }
+  }
+
+  /**
+   * Start (or stop) the in-Obsidian server to match the `runServer` setting.
+   * Best-effort: a bind failure (port in use, etc.) surfaces a notice but
+   * doesn't block the plugin — the user may be pointing at an external server.
+   */
+  private async startServerIfEnabled(): Promise<void> {
+    if (!this.settings.runServer) {
+      await this.host.stop();
+      return;
+    }
+    const root = this.vaultRoot();
+    if (!root) {
+      new Notice(
+        "Sheaf: can't run the embedded server on this vault (no local filesystem).",
+        8000,
+      );
+      return;
+    }
+    const port = this.serverPort();
+    // Allow the plugin's own renderer origin to read the SSE stream
+    // cross-origin (its `fetch` carries exactly this Origin); every other
+    // origin is refused, so a web page can't read vault contents.
+    const origins = window.location?.origin
+      ? [window.location.origin]
+      : undefined;
+    try {
+      await this.host.start(root, port, origins);
+    } catch (err) {
+      console.error("sheaf: embedded server failed to start", err);
+      const msg = err instanceof Error ? err.message : String(err);
+      new Notice(
+        `Sheaf: embedded server couldn't start on port ${port} — ${msg}`,
+        8000,
+      );
+    }
   }
 
   /** Re-render the threads panel from current settings. */

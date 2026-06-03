@@ -4,19 +4,55 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { StubBackend } from "../backend/stub";
-import {
-  GET as threadsGET,
-  POST as threadsPOST,
-} from "../../../app/api/ui/threads/route";
-import { POST as draftsPOST } from "../../../app/api/ui/drafts/route";
-import { GET as draftIdGET } from "../../../app/api/ui/drafts/[id]/route";
-import { POST as acceptPOST } from "../../../app/api/ui/drafts/[id]/accept/route";
-import { POST as payloadPOST } from "../../../app/api/ui/threads/[id]/payload/route";
-import { POST as reopenPOST } from "../../../app/api/ui/threads/[id]/reopen/route";
-import { POST as resolvePOST } from "../../../app/api/ui/threads/[id]/resolve/route";
-import { GET as versionsGET } from "../../../app/api/ui/doc-versions/[...path]/route";
-import { setBackend } from "../backend/factory";
+import { buildSheafApp } from "../app";
+import { getBackend, setBackend } from "../backend/factory";
 import type { BackendEvent } from "../backend";
+
+/**
+ * The HTTP-route tests below predate the Fastify app: they were written
+ * against the Next route handlers (one `(req, ctx)` function per route). Now
+ * that the routes live in one shared Fastify app, these shims preserve the
+ * old call signatures by dispatching the `Request` through `app.inject()` —
+ * exercising the real app end-to-end. The `ctx` arg (params) is ignored
+ * because the id/path is already in the request URL.
+ */
+type RouteRes = { status: number; json: () => Promise<unknown> };
+
+async function dispatch(req: Request): Promise<RouteRes> {
+  const url = new URL(req.url);
+  const app = buildSheafApp(getBackend());
+  await app.ready();
+  const headers: Record<string, string> = {};
+  req.headers.forEach((v, k) => {
+    headers[k] = v;
+  });
+  // Web `Request` doesn't expose Host; set it from the URL so the app's
+  // loopback Host guard passes (test URLs use http://localhost/...).
+  headers.host = url.host;
+  const bodyText =
+    req.method === "GET" || req.method === "HEAD" ? "" : await req.text();
+  try {
+    const res = await app.inject({
+      method: req.method as "GET" | "POST" | "DELETE" | "PUT" | "PATCH",
+      url: url.pathname + url.search,
+      headers,
+      payload: bodyText.length > 0 ? bodyText : undefined,
+    });
+    return { status: res.statusCode, json: async () => res.json() };
+  } finally {
+    await app.close();
+  }
+}
+
+const threadsGET = (req: Request) => dispatch(req);
+const threadsPOST = (req: Request) => dispatch(req);
+const draftsPOST = (req: Request) => dispatch(req);
+const draftIdGET = (req: Request, _ctx?: unknown) => dispatch(req);
+const acceptPOST = (req: Request, _ctx?: unknown) => dispatch(req);
+const payloadPOST = (req: Request, _ctx?: unknown) => dispatch(req);
+const reopenPOST = (req: Request, _ctx?: unknown) => dispatch(req);
+const resolvePOST = (req: Request, _ctx?: unknown) => dispatch(req);
+const versionsGET = (req: Request, _ctx?: unknown) => dispatch(req);
 
 describe("backend.draftChanges on an empty draft", () => {
   let root: string;

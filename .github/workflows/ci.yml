@@ -6,22 +6,23 @@ on:
   pull_request:
 
 jobs:
-  prototype:
+  build:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: prototype
     steps:
       - uses: actions/checkout@v4
+      # pnpm version comes from the root package.json `packageManager` field;
+      # don't also pass `version` here or action-setup errors on the conflict.
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: pnpm
-          cache-dependency-path: prototype/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-      - run: pnpm typecheck
-      - run: pnpm build
-      - run: pnpm test
+      # Typecheck every workspace package (sheaf-server, prototype, plugin).
+      - run: pnpm -r typecheck
+      # Tests live in sheaf-server (backend, MCP, and the Fastify app).
+      - run: pnpm -r test
+      # Build the consumers.
+      - run: pnpm --filter prototype build
+      - run: pnpm --filter sheaf-obsidian build

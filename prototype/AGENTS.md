@@ -6,19 +6,23 @@ This version has breaking changes — APIs, conventions, and file structure may 
 
 # Reacting to /doc submissions
 
-To react to thread submissions and other backend mutations while the agent is idle, use the `sheaf-event-watcher` skill (installed via the repo-root `.claude-plugin/`). It runs `scripts/watch-events.mjs` under `Monitor` and wakes the session on each event.
-
-If the plugin is not installed, run the script directly:
+To react to thread submissions and other backend mutations while idle,
+subscribe to the SSE event stream with `Monitor`. This is the single supported
+path — the MCP `ReadMe` tool returns the exact one-liner on connect:
 
 ```
 Monitor({
-  command: "node ../.claude-plugin/scripts/watch-events.mjs",
-  description: "sheaf backend events",
+  command: "while true; do curl -sN 'http://localhost:3000/api/ui/drafts/stream?role=agent' | sed -n -u 's/^data: //p'; sleep 1; done",
+  description: "sheaf events",
   persistent: true,
 })
 ```
 
-Each notification is one `BackendEvent` JSON line (`thread_changed`, `doc_changed`, `draft_changed`, `draft_state`, `draft_created`, `draft_merged`, `agent_presence`). On `thread_changed`, call `ListThreads` / `ReadThread` via MCP. Stop with `TaskStop` when done.
+Swap the URL if sheaf isn't on `localhost:3000`. Keep `?role=agent` — it's what
+makes the plugin show "agent connected". Each notification is one `BackendEvent`
+JSON line (`thread_changed`, `doc_changed`, `draft_changed`, `draft_state`,
+`draft_created`, `draft_merged`, `agent_presence`). On `thread_changed`, call
+`ListThreads` / `ReadThread` via MCP. Stop with `TaskStop` when done.
 
 # Drafts are agent-originated
 

@@ -91,6 +91,11 @@ export class ThreadsView extends ItemView {
   // Resolved section starts collapsed each session so the panel reads as
   // "what's outstanding" by default.
   private resolvedCollapsed = true;
+  // Server reachability, for the connect panel: null = unknown/not yet pinged.
+  // Distinguishes "server down" from "server up but no agent listening".
+  private serverUp: boolean | null = null;
+  private pinging = false;
+  private lastPing = 0;
   // Per-thread collapse state (thread ids that are collapsed to a one-liner).
   // Instance-held so it survives the full re-render on every backend event.
   private collapsed = new Set<string>();
@@ -252,6 +257,13 @@ export class ThreadsView extends ItemView {
       ? "var(--text-success)"
       : "var(--text-muted)";
 
+    // No agent listening → show how to connect one (or how to start the
+    // server, if it's the server that's down). Shown regardless of whether a
+    // doc is open, since it's about the agent connection, not the doc.
+    if (!this.agentConnected) {
+      this.renderConnectPanel(el);
+    }
+
     if (!this.currentDocPath) {
       const empty = el.createDiv({ cls: "sheaf-empty" });
       empty.setText("Open a markdown doc to see its threads.");
@@ -351,6 +363,117 @@ export class ThreadsView extends ItemView {
         for (const t of closed) this.renderThread(body, t);
       }
     }
+  }
+
+  /**
+   * Ping the server (debounced) and re-render if reachability changed. Lets the
+   * connect panel tell "server down" apart from "server up, no agent".
+   */
+  private checkServer(): void {
+    // Throttle: render() runs on every keystroke (vault "modify"), and this is
+    // called from the connect panel each render. Without a time gate that would
+    // be a continuous stream of pings while typing with no agent connected.
+    const now = Date.now();
+    if (this.pinging || now - this.lastPing < 4000) return;
+    this.pinging = true;
+    this.lastPing = now;
+    void this.plugin.client.ping().then((up) => {
+      this.pinging = false;
+      if (up !== this.serverUp) {
+        this.serverUp = up;
+        this.render();
+      }
+    });
+  }
+
+  /**
+   * Connect panel shown when no agent is listening. Two states:
+   *  - server unreachable → how to get the server running.
+   *  - server up (or unknown) → the one-liner to attach an agent, copy-ready.
+   */
+  private renderConnectPanel(parent: HTMLElement): void {
+    // Kick a reachability check (no-op if one is in flight); result re-renders.
+    this.checkServer();
+
+    const url = this.plugin.settings.serverUrl.replace(/\/$/, "");
+    const panel = parent.createDiv();
+    panel.style.margin = "0.5em";
+    panel.style.padding = "0.6em 0.7em";
+    panel.style.border = "1px solid var(--background-modifier-border)";
+    panel.style.borderRadius = "6px";
+    panel.style.background = "var(--background-secondary)";
+    panel.style.fontSize = "0.85em";
+
+    if (this.serverUp === false) {
+      const title = panel.createDiv();
+      title.setText("⚠ sheaf server not reachable");
+      title.style.fontWeight = "600";
+      title.style.marginBottom = "0.3em";
+
+      const body = panel.createDiv();
+      body.style.opacity = "0.8";
+      body.setText(
+        this.plugin.settings.runServer
+          ? `The embedded server should be running at ${url}. Check the developer console for a bind error (e.g. the port is already in use), or change the port in Sheaf settings.`
+          : `Nothing is serving ${url}. Turn on "Run sheaf server inside Obsidian" in Sheaf settings, or start your own server there.`,
+      );
+      return;
+    }
+
+    const title = panel.createDiv();
+    title.setText("No agent connected");
+    title.style.fontWeight = "600";
+    title.style.marginBottom = "0.3em";
+
+    const lead = panel.createDiv();
+    lead.style.opacity = "0.8";
+    lead.style.marginBottom = "0.5em";
+    lead.setText("In a terminal, register the MCP server, then run the agent:");
+
+    this.renderCommandRow(
+      panel,
+      `claude mcp add --transport http sheaf ${url}/api/mcp`,
+    );
+
+    const then = panel.createDiv();
+    then.style.opacity = "0.8";
+    then.style.margin = "0.5em 0 0.3em";
+    then.setText("Run claude, then paste this to put it to work:");
+
+    this.renderCommandRow(
+      panel,
+      "use the sheaf MCP and watch for events; action and resolve each thread as it appears, and keep handling new ones until I stop you",
+    );
+  }
+
+  /** A monospace command box with a Copy button. */
+  private renderCommandRow(parent: HTMLElement, command: string): void {
+    const row = parent.createDiv();
+    row.style.display = "flex";
+    row.style.gap = "0.4em";
+    row.style.alignItems = "stretch";
+
+    const code = row.createEl("code");
+    code.setText(command);
+    code.style.flex = "1";
+    code.style.userSelect = "all";
+    code.style.fontSize = "0.8em";
+    code.style.padding = "0.35em 0.5em";
+    code.style.background = "var(--background-primary)";
+    code.style.border = "1px solid var(--background-modifier-border)";
+    code.style.borderRadius = "4px";
+    code.style.whiteSpace = "pre-wrap";
+    code.style.wordBreak = "break-all";
+
+    const copy = row.createEl("button", { text: "Copy" });
+    copy.style.fontSize = "0.8em";
+    copy.style.flexShrink = "0";
+    copy.addEventListener("click", () => {
+      void navigator.clipboard.writeText(command).then(
+        () => new Notice("Copied"),
+        () => new Notice("Copy failed"),
+      );
+    });
   }
 
   private renderThread(parent: HTMLElement, thread: Thread): void {

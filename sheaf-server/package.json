@@ -1,0 +1,30 @@
+{
+  "name": "sheaf-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared sheaf backend, MCP server, and HTTP API (Fastify). Imported by the Next prototype and the Obsidian plugin.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./types": "./src/backend/index.ts",
+    "./app": "./src/app.ts"
+  },
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "fastify": "^5.8.0",
+    "yaml": "^2.8.3",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "typescript": "^5",
+    "vitest": "^4.1.5"
+  },
+  "packageManager": "pnpm@9.15.0+sha512.76e2379760a4328ec4415815bcd6628dee727af3779aaa4c914e3944156c4299921a89f976381ee107d41f12cfa4b66681ca9c718f0668fa0831ed4c6d8ba56c"
+}
