@@ -138,10 +138,10 @@ export class SheafClient {
    * Distinct from a plain discussion reply, which the agent answers without
    * editing the doc.
    */
-  async addressReview(threadId: string, personaLabel: string): Promise<void> {
+  async addressReview(threadId: string): Promise<void> {
     await this.replyThread(
       threadId,
-      `Address this — make the change this "${personaLabel}" note calls for, scoped to the anchored passage, then resolve the thread.`,
+      "Address this — make the change this review note calls for, scoped to the anchored passage, then resolve the thread.",
     );
   }
 

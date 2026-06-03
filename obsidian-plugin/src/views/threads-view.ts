@@ -257,11 +257,44 @@ export class ThreadsView extends ItemView {
       return;
     }
 
+    const docPath = this.currentDocPath;
+
     const docLabel = header.createDiv();
-    docLabel.setText(this.currentDocPath);
+    docLabel.setText(docPath);
     docLabel.style.fontSize = "0.75em";
     docLabel.style.opacity = "0.5";
     docLabel.style.marginTop = "0.25em";
+
+    // Panel actions: start a new thread on this doc, or request a panel review.
+    // These mirror the editor context-menu items so the work is reachable from
+    // the panel without round-tripping to the editor.
+    const headerActions = header.createDiv();
+    headerActions.style.display = "flex";
+    headerActions.style.gap = "0.5em";
+    headerActions.style.marginTop = "0.5em";
+
+    const newThreadBtn = headerActions.createEl("button", {
+      text: "+ New thread",
+    });
+    newThreadBtn.style.fontSize = "0.8em";
+    newThreadBtn.title =
+      "Comment on this doc (anchors to the editor selection if there is one)";
+    newThreadBtn.addEventListener("click", () => {
+      this.plugin.commentFromPanel(docPath);
+    });
+
+    const reviewBtn = headerActions.createEl("button", {
+      text: "Request review",
+    });
+    reviewBtn.style.fontSize = "0.8em";
+    reviewBtn.disabled = !this.agentConnected;
+    reviewBtn.style.opacity = this.agentConnected ? "1" : "0.5";
+    reviewBtn.title = this.agentConnected
+      ? "Ask the agent to review this doc as a panel of roles"
+      : "Connect an agent to request a review";
+    reviewBtn.addEventListener("click", () => {
+      this.plugin.openReviewModalForPath(docPath);
+    });
 
     if (this.threads.length === 0) {
       const empty = el.createDiv({ cls: "sheaf-empty" });
@@ -341,8 +374,16 @@ export class ThreadsView extends ItemView {
     const personaId = reviewPersonaId(thread);
     const lastAuthor =
       thread.messages[thread.messages.length - 1]?.author ?? "";
+    // "Parked" only while the comment is fresh: a persona has the last word AND
+    // the human hasn't engaged yet. Once the user replies (to discuss or to
+    // Address), the thread is in-conversation — it must not flip back to
+    // "awaiting your review" / re-offer Address when the agent later answers in
+    // the persona's voice.
+    const userEngaged = thread.messages.some((m) => m.author === "user");
     const parkedReview =
-      personaId !== null && lastAuthor.startsWith(REVIEW_AUTHOR_PREFIX);
+      personaId !== null &&
+      lastAuthor.startsWith(REVIEW_AUTHOR_PREFIX) &&
+      !userEngaged;
     const panelReq = isPanelRequest(thread);
 
     if (personaId !== null) {
@@ -449,17 +490,14 @@ export class ThreadsView extends ItemView {
       // directive reply so the agent picks the thread up and makes the edit
       // the persona's note calls for. Only meaningful while the persona has
       // the last word (otherwise the conversation is already underway).
-      if (parkedReview && personaId) {
+      if (parkedReview) {
         const address = actions.createEl("button", { text: "Address" });
         address.style.fontSize = "0.8em";
         address.style.background = "var(--interactive-accent)";
         address.style.color = "var(--text-on-accent)";
         address.addEventListener("click", async () => {
           try {
-            await this.plugin.client.addressReview(
-              thread.id,
-              prettyPersona(personaId),
-            );
+            await this.plugin.client.addressReview(thread.id);
             new Notice("Asked the agent to address this");
             await this.refreshCurrent();
           } catch (err) {

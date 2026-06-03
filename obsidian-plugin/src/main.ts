@@ -59,7 +59,9 @@ export default class SheafPlugin extends Plugin {
       checkCallback: (checking) => {
         const view = this.app.workspace.getActiveViewOfType(MarkdownView);
         if (!view?.file) return false;
-        if (!checking) this.openReviewModal(view);
+        if (!checking) {
+          this.openReviewModalForPath(this.vaultPathToSheafPath(view.file.path));
+        }
         return true;
       },
     });
@@ -82,7 +84,13 @@ export default class SheafPlugin extends Plugin {
           item
             .setTitle("Sheaf: Request panel review")
             .setIcon("users")
-            .onClick(() => this.openReviewModal(view));
+            .onClick(() => {
+              if (view.file) {
+                this.openReviewModalForPath(
+                  this.vaultPathToSheafPath(view.file.path),
+                );
+              }
+            });
         });
       }),
     );
@@ -182,7 +190,31 @@ export default class SheafPlugin extends Plugin {
     const selection = editor.getSelection();
     // No selection → doc-level comment. With a selection → anchored range.
     const charRange = selection.length > 0 ? this.computeCharRange(editor) : null;
+    this.composeComment(docPath, charRange, selection);
+  }
 
+  /**
+   * "New thread" from the threads panel. The panel isn't an editor, so we look
+   * up the open editor for `docPath` and anchor to its live selection if there
+   * is one; otherwise it's a doc-level comment.
+   */
+  commentFromPanel(docPath: string): void {
+    const editor = this.editorForPath(docPath);
+    const selection = editor ? editor.getSelection() : "";
+    const charRange =
+      editor && selection.length > 0 ? this.computeCharRange(editor) : null;
+    this.composeComment(docPath, charRange, selection);
+  }
+
+  /**
+   * Open the comment composer and post the result as a thread on `docPath`.
+   * Shared by the editor-menu path and the panel "New thread" button.
+   */
+  private composeComment(
+    docPath: string,
+    charRange: { from: number; to: number } | null,
+    selection: string,
+  ): void {
     new CommentModal(this.app, selection, async (message) => {
       try {
         await this.client.addThread(docPath, charRange, message);
@@ -207,22 +239,16 @@ export default class SheafPlugin extends Plugin {
   }
 
   /**
-   * Ask the connected agent to run a panel review of the active doc. Posts a
-   * single doc-level request thread carrying the selected roles; the agent
-   * channels each and posts anchored `review:<id>` comments back for triage.
-   * No selection needed — the panel reads the whole doc.
+   * Ask the connected agent to run a panel review of `docPath`. Posts a single
+   * doc-level request thread carrying the selected roles; the agent channels
+   * each and posts anchored `review:<id>` comments back for triage. No
+   * selection needed — the panel reads the whole doc.
    */
-  private openReviewModal(view: MarkdownView): void {
-    const file = view.file;
-    if (!file) {
-      new Notice("Open a markdown file first");
-      return;
-    }
+  openReviewModalForPath(docPath: string): void {
     if (!this.agentConnected) {
       new Notice("No agent connected — start a Claude Code session first");
       return;
     }
-    const docPath = this.vaultPathToSheafPath(file.path);
 
     new ReviewModal(this.app, this.settings.personas, async (selected) => {
       const message = buildPanelRequestMessage(selected);
@@ -241,6 +267,22 @@ export default class SheafPlugin extends Plugin {
         `Panel review requested (${selected.length} role${selected.length === 1 ? "" : "s"}); comments will appear as the agent posts them`,
       );
     }).open();
+  }
+
+  /** The editor of an open markdown view whose file maps to `docPath`, if any. */
+  private editorForPath(docPath: string): Editor | null {
+    let found: Editor | null = null;
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      const v = leaf.view;
+      if (
+        v instanceof MarkdownView &&
+        v.file &&
+        this.vaultPathToSheafPath(v.file.path) === docPath
+      ) {
+        found = v.editor;
+      }
+    });
+    return found;
   }
 
   private computeCharRange(
