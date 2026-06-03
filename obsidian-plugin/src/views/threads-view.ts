@@ -8,6 +8,12 @@ import {
 } from "obsidian";
 import type SheafPlugin from "../main";
 import type { Thread, ThreadDraftBody } from "../sheaf-client";
+import {
+  REVIEW_AUTHOR_PREFIX,
+  isPanelRequest,
+  prettyPersona,
+  reviewPersonaId,
+} from "../review";
 
 export const VIEW_TYPE_SHEAF_THREADS = "sheaf-threads";
 
@@ -328,7 +334,35 @@ export class ThreadsView extends ItemView {
 
     const drifted = isDrifted(thread, this.docText);
 
-    if (isWorking(thread)) {
+    // Virtual review comment: a thread the agent authored as a `review:<id>`
+    // persona. "Parked" = the persona still has the last word, so it's the
+    // human's turn to triage — NOT the agent working (the agent only acts once
+    // a user message lands; see addressReview / the MCP ReadMe).
+    const personaId = reviewPersonaId(thread);
+    const lastAuthor =
+      thread.messages[thread.messages.length - 1]?.author ?? "";
+    const parkedReview =
+      personaId !== null && lastAuthor.startsWith(REVIEW_AUTHOR_PREFIX);
+    const panelReq = isPanelRequest(thread);
+
+    if (personaId !== null) {
+      card.style.borderLeft = "3px solid var(--interactive-accent)";
+      const badge = card.createDiv();
+      badge.setText(`⟁ ${prettyPersona(personaId)} · simulated review`);
+      badge.style.fontSize = "0.72em";
+      badge.style.textTransform = "uppercase";
+      badge.style.letterSpacing = "0.05em";
+      badge.style.color = "var(--text-accent)";
+      badge.style.marginBottom = "0.4em";
+    }
+
+    if (parkedReview) {
+      const badge = card.createDiv();
+      badge.setText("⟁ awaiting your review");
+      badge.style.fontSize = "0.75em";
+      badge.style.color = "var(--text-muted)";
+      badge.style.marginBottom = "0.4em";
+    } else if (isWorking(thread)) {
       const badge = card.createDiv();
       badge.setText("● agent working");
       badge.style.fontSize = "0.75em";
@@ -367,7 +401,18 @@ export class ThreadsView extends ItemView {
       tag.style.marginBottom = "0.5em";
     }
 
-    for (const msg of thread.messages) {
+    thread.messages.forEach((msg, i) => {
+      // The panel-request marker is a machine instruction, not prose — show a
+      // friendly label in place of the raw `[sheaf:panel-review] …` body.
+      if (panelReq && i === 0) {
+        const tag = card.createDiv();
+        tag.setText("Panel review requested");
+        tag.style.fontWeight = "600";
+        tag.style.fontSize = "0.85em";
+        tag.style.marginBottom = "0.5em";
+        tag.style.opacity = "0.75";
+        return;
+      }
       const m = card.createDiv();
       m.style.marginBottom = "0.5em";
       const author = m.createDiv({ text: `${msg.author}:` });
@@ -385,7 +430,7 @@ export class ThreadsView extends ItemView {
         this.currentDocPath ?? "",
         this,
       );
-    }
+    });
 
     const variants = latestVariants(thread);
     if (variants && thread.status === "open") {
@@ -400,15 +445,42 @@ export class ThreadsView extends ItemView {
       actions.style.display = "flex";
       actions.style.gap = "0.5em";
 
-      // "Resolve" without applying. Use when the agent already did its work
-      // via Edit/Write directly, or when the user wants to dismiss without
-      // taking any of the variants.
-      const resolve = actions.createEl("button", { text: "Resolve" });
+      // "Address" a parked review comment: the approval gate. Posts a user
+      // directive reply so the agent picks the thread up and makes the edit
+      // the persona's note calls for. Only meaningful while the persona has
+      // the last word (otherwise the conversation is already underway).
+      if (parkedReview && personaId) {
+        const address = actions.createEl("button", { text: "Address" });
+        address.style.fontSize = "0.8em";
+        address.style.background = "var(--interactive-accent)";
+        address.style.color = "var(--text-on-accent)";
+        address.addEventListener("click", async () => {
+          try {
+            await this.plugin.client.addressReview(
+              thread.id,
+              prettyPersona(personaId),
+            );
+            new Notice("Asked the agent to address this");
+            await this.refreshCurrent();
+          } catch (err) {
+            console.error("sheaf: address failed", err);
+            const msg = err instanceof Error ? err.message : String(err);
+            new Notice(`Sheaf: ${msg}`, 8000);
+          }
+        });
+      }
+
+      // "Resolve"/"Dismiss" without applying. Use when the agent already did
+      // its work via Edit/Write directly, when dismissing a review comment, or
+      // when the user wants to drop without taking any of the variants.
+      const resolve = actions.createEl("button", {
+        text: personaId !== null ? "Dismiss" : "Resolve",
+      });
       resolve.style.fontSize = "0.8em";
       resolve.addEventListener("click", async () => {
         try {
           await this.plugin.client.resolveThread(thread.id);
-          new Notice("Thread resolved");
+          new Notice(personaId !== null ? "Review dismissed" : "Thread resolved");
           await this.refreshCurrent();
         } catch (err) {
           console.error("sheaf: resolve failed", err);

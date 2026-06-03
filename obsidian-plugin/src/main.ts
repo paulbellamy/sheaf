@@ -8,7 +8,9 @@ import {
   SheafSettingTab,
 } from "./settings";
 import { CommentModal } from "./views/comment-modal";
+import { ReviewModal } from "./views/review-modal";
 import { ThreadsView, VIEW_TYPE_SHEAF_THREADS } from "./views/threads-view";
+import { buildPanelRequestMessage } from "./review";
 
 export default class SheafPlugin extends Plugin {
   settings: SheafSettings = DEFAULT_SETTINGS;
@@ -51,6 +53,17 @@ export default class SheafPlugin extends Plugin {
       },
     });
 
+    this.addCommand({
+      id: "sheaf-request-review",
+      name: "Request panel review",
+      checkCallback: (checking) => {
+        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!view?.file) return false;
+        if (!checking) this.openReviewModal(view);
+        return true;
+      },
+    });
+
     this.registerEvent(
       this.app.workspace.on("editor-menu", (menu, editor, view) => {
         if (!(view instanceof MarkdownView)) return;
@@ -64,6 +77,12 @@ export default class SheafPlugin extends Plugin {
             )
             .setIcon("message-square")
             .onClick(() => this.openCommentModal(editor, view));
+        });
+        menu.addItem((item) => {
+          item
+            .setTitle("Sheaf: Request panel review")
+            .setIcon("users")
+            .onClick(() => this.openReviewModal(view));
         });
       }),
     );
@@ -183,6 +202,43 @@ export default class SheafPlugin extends Plugin {
         charRange === null
           ? "Doc-level comment posted; agent will pick it up"
           : "Comment posted; agent will pick it up",
+      );
+    }).open();
+  }
+
+  /**
+   * Ask the connected agent to run a panel review of the active doc. Posts a
+   * single doc-level request thread carrying the selected roles; the agent
+   * channels each and posts anchored `review:<id>` comments back for triage.
+   * No selection needed — the panel reads the whole doc.
+   */
+  private openReviewModal(view: MarkdownView): void {
+    const file = view.file;
+    if (!file) {
+      new Notice("Open a markdown file first");
+      return;
+    }
+    if (!this.agentConnected) {
+      new Notice("No agent connected — start a Claude Code session first");
+      return;
+    }
+    const docPath = this.vaultPathToSheafPath(file.path);
+
+    new ReviewModal(this.app, this.settings.personas, async (selected) => {
+      const message = buildPanelRequestMessage(selected);
+      try {
+        await this.client.addThread(docPath, null, message);
+      } catch (err) {
+        const msg =
+          err instanceof SheafApiError
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : String(err);
+        throw new Error(msg);
+      }
+      new Notice(
+        `Panel review requested (${selected.length} role${selected.length === 1 ? "" : "s"}); comments will appear as the agent posts them`,
       );
     }).open();
   }
