@@ -390,9 +390,12 @@ export class ThreadsView extends ItemView {
     const then = panel.createDiv();
     then.style.opacity = "0.8";
     then.style.margin = "0.5em 0 0.3em";
-    then.setText("Run claude, then paste this to start it watching:");
+    then.setText("Run claude, then paste this to put it to work:");
 
-    this.renderCommandRow(panel, "use the sheaf MCP and watch for events");
+    this.renderCommandRow(
+      panel,
+      "use the sheaf MCP and watch for events; action and resolve each thread as it appears, and keep handling new ones until I stop you",
+    );
   }
 
   /** A monospace command box with a Copy button. */

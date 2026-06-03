@@ -47,7 +47,7 @@ claude
 Then in the session:
 
 ```
-> use the sheaf MCP and watch for events
+> use the sheaf MCP and watch for events; action and resolve each thread as it appears, and keep handling new ones until I stop you
 ```
 
 The agent calls sheaf's `ReadMe` tool on connect, which returns the full

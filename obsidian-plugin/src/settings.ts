@@ -88,7 +88,7 @@ export class SheafSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Connect an agent")
       .setDesc(
-        `In a terminal: claude mcp add --transport http sheaf ${mcpUrl} — then run \`claude\` and say "use the sheaf MCP and watch for events".`,
+        `In a terminal: claude mcp add --transport http sheaf ${mcpUrl} — then run \`claude\` and say "use the sheaf MCP and watch for events; action and resolve each thread as it appears, and keep handling new ones until I stop you".`,
       );
   }
 }
