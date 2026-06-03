@@ -131,6 +131,21 @@ export class SheafClient {
   }
 
   /**
+   * "Address" a virtual review comment: post a directive reply (as the user)
+   * asking the agent to action the persona's note, scoped to its anchor. This
+   * is the approval gate — until a user message lands, a `review:*` thread sits
+   * outside the agent's queue (its latest author is a persona, not the user).
+   * Distinct from a plain discussion reply, which the agent answers without
+   * editing the doc.
+   */
+  async addressReview(threadId: string): Promise<void> {
+    await this.replyThread(
+      threadId,
+      "Address this — make the change this review note calls for, scoped to the anchored passage, then resolve the thread.",
+    );
+  }
+
+  /**
    * Resolve (dismiss) a thread without applying anything — used by the plain
    * "Resolve" button, including on threads that carry variants the user chose
    * not to take. Uses `?apply=false` so nothing is written to the doc.

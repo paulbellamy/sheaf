@@ -8,6 +8,12 @@ import {
 } from "obsidian";
 import type SheafPlugin from "../main";
 import type { Thread, ThreadDraftBody } from "../sheaf-client";
+import {
+  REVIEW_AUTHOR_PREFIX,
+  isPanelRequest,
+  prettyPersona,
+  reviewPersonaId,
+} from "../review";
 
 export const VIEW_TYPE_SHEAF_THREADS = "sheaf-threads";
 
@@ -85,6 +91,9 @@ export class ThreadsView extends ItemView {
   // Resolved section starts collapsed each session so the panel reads as
   // "what's outstanding" by default.
   private resolvedCollapsed = true;
+  // Per-thread collapse state (thread ids that are collapsed to a one-liner).
+  // Instance-held so it survives the full re-render on every backend event.
+  private collapsed = new Set<string>();
 
   rerender(): void {
     this.render();
@@ -251,11 +260,44 @@ export class ThreadsView extends ItemView {
       return;
     }
 
+    const docPath = this.currentDocPath;
+
     const docLabel = header.createDiv();
-    docLabel.setText(this.currentDocPath);
+    docLabel.setText(docPath);
     docLabel.style.fontSize = "0.75em";
     docLabel.style.opacity = "0.5";
     docLabel.style.marginTop = "0.25em";
+
+    // Panel actions: start a new thread on this doc, or request a panel review.
+    // These mirror the editor context-menu items so the work is reachable from
+    // the panel without round-tripping to the editor.
+    const headerActions = header.createDiv();
+    headerActions.style.display = "flex";
+    headerActions.style.gap = "0.5em";
+    headerActions.style.marginTop = "0.5em";
+
+    const newThreadBtn = headerActions.createEl("button", {
+      text: "+ New thread",
+    });
+    newThreadBtn.style.fontSize = "0.8em";
+    newThreadBtn.title =
+      "Comment on this doc (anchors to the editor selection if there is one)";
+    newThreadBtn.addEventListener("click", () => {
+      this.plugin.commentFromPanel(docPath);
+    });
+
+    const reviewBtn = headerActions.createEl("button", {
+      text: "Request review",
+    });
+    reviewBtn.style.fontSize = "0.8em";
+    reviewBtn.disabled = !this.agentConnected;
+    reviewBtn.style.opacity = this.agentConnected ? "1" : "0.5";
+    reviewBtn.title = this.agentConnected
+      ? "Ask the agent to review this doc as a panel of roles"
+      : "Connect an agent to request a review";
+    reviewBtn.addEventListener("click", () => {
+      this.plugin.openReviewModalForPath(docPath);
+    });
 
     if (this.threads.length === 0) {
       const empty = el.createDiv({ cls: "sheaf-empty" });
@@ -326,9 +368,70 @@ export class ThreadsView extends ItemView {
       this.navigateToAnchor(thread);
     });
 
+    // Collapse toggle: a chevron pinned top-right. Collapsing hides the
+    // conversation, drafts, reply box, and actions, leaving the badges + a
+    // one-line preview so a busy panel stays scannable.
+    card.style.position = "relative";
+    const isCollapsed = this.collapsed.has(thread.id);
+    const chevron = card.createSpan();
+    chevron.setText(isCollapsed ? "▶" : "▼");
+    chevron.setAttribute(
+      "aria-label",
+      isCollapsed ? "expand thread" : "collapse thread",
+    );
+    chevron.style.position = "absolute";
+    chevron.style.top = "0.5em";
+    chevron.style.right = "0.6em";
+    chevron.style.fontSize = "0.7em";
+    chevron.style.opacity = "0.5";
+    chevron.style.cursor = "pointer";
+    chevron.style.userSelect = "none";
+    chevron.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (this.collapsed.has(thread.id)) this.collapsed.delete(thread.id);
+      else this.collapsed.add(thread.id);
+      this.render();
+    });
+
     const drifted = isDrifted(thread, this.docText);
 
-    if (isWorking(thread)) {
+    // Virtual review comment: a thread the agent authored as a `review:<id>`
+    // persona. "Parked" = the persona still has the last word, so it's the
+    // human's turn to triage — NOT the agent working (the agent only acts once
+    // a user message lands; see addressReview / the MCP ReadMe).
+    const personaId = reviewPersonaId(thread);
+    const lastAuthor =
+      thread.messages[thread.messages.length - 1]?.author ?? "";
+    // "Parked" only while the comment is fresh: a persona has the last word AND
+    // the human hasn't engaged yet. Once the user replies (to discuss or to
+    // Address), the thread is in-conversation — it must not flip back to
+    // "awaiting your review" / re-offer Address when the agent later answers in
+    // the persona's voice.
+    const userEngaged = thread.messages.some((m) => m.author === "user");
+    const parkedReview =
+      personaId !== null &&
+      lastAuthor.startsWith(REVIEW_AUTHOR_PREFIX) &&
+      !userEngaged;
+    const panelReq = isPanelRequest(thread);
+
+    if (personaId !== null) {
+      card.style.borderLeft = "3px solid var(--interactive-accent)";
+      const badge = card.createDiv();
+      badge.setText(`⟁ ${prettyPersona(personaId)} · simulated review`);
+      badge.style.fontSize = "0.72em";
+      badge.style.textTransform = "uppercase";
+      badge.style.letterSpacing = "0.05em";
+      badge.style.color = "var(--text-accent)";
+      badge.style.marginBottom = "0.4em";
+    }
+
+    if (parkedReview) {
+      const badge = card.createDiv();
+      badge.setText("⟁ awaiting your review");
+      badge.style.fontSize = "0.75em";
+      badge.style.color = "var(--text-muted)";
+      badge.style.marginBottom = "0.4em";
+    } else if (isWorking(thread)) {
       const badge = card.createDiv();
       badge.setText("● agent working");
       badge.style.fontSize = "0.75em";
@@ -367,7 +470,42 @@ export class ThreadsView extends ItemView {
       tag.style.marginBottom = "0.5em";
     }
 
-    for (const msg of thread.messages) {
+    // Collapsed: stop here with a one-line preview of the thread's content.
+    if (isCollapsed) {
+      const firstBody = panelReq
+        ? "Panel review requested"
+        : (thread.messages.find((m) => m.body.trim().length > 0)?.body ?? "");
+      const oneLine = firstBody.replace(/\s+/g, " ").trim();
+      const preview = card.createDiv();
+      preview.setText(oneLine.length > 90 ? oneLine.slice(0, 90) + "…" : oneLine);
+      preview.style.fontSize = "0.85em";
+      preview.style.opacity = "0.7";
+      preview.style.whiteSpace = "nowrap";
+      preview.style.overflow = "hidden";
+      preview.style.textOverflow = "ellipsis";
+      preview.style.paddingRight = "1.2em";
+      if (thread.messages.length > 1) {
+        const more = card.createDiv();
+        more.setText(`${thread.messages.length} messages`);
+        more.style.fontSize = "0.7em";
+        more.style.opacity = "0.45";
+        more.style.marginTop = "0.2em";
+      }
+      return;
+    }
+
+    thread.messages.forEach((msg, i) => {
+      // The panel-request marker is a machine instruction, not prose — show a
+      // friendly label in place of the raw `[sheaf:panel-review] …` body.
+      if (panelReq && i === 0) {
+        const tag = card.createDiv();
+        tag.setText("Panel review requested");
+        tag.style.fontWeight = "600";
+        tag.style.fontSize = "0.85em";
+        tag.style.marginBottom = "0.5em";
+        tag.style.opacity = "0.75";
+        return;
+      }
       const m = card.createDiv();
       m.style.marginBottom = "0.5em";
       const author = m.createDiv({ text: `${msg.author}:` });
@@ -385,7 +523,7 @@ export class ThreadsView extends ItemView {
         this.currentDocPath ?? "",
         this,
       );
-    }
+    });
 
     const variants = latestVariants(thread);
     if (variants && thread.status === "open") {
@@ -400,15 +538,39 @@ export class ThreadsView extends ItemView {
       actions.style.display = "flex";
       actions.style.gap = "0.5em";
 
-      // "Resolve" without applying. Use when the agent already did its work
-      // via Edit/Write directly, or when the user wants to dismiss without
-      // taking any of the variants.
-      const resolve = actions.createEl("button", { text: "Resolve" });
+      // "Address" a parked review comment: the approval gate. Posts a user
+      // directive reply so the agent picks the thread up and makes the edit
+      // the persona's note calls for. Only meaningful while the persona has
+      // the last word (otherwise the conversation is already underway).
+      if (parkedReview) {
+        const address = actions.createEl("button", { text: "Address" });
+        address.style.fontSize = "0.8em";
+        address.style.background = "var(--interactive-accent)";
+        address.style.color = "var(--text-on-accent)";
+        address.addEventListener("click", async () => {
+          try {
+            await this.plugin.client.addressReview(thread.id);
+            new Notice("Asked the agent to address this");
+            await this.refreshCurrent();
+          } catch (err) {
+            console.error("sheaf: address failed", err);
+            const msg = err instanceof Error ? err.message : String(err);
+            new Notice(`Sheaf: ${msg}`, 8000);
+          }
+        });
+      }
+
+      // "Resolve"/"Dismiss" without applying. Use when the agent already did
+      // its work via Edit/Write directly, when dismissing a review comment, or
+      // when the user wants to drop without taking any of the variants.
+      const resolve = actions.createEl("button", {
+        text: personaId !== null ? "Dismiss" : "Resolve",
+      });
       resolve.style.fontSize = "0.8em";
       resolve.addEventListener("click", async () => {
         try {
           await this.plugin.client.resolveThread(thread.id);
-          new Notice("Thread resolved");
+          new Notice(personaId !== null ? "Review dismissed" : "Thread resolved");
           await this.refreshCurrent();
         } catch (err) {
           console.error("sheaf: resolve failed", err);

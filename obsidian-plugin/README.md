@@ -83,6 +83,24 @@ the MCP server tells the agent everything.
 5. Watch the right-panel threads view and your editor. Within seconds the
    agent should pick up the thread, edit the doc, and tick the thread off.
 
+## Panel review (virtual comments)
+
+Instead of one comment, ask the agent to review the whole doc as a panel of
+reviewer roles:
+
+1. Open a doc, then command palette → **"Sheaf: Request panel review"** (or
+   right-click → *Sheaf: Request panel review*).
+2. Pick which roles to run (the menu comes from **Settings → Sheaf → Review
+   panel**, where you define/edit/enable roles like *Skeptic*, *On-call SRE*,
+   *Security reviewer*, *New hire*).
+3. The agent reads the doc and posts anchored feedback as simulated comments
+   (author `review:<id>`), one per point. It does **not** edit the doc.
+4. Triage each comment in the threads panel: **Address** asks the agent to make
+   the change that comment calls for (scoped to its anchor); **Dismiss** drops
+   it; a plain reply just discusses it. A review comment sits parked
+   ("awaiting your review") until you act — the agent never processes its own
+   review output.
+
 ## Status
 
 Throwaway prototype. Set `isDesktopOnly: true`. No mobile support, no auth,
