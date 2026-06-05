@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 
 import type { Thread, ThreadDraftOption } from "@/lib/types";
-import type { Thread as BackendThread } from "@/lib/mcp/backend";
+import type { Thread as BackendThread } from "sheaf-server/types";
 import { subscribeBackendEvents } from "./useBackendEvents";
 
 /**
@@ -50,9 +50,10 @@ function decodeRelPos(
 function backendThreadToUiThread(t: BackendThread): Thread {
   const draftOptions = deriveDraftOptions(t);
   const target = t.targets[0];
-  const charRange = target ? decodeRelPos(target.anchor.rel_pos) : null;
+  const charRange =
+    target && target.scope === "range" ? decodeRelPos(target.anchor.rel_pos) : null;
   const serverAnchor =
-    target && charRange
+    target && target.scope === "range" && charRange
       ? {
           char_range: charRange,
           anchored_text: target.anchor.anchored_text,

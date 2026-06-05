@@ -1,6 +1,6 @@
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 
-import { buildServer } from "@/lib/mcp/server";
+import { buildServer } from "sheaf-server";
 
 /**
  * MCP server route for sheaf.

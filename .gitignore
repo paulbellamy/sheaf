@@ -1,1 +1,7 @@
 /todos
+
+# Dependencies (pnpm workspace installs at root and per-package)
+node_modules/
+
+# Build output
+*.tsbuildinfo
