@@ -5,6 +5,7 @@ import { SheafEventStream, type BackendEvent } from "./sheaf-events";
 import { SheafServerHost } from "./sheaf-server-host";
 import {
   DEFAULT_SETTINGS,
+  mergeStyle,
   type SheafSettings,
   SheafSettingTab,
 } from "./settings";
@@ -106,6 +107,9 @@ export default class SheafPlugin extends Plugin {
     // so the first SSE connect lands on a live server.
     await this.startServerIfEnabled();
 
+    // Mirror the user's voice settings into the vault so the agent honors them.
+    await this.pushStyleConfig();
+
     this.events.start();
 
     // First-time enable / fresh install: the layout restore won't have a
@@ -123,15 +127,69 @@ export default class SheafPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    this.settings = Object.assign(
-      {},
-      DEFAULT_SETTINGS,
-      await this.loadData(),
-    );
+    const loaded = (await this.loadData()) as Partial<SheafSettings> | null;
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, loaded);
+    // Reconcile the style block against current defaults (fresh object so the
+    // settings UI never mutates the shared default in place).
+    this.settings.style = mergeStyle(loaded?.style);
   }
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
+  }
+
+  /**
+   * Persist the style settings and mirror them to the server's
+   * `.sheaf/config.json` (the agent's source of truth). Best-effort push: the
+   * server may be down or external.
+   */
+  async saveAndPushStyle(): Promise<void> {
+    await this.saveSettings();
+    await this.pushStyleConfig();
+  }
+
+  private async pushStyleConfig(): Promise<void> {
+    try {
+      await this.client.putStyleConfig(this.settings.style);
+    } catch (err) {
+      console.warn("sheaf: could not push style config to server", err);
+    }
+  }
+
+  /**
+   * Generate / refresh the voice guide: the server computes metrics now and
+   * posts a build request the connected agent picks up to write the guide.
+   */
+  async buildVoiceGuide(): Promise<void> {
+    try {
+      await this.pushStyleConfig();
+      const res = await this.client.buildStyleGuide();
+      const docs = `${res.doc_count} note${res.doc_count === 1 ? "" : "s"}`;
+      if (res.word_count === 0 || res.low_corpus) {
+        new Notice(
+          `Analyzed ${docs} — not much writing to learn from yet. Write more, then regenerate.`,
+          8000,
+        );
+      } else if (!this.agentConnected) {
+        new Notice(
+          `Analyzed ${docs} (~${res.word_count} words). Connect a Claude agent and it will write your voice guide.`,
+          8000,
+        );
+      } else {
+        new Notice(
+          `Analyzing ${docs} (~${res.word_count} words); the agent is writing your voice guide now.`,
+          6000,
+        );
+      }
+    } catch (err) {
+      const msg =
+        err instanceof SheafApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : String(err);
+      new Notice(`Sheaf: couldn't build voice guide — ${msg}`, 8000);
+    }
   }
 
   async onConnectionChanged(): Promise<void> {
@@ -139,6 +197,7 @@ export default class SheafPlugin extends Plugin {
     await this.startServerIfEnabled();
     this.client.setBaseUrl(this.settings.serverUrl);
     this.events.setBaseUrl(this.settings.serverUrl);
+    await this.pushStyleConfig();
     this.updateStatusBar();
   }
 

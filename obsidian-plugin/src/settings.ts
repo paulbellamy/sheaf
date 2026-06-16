@@ -1,5 +1,8 @@
 import { App, PluginSettingTab, Setting, TextComponent } from "obsidian";
+import { defaultStyleConfig, type StyleConfig } from "sheaf-server/types";
 import type SheafPlugin from "./main";
+
+export type { StyleConfig } from "sheaf-server/types";
 
 /**
  * A reviewer role the agent channels during a panel review. `id` is the slug
@@ -21,7 +24,26 @@ export type SheafSettings = {
   /** Run the sheaf server (backend + MCP + API) inside Obsidian itself. */
   runServer: boolean;
   personas: ReviewPersona[];
+  /** Voice matching: how the agent learns to write like the user. Mirrored to
+   *  the vault's `.sheaf/config.json` (the server's source of truth). */
+  style: StyleConfig;
 };
+
+/**
+ * Reconcile a persisted (possibly partial / older) style config against the
+ * canonical defaults, returning a fresh object so the UI never mutates the
+ * shared default in place.
+ */
+export function mergeStyle(loaded?: Partial<StyleConfig>): StyleConfig {
+  const base = defaultStyleConfig();
+  if (!loaded) return base;
+  return {
+    ...base,
+    ...loaded,
+    exclude_globs: loaded.exclude_globs ?? base.exclude_globs,
+    prefs: { ...base.prefs, ...(loaded.prefs ?? {}) },
+  };
+}
 
 /**
  * Role-based default panel. Deliberately roles, not named people — safe in a
@@ -72,6 +94,7 @@ export const DEFAULT_SETTINGS: SheafSettings = {
   showResolved: true,
   runServer: true,
   personas: DEFAULT_PERSONAS,
+  style: defaultStyleConfig(),
 };
 
 /** Slugify a free-text name into a `review:<id>`-safe id. */
@@ -158,7 +181,132 @@ export class SheafSettingTab extends PluginSettingTab {
         `In a terminal: claude mcp add --transport http sheaf ${mcpUrl} — then run \`claude\` and say "use the sheaf MCP and watch for events; action and resolve each thread as it appears, and keep handling new ones until I stop you".`,
       );
 
+    this.renderVoiceMatching(containerEl);
     this.renderPersonas(containerEl);
+  }
+
+  /**
+   * Voice matching. The agent learns the user's writing voice from the vault
+   * and writes in it. Edits here are saved to plugin data *and* pushed to the
+   * server's `.sheaf/config.json` so the agent's GetStyle/StyleCheck honor them.
+   */
+  private renderVoiceMatching(containerEl: HTMLElement): void {
+    new Setting(containerEl).setName("Voice matching").setHeading();
+
+    const intro = containerEl.createDiv();
+    intro.style.fontSize = "0.85em";
+    intro.style.opacity = "0.7";
+    intro.style.marginBottom = "0.75em";
+    intro.setText(
+      "The agent studies how you write — across your notes — and matches your voice when it drafts prose. Generate a voice guide once, then it's used automatically.",
+    );
+
+    const style = this.plugin.settings.style;
+    const save = () => void this.plugin.saveAndPushStyle();
+
+    new Setting(containerEl)
+      .setName("Enable voice matching")
+      .setDesc("When on, the agent consults your voice profile before writing prose.")
+      .addToggle((t) =>
+        t.setValue(style.enabled).onChange((v) => {
+          style.enabled = v;
+          save();
+        }),
+      );
+
+    new Setting(containerEl)
+      .setName("Generate / refresh voice guide")
+      .setDesc(
+        "Analyze your notes now and ask the connected agent to (re)write your voice guide. Run this after you've written a fair amount, or when your style has shifted.",
+      )
+      .addButton((b) =>
+        b
+          .setButtonText("Generate")
+          .setCta()
+          .onClick(() => void this.plugin.buildVoiceGuide()),
+      );
+
+    new Setting(containerEl)
+      .setName("Exclude from corpus")
+      .setDesc(
+        "Glob patterns (one per line) for notes that are NOT your own writing — templates, clippings, daily notes. Everything else under the vault counts.",
+      )
+      .then((s) => {
+        const ta = s.controlEl.createEl("textarea");
+        ta.value = style.exclude_globs.join("\n");
+        ta.rows = 4;
+        ta.style.width = "100%";
+        ta.style.fontSize = "0.85em";
+        ta.placeholder = "**/Templates/**\n**/Clippings/**";
+        ta.addEventListener("change", () => {
+          style.exclude_globs = ta.value
+            .split("\n")
+            .map((l) => l.trim())
+            .filter((l) => l.length > 0);
+          save();
+        });
+        s.settingEl.style.display = "block";
+      });
+
+    const pref = (
+      name: string,
+      desc: string,
+      key: "em_dash" | "oxford_comma" | "contractions",
+    ) => {
+      new Setting(containerEl)
+        .setName(name)
+        .setDesc(desc)
+        .addDropdown((d) =>
+          d
+            .addOption("either", "No preference")
+            .addOption("yes", "Use")
+            .addOption("no", "Avoid")
+            .setValue(style.prefs[key])
+            .onChange((v) => {
+              style.prefs[key] = v as "yes" | "no" | "either";
+              save();
+            }),
+        );
+    };
+    pref("Em-dashes", "Whether you use em-dashes (—).", "em_dash");
+    pref("Oxford comma", "Serial comma before the final 'and'/'or'.", "oxford_comma");
+    pref("Contractions", "Whether you write don't / it's / we're.", "contractions");
+
+    new Setting(containerEl)
+      .setName("Banned phrases")
+      .setDesc(
+        "Phrases the agent must avoid (one per line) — your personal list of clichés or AI tells. StyleCheck flags these.",
+      )
+      .then((s) => {
+        const ta = s.controlEl.createEl("textarea");
+        ta.value = style.prefs.banned_phrases.join("\n");
+        ta.rows = 3;
+        ta.style.width = "100%";
+        ta.style.fontSize = "0.85em";
+        ta.placeholder = "delve\ngame-changer\nleverage";
+        ta.addEventListener("change", () => {
+          style.prefs.banned_phrases = ta.value
+            .split("\n")
+            .map((l) => l.trim())
+            .filter((l) => l.length > 0);
+          save();
+        });
+        s.settingEl.style.display = "block";
+      });
+
+    new Setting(containerEl)
+      .setName("Exemplars per draft")
+      .setDesc("How many of your own passages the agent sees as voice references.")
+      .addSlider((sl) =>
+        sl
+          .setLimits(1, 4, 1)
+          .setValue(Math.max(1, Math.min(4, style.exemplar_count)))
+          .setDynamicTooltip()
+          .onChange((v) => {
+            style.exemplar_count = v;
+            save();
+          }),
+      );
   }
 
   /**

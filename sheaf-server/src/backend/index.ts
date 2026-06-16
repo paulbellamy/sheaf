@@ -25,6 +25,8 @@ export type {
   StylePrefs,
 } from "../style/profile";
 
+export { defaultStyleConfig } from "../style/profile";
+
 export type Ref = "main" | string;
 
 export type DocPath = string;

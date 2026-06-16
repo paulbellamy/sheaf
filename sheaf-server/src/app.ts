@@ -13,14 +13,17 @@ import {
   acceptDraft,
   addThread,
   attachPayload,
+  buildStyleGuide,
   createDraft,
   declineDraft,
   docVersions,
   getDraft,
+  getStyleConfig,
   type HandlerResult,
   listDocsAndDrafts,
   listDrafts,
   listThreadsForDoc,
+  putStyleConfig,
   readDoc,
   reopenThread,
   replyThread,
@@ -232,6 +235,20 @@ export function buildSheafApp(
     run(reply, () =>
       declineDraft(backend, { id: (req.params as { id: string }).id }),
     ),
+  );
+
+  /* ---------------------------------------------------------- UI: style -- */
+
+  app.get("/api/ui/style/config", (_req, reply) =>
+    run(reply, () => getStyleConfig(backend)),
+  );
+
+  app.put("/api/ui/style/config", (req, reply) =>
+    run(reply, () => putStyleConfig(backend, { body: req.body })),
+  );
+
+  app.post("/api/ui/style/build", (_req, reply) =>
+    run(reply, () => buildStyleGuide(backend)),
   );
 
   /* ----------------------------------------------------- SSE event stream -- */
