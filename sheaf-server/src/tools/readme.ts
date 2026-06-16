@@ -41,7 +41,8 @@ mark the thread resolved. The user sees your edits land in their editor live.
    a. \`ReadThread(thread_id)\` to get the brief, the targets, and the message.
       If the message starts with \`[sheaf:panel-review]\`, this is a review
       request, not an edit brief — follow **Panel review** below instead of
-      steps b–d.
+      steps b–d. If it starts with \`[sheaf:build-voice-guide]\`, follow
+      **Writing in the user's voice → Bootstrapping** instead.
    b. **Acknowledge immediately**: \`ReplyThread(thread_id, "on it")\` (or a
       short paraphrase of what you're about to do). This is the signal the
       plugin shows as "agent working" — without it the user has no feedback
@@ -187,6 +188,11 @@ and can be ignored.
 - \`ReplyThread(thread_id, message)\` — add a message to the thread. Use for clarifying questions.
 - \`ResolveThread(thread_id)\` — mark thread done. Call this once your edit has landed.
 - \`Glob(pattern)\` / \`Grep({pattern, ...})\` — search the vault.
+- \`GetStyle({topic?})\` — the user's writing voice for a prose task: compact
+  guide + metrics + preferences + relevant exemplars. Call before drafting prose.
+- \`StyleCheck({text})\` — deterministic lint of a draft against that voice.
+- \`StyleSamples()\` / \`SaveStyleGuide({guide_md})\` — bootstrap/refresh the voice
+  guide (see **Writing in the user's voice**).
 
 ## Range vs doc-level
 
@@ -200,6 +206,52 @@ to disambiguate.
 the doc as a whole (e.g. *"rewrite this for tone"*, *"add a conclusion"*). Read
 the doc first, then make the change with \`Write\` (full rewrite) or several
 \`Edit\` calls. There is no anchored text to use as \`old_string\`.
+
+## Writing in the user's voice
+
+When a thread has you **draft or rewrite prose** (not a mechanical fix like a
+rename or typo), match how *this user* writes. Their vault is a growing corpus
+of their own writing, and sheaf distills it for you — you don't read the whole
+vault, you ask for a compact profile.
+
+The flow on a prose task:
+
+1. \`GetStyle({ topic: "<a few keywords from the brief>" })\`. You get back a
+   short **voice guide**, a **metrics digest** (sentence length, punctuation
+   habits, vocabulary), the user's explicit **preferences** (em-dash, Oxford
+   comma, contractions, banned phrases), and **2-4 exemplar passages** from
+   their own writing on (or near) the topic. This is bounded to ~1.5k tokens —
+   cheap to call on every prose thread.
+2. Draft in that voice — imitate the rhythm and diction of the exemplars, honor
+   the preferences, and avoid the AI tells the guide calls out.
+3. Before you land the edit (or attach an option), \`StyleCheck({ text })\`. It's
+   a deterministic lint: it reports a \`verdict\` (\`close\` / \`drifting\` /
+   \`off\`) plus concrete suggestions (AI-tell phrasing, banned phrases,
+   sentence-length drift, em-dash overuse). If it's not \`close\`, revise using
+   the suggestions, then proceed. It's advisory — your judgment wins, but don't
+   ignore a hard hit (a banned phrase, or an em-dash when they've banned them).
+
+If \`GetStyle\` reports \`low_corpus\` or has no guide yet, just write in a clear,
+neutral voice — don't invent a style from too little signal.
+
+### Bootstrapping / refreshing the voice guide
+
+\`GetStyle\` tells you \`guide_stale: true\` when there's no distilled guide yet, or
+the corpus has grown enough to warrant a refresh. The user can also trigger this
+explicitly: a thread whose first message starts with \`[sheaf:build-voice-guide]\`.
+Either way:
+
+1. \`StyleSamples()\` — returns the full metrics plus a diverse set of sample
+   passages and the existing guide (if any).
+2. Read them and write a **compact** (≤400 word) prose style guide: how they
+   build sentences, their diction and punctuation habits, how they structure a
+   piece, and what to avoid. Refine the existing guide rather than replace it.
+3. \`SaveStyleGuide({ guide_md })\`. It's cached and mirrored to a visible,
+   user-editable doc (\`Sheaf/Voice Guide.md\`). Then, if this was a
+   \`[sheaf:build-voice-guide]\` request thread, \`ReplyThread\` with a one-line
+   summary and \`ResolveThread\`.
+
+Do this once when stale; don't redo it per edit.
 
 ## Panel review
 

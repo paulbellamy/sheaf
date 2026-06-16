@@ -11,6 +11,20 @@
  * the form "draft_<uuid>".
  */
 
+import type {
+  CorpusFile,
+  StyleConfig,
+  StyleProfile,
+} from "../style/profile";
+
+export type {
+  CorpusFile,
+  CorpusFingerprint,
+  StyleConfig,
+  StyleProfile,
+  StylePrefs,
+} from "../style/profile";
+
 export type Ref = "main" | string;
 
 export type DocPath = string;
@@ -407,6 +421,21 @@ export interface Backend {
    * if it is `declined` (declined threads cannot be reopened).
    */
   reopenThread(id: ThreadId): Promise<void>;
+
+  /**
+   * Style / voice matching. The vault is the corpus; these expose the cheap
+   * primitives the `style/*` modules orchestrate.
+   *
+   * `statCorpus` lists every visible `*.md` doc with mtime + size and *no*
+   * content read, so a corpus fingerprint can be computed without touching
+   * file bodies. The profile/config live under the hidden `.sheaf/` dir, so
+   * they never surface as vault docs.
+   */
+  statCorpus(): Promise<CorpusFile[]>;
+  readStyleConfig(): Promise<StyleConfig>;
+  writeStyleConfig(config: StyleConfig): Promise<void>;
+  readStyleProfile(): Promise<StyleProfile | null>;
+  writeStyleProfile(profile: StyleProfile): Promise<void>;
 
   /**
    * Subscribe to mutation events. Returns an unsubscribe function.
