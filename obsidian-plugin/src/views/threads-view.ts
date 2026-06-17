@@ -90,6 +90,13 @@ export class ThreadsView extends ItemView {
   private agentConnected = false;
   // Per-thread selected variant index. Resets when the thread's payload changes.
   private selectedVariant = new Map<string, number>();
+  // Per-thread pending reply text. The panel re-renders wholesale on every
+  // backend event, variant-tab toggle, collapse, and editor keystroke (the
+  // vault "modify" handler). The reply <textarea>'s only state is its live DOM
+  // value, so without stashing it here a re-render recreates the box empty and
+  // silently drops whatever the user had typed. Keyed by thread id; cleared on
+  // successful send and on file switch.
+  private replyDrafts = new Map<string, string>();
   // Resolved section starts collapsed each session so the panel reads as
   // "what's outstanding" by default.
   private resolvedCollapsed = true;
@@ -228,6 +235,7 @@ export class ThreadsView extends ItemView {
     this.threads = [];
     this.docText = null;
     this.selectedVariant.clear();
+    this.replyDrafts.clear();
     this.render();
     if (this.currentFile) {
       await this.refreshDocText();
@@ -737,6 +745,13 @@ export class ThreadsView extends ItemView {
     input.style.borderRadius = "3px";
     input.style.background = "var(--background-primary)";
     input.style.color = "var(--text-normal)";
+    // Restore any reply the user had typed before the last re-render, and keep
+    // the stash in sync as they type so the next re-render doesn't drop it.
+    input.value = this.replyDrafts.get(thread.id) ?? "";
+    input.addEventListener("input", () => {
+      if (input.value) this.replyDrafts.set(thread.id, input.value);
+      else this.replyDrafts.delete(thread.id);
+    });
 
     const send = wrap.createEl("button", { text: "Send" });
     send.style.fontSize = "0.8em";
@@ -749,6 +764,7 @@ export class ThreadsView extends ItemView {
       try {
         await this.plugin.client.replyThread(thread.id, message);
         input.value = "";
+        this.replyDrafts.delete(thread.id);
         await this.refreshCurrent();
       } catch (err) {
         console.error("sheaf: reply failed", err);
