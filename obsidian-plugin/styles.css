@@ -1,0 +1,16 @@
+/* Transient highlight when a thread card is clicked — see src/editor/flash.ts.
+   Non-destructive cue that draws the eye to the anchored text without moving
+   the cursor or stealing the selection. */
+@keyframes sheaf-flash {
+  0% {
+    background-color: var(--text-highlight-bg, rgba(255, 208, 0, 0.4));
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.sheaf-flash {
+  border-radius: 2px;
+  animation: sheaf-flash 900ms ease-out;
+}

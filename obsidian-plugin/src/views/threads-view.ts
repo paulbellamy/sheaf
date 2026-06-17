@@ -6,8 +6,10 @@ import {
   TFile,
   Notice,
 } from "obsidian";
+import type { EditorView } from "@codemirror/view";
 import type SheafPlugin from "../main";
 import type { Thread, ThreadDraftBody } from "../sheaf-client";
+import { flashRange } from "../editor/flash";
 import {
   REVIEW_AUTHOR_PREFIX,
   isPanelRequest,
@@ -106,7 +108,7 @@ export class ThreadsView extends ItemView {
 
   /**
    * Scroll the markdown editor showing `this.currentFile` to the thread's
-   * anchor and select it. Range threads: search for `anchored_text` in the
+   * anchor and flash it. Range threads: search for `anchored_text` in the
    * current doc. Doc threads: scroll to the top. Drifted threads: notice.
    *
    * Looks up the editor by file rather than by `getActiveViewOfType` — the
@@ -143,11 +145,17 @@ export class ThreadsView extends ItemView {
       new Notice("Anchor drifted — text not in doc", 4000);
       return;
     }
-    const from = editor.offsetToPos(idx);
-    const to = editor.offsetToPos(idx + anchored.length);
-    editor.setSelection(from, to);
-    editor.scrollIntoView({ from, to }, true);
+    const to = idx + anchored.length;
+    const fromPos = editor.offsetToPos(idx);
+    const toPos = editor.offsetToPos(to);
+    editor.scrollIntoView({ from: fromPos, to: toPos }, true);
     editor.focus();
+    // Flash the anchored text rather than hard-selecting it: a non-destructive
+    // cue that doesn't clobber the user's place. `cm` is the underlying CM6
+    // EditorView (not in Obsidian's public typings). Obsidian editor offsets
+    // are CM6 document offsets, so `idx`/`to` map straight through.
+    const cm = (editor as unknown as { cm?: EditorView }).cm;
+    if (cm) flashRange(cm, idx, to);
   }
 
   constructor(
@@ -483,8 +491,8 @@ export class ThreadsView extends ItemView {
     card.style.cursor = "pointer";
 
     // Click anywhere on the card (except buttons/inputs) navigates the
-    // editor to the anchor — range threads scroll to the highlighted text
-    // and select it; doc threads scroll to the top.
+    // editor to the anchor — range threads scroll to the anchored text
+    // and flash it; doc threads scroll to the top.
     card.addEventListener("click", (e) => {
       const t = e.target as HTMLElement;
       if (t.closest("button, textarea, input, a")) return;

@@ -33,6 +33,7 @@ import {
   findInsertionRange,
 } from "./extensions/ProposedInsertion";
 import { ThreadInteraction } from "./extensions/ThreadInteraction";
+import { ThreadFlash } from "./extensions/ThreadFlash";
 import { MarginRail } from "./MarginRail";
 import { HelpModal } from "./HelpModal";
 import { StartDraftPanel } from "./StartDraftPanel";
@@ -301,6 +302,7 @@ export function Manuscript({
       ThreadInteraction.configure({
         onThreadClick: (id) => activateThread(id),
       }),
+      ThreadFlash,
     ],
     content: initialContent ?? sampleManuscript,
     autofocus: false,
@@ -427,6 +429,62 @@ export function Manuscript({
     },
     [editor, getThreadView, threads],
   );
+
+  // Resolve a thread's anchored range the same way getAnchorTop finds its top:
+  // proposed-edit marks first, then a local note anchor, then the server anchor.
+  const getAnchorRange = useCallback(
+    (threadId: string): { from: number; to: number } | null => {
+      if (!editor) return null;
+      const view = getThreadView(threadId);
+      if (view?.del) return { from: view.del.from, to: view.del.to };
+      if (view?.ins) return { from: view.ins.from, to: view.ins.to };
+      const thread = threads.find((t) => t.id === threadId);
+      if (thread?.anchor) return thread.anchor;
+      if (thread?.serverAnchor?.anchored_text) {
+        return anchorToRange(
+          editor,
+          thread.serverAnchor.anchored_text,
+          thread.serverAnchor.char_range.from,
+        );
+      }
+      return null;
+    },
+    [editor, getThreadView, threads],
+  );
+
+  // Clicking a thread (in the margin or the doc) scrolls its anchor into view
+  // and flashes it — a non-destructive cue that doesn't touch the selection.
+  const flashThreadAnchor = useCallback(
+    (threadId: string) => {
+      if (!editor) return;
+      const range = getAnchorRange(threadId);
+      if (!range) return;
+      try {
+        const { node } = editor.view.domAtPos(range.from);
+        const el =
+          node.nodeType === Node.TEXT_NODE
+            ? node.parentElement
+            : (node as HTMLElement);
+        el?.scrollIntoView({ behavior: "smooth", block: "center" });
+      } catch {
+        // domAtPos can throw if the doc changed under us; the flash below is
+        // best-effort and harmless without the scroll.
+      }
+      editor.commands.flashRange(range);
+    },
+    [editor, getAnchorRange],
+  );
+
+  // Drive the flash from activeThreadId changes so both entry points (margin
+  // card click, in-doc span click) get it without wiring into the editor
+  // config (which would create a dependency cycle with `activateThread`). The
+  // ref keeps the effect keyed on the id alone, not on flashThreadAnchor's
+  // identity, so it fires on activation rather than on every threads update.
+  const flashThreadAnchorRef = useRef(flashThreadAnchor);
+  flashThreadAnchorRef.current = flashThreadAnchor;
+  useEffect(() => {
+    if (activeThreadId) flashThreadAnchorRef.current(activeThreadId);
+  }, [activeThreadId]);
 
   const setNote = useCallback((threadId: string, note: string) => {
     setThreads((prev) =>
