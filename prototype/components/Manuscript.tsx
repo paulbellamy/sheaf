@@ -401,37 +401,9 @@ export function Manuscript({
     [editor],
   );
 
-  const getAnchorTop = useCallback(
-    (threadId: string): number | null => {
-      if (!editor || !manuscriptRef.current) return null;
-      const view = getThreadView(threadId);
-      let pos = view?.del?.from ?? view?.ins?.from ?? null;
-      const thread = pos === null ? threads.find((t) => t.id === threadId) : null;
-      if (pos === null && thread) {
-        pos = thread.anchor?.from ?? null;
-      }
-      if (pos === null && thread?.serverAnchor?.anchored_text) {
-        const range = anchorToRange(
-          editor,
-          thread.serverAnchor.anchored_text,
-          thread.serverAnchor.char_range.from,
-        );
-        pos = range?.from ?? null;
-      }
-      if (pos === null) return null;
-      try {
-        const coords = editor.view.coordsAtPos(pos);
-        const wrapRect = manuscriptRef.current.getBoundingClientRect();
-        return coords.top - wrapRect.top;
-      } catch {
-        return null;
-      }
-    },
-    [editor, getThreadView, threads],
-  );
-
-  // Resolve a thread's anchored range the same way getAnchorTop finds its top:
-  // proposed-edit marks first, then a local note anchor, then the server anchor.
+  // Resolve a thread's anchored range: proposed-edit marks first, then a local
+  // note anchor, then the server anchor. The single source of truth for "where
+  // is this thread in the doc" — getAnchorTop and the flash both build on it.
   const getAnchorRange = useCallback(
     (threadId: string): { from: number; to: number } | null => {
       if (!editor) return null;
@@ -450,6 +422,22 @@ export function Manuscript({
       return null;
     },
     [editor, getThreadView, threads],
+  );
+
+  const getAnchorTop = useCallback(
+    (threadId: string): number | null => {
+      if (!editor || !manuscriptRef.current) return null;
+      const range = getAnchorRange(threadId);
+      if (!range) return null;
+      try {
+        const coords = editor.view.coordsAtPos(range.from);
+        const wrapRect = manuscriptRef.current.getBoundingClientRect();
+        return coords.top - wrapRect.top;
+      } catch {
+        return null;
+      }
+    },
+    [editor, getAnchorRange],
   );
 
   // Clicking a thread (in the margin or the doc) scrolls its anchor into view
