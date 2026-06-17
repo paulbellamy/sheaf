@@ -6,9 +6,11 @@ import {
   TFile,
   Notice,
 } from "obsidian";
+import type { EditorView } from "@codemirror/view";
 import type SheafPlugin from "../main";
 import type { Thread, ThreadDraftBody } from "../sheaf-client";
 import { renderCommandRow } from "../command-row";
+import { flashRange } from "../editor/flash";
 import {
   REVIEW_AUTHOR_PREFIX,
   isPanelRequest,
@@ -89,6 +91,13 @@ export class ThreadsView extends ItemView {
   private agentConnected = false;
   // Per-thread selected variant index. Resets when the thread's payload changes.
   private selectedVariant = new Map<string, number>();
+  // Per-thread pending reply text. The panel re-renders wholesale on every
+  // backend event, variant-tab toggle, collapse, and editor keystroke (the
+  // vault "modify" handler). The reply <textarea>'s only state is its live DOM
+  // value, so without stashing it here a re-render recreates the box empty and
+  // silently drops whatever the user had typed. Keyed by thread id; cleared on
+  // successful send and on file switch.
+  private replyDrafts = new Map<string, string>();
   // Resolved section starts collapsed each session so the panel reads as
   // "what's outstanding" by default.
   private resolvedCollapsed = true;
@@ -107,7 +116,7 @@ export class ThreadsView extends ItemView {
 
   /**
    * Scroll the markdown editor showing `this.currentFile` to the thread's
-   * anchor and select it. Range threads: search for `anchored_text` in the
+   * anchor and flash it. Range threads: search for `anchored_text` in the
    * current doc. Doc threads: scroll to the top. Drifted threads: notice.
    *
    * Looks up the editor by file rather than by `getActiveViewOfType` — the
@@ -144,11 +153,17 @@ export class ThreadsView extends ItemView {
       new Notice("Anchor drifted — text not in doc", 4000);
       return;
     }
-    const from = editor.offsetToPos(idx);
-    const to = editor.offsetToPos(idx + anchored.length);
-    editor.setSelection(from, to);
-    editor.scrollIntoView({ from, to }, true);
+    const to = idx + anchored.length;
+    const fromPos = editor.offsetToPos(idx);
+    const toPos = editor.offsetToPos(to);
+    editor.scrollIntoView({ from: fromPos, to: toPos }, true);
     editor.focus();
+    // Flash the anchored text rather than hard-selecting it: a non-destructive
+    // cue that doesn't clobber the user's place. `cm` is the underlying CM6
+    // EditorView (not in Obsidian's public typings). Obsidian editor offsets
+    // are CM6 document offsets, so `idx`/`to` map straight through.
+    const cm = (editor as unknown as { cm?: EditorView }).cm;
+    if (cm) flashRange(cm, idx, to);
   }
 
   constructor(
@@ -221,6 +236,7 @@ export class ThreadsView extends ItemView {
     this.threads = [];
     this.docText = null;
     this.selectedVariant.clear();
+    this.replyDrafts.clear();
     this.render();
     if (this.currentFile) {
       await this.refreshDocText();
@@ -454,8 +470,8 @@ export class ThreadsView extends ItemView {
     card.style.cursor = "pointer";
 
     // Click anywhere on the card (except buttons/inputs) navigates the
-    // editor to the anchor — range threads scroll to the highlighted text
-    // and select it; doc threads scroll to the top.
+    // editor to the anchor — range threads scroll to the anchored text
+    // and flash it; doc threads scroll to the top.
     card.addEventListener("click", (e) => {
       const t = e.target as HTMLElement;
       if (t.closest("button, textarea, input, a")) return;
@@ -700,6 +716,13 @@ export class ThreadsView extends ItemView {
     input.style.borderRadius = "3px";
     input.style.background = "var(--background-primary)";
     input.style.color = "var(--text-normal)";
+    // Restore any reply the user had typed before the last re-render, and keep
+    // the stash in sync as they type so the next re-render doesn't drop it.
+    input.value = this.replyDrafts.get(thread.id) ?? "";
+    input.addEventListener("input", () => {
+      if (input.value) this.replyDrafts.set(thread.id, input.value);
+      else this.replyDrafts.delete(thread.id);
+    });
 
     const send = wrap.createEl("button", { text: "Send" });
     send.style.fontSize = "0.8em";
@@ -712,6 +735,7 @@ export class ThreadsView extends ItemView {
       try {
         await this.plugin.client.replyThread(thread.id, message);
         input.value = "";
+        this.replyDrafts.delete(thread.id);
         await this.refreshCurrent();
       } catch (err) {
         console.error("sheaf: reply failed", err);
