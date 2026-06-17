@@ -325,7 +325,7 @@ function registerStyleCheck(server: McpServer, backend: Backend): void {
     {
       title: "StyleCheck",
       description:
-        "Deterministic 'humanize' lint: compares a candidate passage against the user's measured style profile, flagging generic AI tells and drift in sentence length, em-dash use, and function words. (Voice-specific rules live in the guide from GetStyle.) Advisory — use it to self-correct before landing an edit.",
+        "Check a passage against the user's voice. Returns two things: (1) a deterministic 'humanize' lint vs the measured profile — generic AI tells and drift in sentence length, em-dash use, and function words; and (2) the user's voice guide, so you can also judge the passage against the guide's written rules (the mechanical lint can't read those). Advisory — use it to self-correct before landing an edit.",
       inputSchema: {
         text: z
           .string()
@@ -341,26 +341,48 @@ function registerStyleCheck(server: McpServer, backend: Backend): void {
         const load = await loadOrRefreshProfile(backend, config);
         const metrics =
           load.profile.metrics.word_count > 0 ? load.profile.metrics : null;
+        const guide = await readGuide(backend);
 
         const report = styleCheck(text, metrics);
 
-        const lines: string[] = [`verdict: ${report.verdict}`];
+        const lines: string[] = [
+          "## Mechanical checks (deterministic)",
+          `verdict: ${report.verdict}`,
+        ];
         if (report.suggestions.length > 0) {
           lines.push("", "suggestions:");
           for (const s of report.suggestions) lines.push(`- ${s}`);
         } else {
-          lines.push("", "No issues found — this reads in the user's voice.");
+          lines.push(
+            "",
+            "No mechanical issues (sentence/function-word drift, em-dash overuse, AI tells).",
+          );
         }
         if (!report.has_profile) {
           lines.push(
             "",
-            "(No corpus profile yet — only rule-based checks applied. Bootstrap a voice guide for sentence/function-word comparison.)",
+            "(No corpus profile yet — only the generic AI-tell checks applied.)",
+          );
+        }
+
+        if (guide) {
+          lines.push(
+            "",
+            "## Voice guide — judge the passage against these rules too",
+            "The mechanical checks above do NOT cover the rules below. Read the passage against this guide and flag/fix anything that breaks it (word choice, punctuation, tone, structure):",
+            "",
+            guide,
+          );
+        } else {
+          lines.push(
+            "",
+            "No voice guide yet (`Sheaf/Voice Guide.md`). Bootstrap one with StyleSamples for voice-specific checks.",
           );
         }
 
         return {
           content: [{ type: "text", text: lines.join("\n") }],
-          structuredContent: report,
+          structuredContent: { ...report, guide_md: guide },
         };
       } catch (e) {
         return toToolError(e);

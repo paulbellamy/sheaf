@@ -136,9 +136,17 @@ describe("style MCP tools end-to-end", () => {
     expect(after!.computed_at).toBe(before!.computed_at);
   });
 
-  it("StyleCheck flags AI tells and em-dash overuse vs the corpus", async () => {
+  it("StyleCheck flags AI tells and em-dash overuse, and surfaces the voice guide", async () => {
     // Seed the profile from the (em-dash-free) corpus.
     await client.callTool({ name: "GetStyle", arguments: {} });
+    // A guide with a written rule the mechanical lint can't parse.
+    await backend.writeDoc(
+      VOICE_GUIDE_PATH,
+      "main",
+      "# Voice\nNever use em-dashes. Avoid the word 'tapestry'.",
+      undefined,
+      "agent",
+    );
 
     const res = (await client.callTool({
       name: "StyleCheck",
@@ -154,6 +162,9 @@ describe("style MCP tools end-to-end", () => {
     };
     expect(hits.em_dash).toBeGreaterThan(0);
     expect(hits.ai_tells.length).toBeGreaterThanOrEqual(3);
+    // The voice guide is returned so the agent can apply its written rules.
+    expect(sc.guide_md).toContain("Never use em-dashes");
+    expect(res.content[0].text!).toContain("Avoid the word 'tapestry'");
   });
 
   it("GetStyle short-circuits when voice matching is disabled", async () => {

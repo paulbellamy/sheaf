@@ -190,7 +190,8 @@ and can be ignored.
 - \`Glob(pattern)\` / \`Grep({pattern, ...})\` — search the vault.
 - \`GetStyle({topic?})\` — the user's writing voice for a prose task: compact
   guide + metrics + preferences + relevant exemplars. Call before drafting prose.
-- \`StyleCheck({text})\` — deterministic lint of a draft against that voice.
+- \`StyleCheck({text})\` — deterministic lint of a draft against the measured
+  profile, **plus the voice guide** so you can judge its written rules too.
 - \`StyleSamples()\` — vault metrics + sample passages to bootstrap the guide;
   save the guide by \`Write\`-ing \`Sheaf/Voice Guide.md\`.
 - \`AnalyzeSamples({samples})\` — measure writing you supply (fetched site/files)
@@ -226,12 +227,13 @@ The flow on a prose task:
    is bounded to ~1.5k tokens, cheap to call on every prose thread.
 2. Draft in that voice — imitate the rhythm and diction of the exemplars, follow
    the guide's rules, and avoid the AI tells it calls out.
-3. Before you land the edit (or attach an option), \`StyleCheck({ text })\`. It's
-   a deterministic lint against the *measured* profile: it reports a \`verdict\`
-   (\`close\` / \`drifting\` / \`off\`) plus concrete suggestions (generic AI-tell
-   phrasing, sentence-length drift, em-dash overuse vs your corpus). If it's not
-   \`close\`, revise, then proceed. It's advisory and pref-free — it won't know
-   the guide's own rules, so enforce those yourself.
+3. Before you land the edit (or attach an option), \`StyleCheck({ text })\`. It
+   returns **two** things: a deterministic lint against the *measured* profile (a
+   \`verdict\` plus suggestions — generic AI-tell phrasing, sentence-length drift,
+   em-dash overuse vs your corpus), **and the voice guide itself**. The mechanical
+   verdict does not cover the guide's written rules — read the passage against the
+   returned guide and fix anything that breaks it. Revise if either flags
+   something, then proceed. Advisory.
 
 If \`GetStyle\` reports \`low_corpus\` or has no guide yet, just write in a clear,
 neutral voice — don't invent a style from too little signal.
