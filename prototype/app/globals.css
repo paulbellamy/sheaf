@@ -143,6 +143,21 @@ body {
   background: rgba(15, 81, 50, 0.18);
 }
 
+/* Transient highlight when a thread is clicked — see ThreadFlash extension. */
+@keyframes sheaf-thread-flash {
+  0% {
+    background: rgba(122, 92, 0, 0.28);
+  }
+  100% {
+    background: transparent;
+  }
+}
+
+.manuscript .thread-flash {
+  border-radius: 2px;
+  animation: sheaf-thread-flash 900ms ease-out;
+}
+
 /* ------------------------------------------------------------------ */
 /* selection                                                           */
 /* ------------------------------------------------------------------ */
