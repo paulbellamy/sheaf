@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  compareMetrics,
   computeMetrics,
   renderMetricsSummary,
   splitSentences,
@@ -162,6 +163,25 @@ describe("styleCheck", () => {
     );
     expect(r.has_profile).toBe(true);
     expect(r.deviations.function_word_drift).toBeLessThan(0.05);
+  });
+});
+
+describe("compareMetrics", () => {
+  it("is ~zero for identical corpora and non-zero for divergent ones", () => {
+    const a = computeMetrics([
+      "The team shipped the feature. The users liked it. We moved on quickly.",
+    ]);
+    const same = compareMetrics(a, a);
+    expect(same.function_word_drift).toBeLessThan(0.01);
+    expect(same.sentence_mean_delta).toBe(0);
+
+    const terse = computeMetrics(["Ship it. Watch. Repeat."]);
+    const verbose = computeMetrics([
+      "When we finally decided to ship the feature, after much deliberation and several rounds of review, the whole team gathered to watch the dashboards together.",
+    ]);
+    const cmp = compareMetrics(terse, verbose);
+    expect(cmp.sentence_mean_delta).toBeLessThan(0); // terse has shorter sentences
+    expect(Math.abs(cmp.function_word_drift)).toBeGreaterThan(0);
   });
 });
 

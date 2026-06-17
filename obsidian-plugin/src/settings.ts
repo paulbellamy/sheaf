@@ -1,6 +1,17 @@
-import { App, PluginSettingTab, Setting, TextComponent } from "obsidian";
+import {
+  App,
+  ButtonComponent,
+  PluginSettingTab,
+  Setting,
+  TextComponent,
+} from "obsidian";
 import { defaultStyleConfig, type StyleConfig } from "sheaf-server/types";
 import type SheafPlugin from "./main";
+import { renderCommandRow } from "./command-row";
+
+/** The prompt the user pastes into a fresh `claude` session. */
+const AGENT_PROMPT =
+  "use the sheaf MCP and watch for events; action and resolve each thread as it appears, and keep handling new ones until I stop you";
 
 export type { StyleConfig } from "sheaf-server/types";
 
@@ -107,11 +118,43 @@ export function slugifyPersonaId(raw: string): string {
 }
 
 export class SheafSettingTab extends PluginSettingTab {
+  /** Held so agent-presence changes can toggle the Generate button live. */
+  private generateBtn: ButtonComponent | null = null;
+  private generateHint: HTMLElement | null = null;
+
   constructor(
     app: App,
     private plugin: SheafPlugin,
   ) {
     super(app, plugin);
+  }
+
+  /** Called by the plugin when agent presence flips while settings is open.
+   *  Surgical — only the button/hint update, so a textarea being edited isn't
+   *  clobbered by a full re-render. */
+  onAgentPresenceChanged(): void {
+    this.updateGenerateAvailability();
+  }
+
+  hide(): void {
+    this.generateBtn = null;
+    this.generateHint = null;
+  }
+
+  private updateGenerateAvailability(): void {
+    const connected = this.plugin.agentConnected;
+    this.generateBtn?.setDisabled(!connected);
+    this.generateBtn?.setTooltip(
+      connected ? "" : "Connect a Claude agent first",
+    );
+    if (this.generateHint) {
+      this.generateHint.setText(
+        connected
+          ? ""
+          : "Connect a Claude agent to enable — see “Connect an agent” above.",
+      );
+      this.generateHint.style.display = connected ? "none" : "block";
+    }
   }
 
   display(): void {
@@ -173,13 +216,20 @@ export class SheafSettingTab extends PluginSettingTab {
         }),
       );
 
-    // Surface the connect command so it's copy-pasteable from settings too.
-    const mcpUrl = `${this.plugin.settings.serverUrl.replace(/\/$/, "")}/api/mcp`;
+    // Connect-an-agent commands, copy-ready (mirrors the threads sidebar).
+    const url = this.plugin.settings.serverUrl.replace(/\/$/, "");
     new Setting(containerEl)
       .setName("Connect an agent")
       .setDesc(
-        `In a terminal: claude mcp add --transport http sheaf ${mcpUrl} — then run \`claude\` and say "use the sheaf MCP and watch for events; action and resolve each thread as it appears, and keep handling new ones until I stop you".`,
+        "In a terminal, register the MCP server; then run claude and paste the prompt to put it to work:",
       );
+    const cmds = containerEl.createDiv();
+    cmds.style.display = "flex";
+    cmds.style.flexDirection = "column";
+    cmds.style.gap = "0.4em";
+    cmds.style.margin = "0 0 0.75em";
+    renderCommandRow(cmds, `claude mcp add --transport http sheaf ${url}/api/mcp`);
+    renderCommandRow(cmds, AGENT_PROMPT);
 
     this.renderVoiceMatching(containerEl);
     this.renderPersonas(containerEl);
@@ -214,17 +264,22 @@ export class SheafSettingTab extends PluginSettingTab {
         }),
       );
 
-    new Setting(containerEl)
+    const genSetting = new Setting(containerEl)
       .setName("Generate / refresh voice guide")
       .setDesc(
-        "Analyze your notes now and ask the connected agent to (re)write your voice guide. Run this after you've written a fair amount, or when your style has shifted.",
+        "Analyze your notes now and ask the connected agent to (re)write your voice guide. Needs a connected agent (it does the writing).",
       )
-      .addButton((b) =>
-        b
-          .setButtonText("Generate")
+      .addButton((b) => {
+        this.generateBtn = b;
+        b.setButtonText("Generate")
           .setCta()
-          .onClick(() => void this.plugin.buildVoiceGuide()),
-      );
+          .onClick(() => void this.plugin.buildVoiceGuide());
+      });
+    this.generateHint = genSetting.descEl.createDiv();
+    this.generateHint.style.marginTop = "0.35em";
+    this.generateHint.style.fontSize = "0.9em";
+    this.generateHint.style.color = "var(--text-muted)";
+    this.updateGenerateAvailability();
 
     new Setting(containerEl)
       .setName("Exclude from corpus")

@@ -78,8 +78,5 @@ export const styleProfileSchema = z.object({
   fingerprint: corpusFingerprintSchema,
   config_hash: z.string().max(64),
   metrics: styleMetricsSchema,
-  guide_md: z.string().max(20_000).nullable(),
-  guide_generated_at: z.number().int().nullable(),
-  guide_doc_count: z.number().int().nullable(),
   computed_at: z.number().int(),
 }) satisfies z.ZodType<StyleProfile>;

@@ -404,6 +404,27 @@ function functionWordDrift(
   return round(1 - dot / (Math.sqrt(na) * Math.sqrt(nb)));
 }
 
+export type MetricComparison = {
+  function_word_drift: number;
+  sentence_mean_delta: number;
+  sentence_burstiness_delta: number;
+  contraction_delta: number;
+};
+
+/**
+ * Compare two metric sets, `a` relative to `b` (deltas are `a - b`). Used by
+ * StyleCheck (candidate vs profile) and AnalyzeSamples (a source vs the saved
+ * profile).
+ */
+export function compareMetrics(a: StyleMetrics, b: StyleMetrics): MetricComparison {
+  return {
+    function_word_drift: functionWordDrift(a.function_words, b.function_words),
+    sentence_mean_delta: round(a.sentence.mean_len - b.sentence.mean_len, 2),
+    sentence_burstiness_delta: round(a.sentence.burstiness - b.sentence.burstiness),
+    contraction_delta: round(a.contraction_rate - b.contraction_rate),
+  };
+}
+
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -421,20 +442,14 @@ export function styleCheck(
   const m = computeMetrics([text]);
   const hasProfile = profile !== null && profile.word_count > 0;
 
-  const deviations = {
-    sentence_mean_delta: hasProfile
-      ? round(m.sentence.mean_len - profile!.sentence.mean_len, 2)
-      : 0,
-    sentence_burstiness_delta: hasProfile
-      ? round(m.sentence.burstiness - profile!.sentence.burstiness)
-      : 0,
-    contraction_delta: hasProfile
-      ? round(m.contraction_rate - profile!.contraction_rate)
-      : 0,
-    function_word_drift: hasProfile
-      ? functionWordDrift(m.function_words, profile!.function_words)
-      : 0,
-  };
+  const deviations: MetricComparison = hasProfile
+    ? compareMetrics(m, profile!)
+    : {
+        sentence_mean_delta: 0,
+        sentence_burstiness_delta: 0,
+        contraction_delta: 0,
+        function_word_drift: 0,
+      };
 
   const banned: { phrase: string; count: number }[] = [];
   for (const phrase of prefs.banned_phrases) {

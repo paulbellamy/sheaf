@@ -29,8 +29,8 @@ export const LIMITS = {
   glob: 256,
   /** StyleCheck input — a passage to lint, not a whole book. */
   styleText: 50_000,
-  /** SaveStyleGuide body — a compact distilled guide, not an essay. */
-  styleGuide: 8_000,
+  /** AnalyzeSamples per-sample content — a fetched page/file, bounded. */
+  analyzeContent: 200_000,
   /** Topic hint for exemplar selection — a phrase, not prose. */
   topic: 256,
 } as const;

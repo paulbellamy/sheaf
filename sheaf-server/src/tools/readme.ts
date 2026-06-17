@@ -191,8 +191,10 @@ and can be ignored.
 - \`GetStyle({topic?})\` — the user's writing voice for a prose task: compact
   guide + metrics + preferences + relevant exemplars. Call before drafting prose.
 - \`StyleCheck({text})\` — deterministic lint of a draft against that voice.
-- \`StyleSamples()\` / \`SaveStyleGuide({guide_md})\` — bootstrap/refresh the voice
-  guide (see **Writing in the user's voice**).
+- \`StyleSamples()\` — vault metrics + sample passages to bootstrap the guide;
+  save the guide by \`Write\`-ing \`Sheaf/Voice Guide.md\`.
+- \`AnalyzeSamples({samples})\` — measure writing you supply (fetched site/files)
+  and compare it to the saved profile (see **Writing in the user's voice**).
 
 ## Range vs doc-level
 
@@ -246,12 +248,20 @@ Either way:
 2. Read them and write a **compact** (≤400 word) prose style guide: how they
    build sentences, their diction and punctuation habits, how they structure a
    piece, and what to avoid. Refine the existing guide rather than replace it.
-3. \`SaveStyleGuide({ guide_md })\`. It's cached and mirrored to a visible,
-   user-editable doc (\`Sheaf/Voice Guide.md\`). Then, if this was a
-   \`[sheaf:build-voice-guide]\` request thread, \`ReplyThread\` with a one-line
-   summary and \`ResolveThread\`.
+3. Save it by writing the doc \`Sheaf/Voice Guide.md\` with \`Write\` — that
+   visible, user-editable doc *is* the guide (there's no separate save tool).
+   Then, if this was a \`[sheaf:build-voice-guide]\` request thread,
+   \`ReplyThread\` with a one-line summary and \`ResolveThread\`.
 
 Do this once when stale; don't redo it per edit.
+
+**Extra sources.** The user may ask you to learn from writing outside the vault
+— their personal site, a published essay, files elsewhere on disk. Gather the
+text with **your own** tools (\`WebFetch\` / your filesystem \`Read\`; crawl or
+follow links as they ask — sheaf's \`Read\` is vault-only), then call
+\`AnalyzeSamples({ samples: [{ label, content }] })\` to measure it and compare
+it to their saved profile. Fold what's distinctive into the guide and write it
+back to \`Sheaf/Voice Guide.md\`.
 
 ## Panel review
 

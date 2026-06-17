@@ -75,7 +75,7 @@ describe("style MCP tools end-to-end", () => {
     expect(res.content[0].text!).toContain("Your writing voice");
   });
 
-  it("bootstrap flow: StyleSamples -> SaveStyleGuide -> GetStyle has a fresh guide", async () => {
+  it("bootstrap flow: StyleSamples -> Write guide doc -> GetStyle has a fresh guide", async () => {
     const samples = (await client.callTool({
       name: "StyleSamples",
       arguments: {},
@@ -85,13 +85,15 @@ describe("style MCP tools end-to-end", () => {
     expect((samples.structuredContent!.samples as unknown[]).length).toBeGreaterThan(0);
     expect(samples.structuredContent!.existing_guide_md).toBeNull();
 
-    const saved = (await client.callTool({
-      name: "SaveStyleGuide",
-      arguments: { guide_md: "# Voice\nShort, plain sentences. No em-dashes. Ship and watch." },
+    // The agent saves the guide by writing the ordinary visible doc — there is
+    // no SaveStyleGuide tool.
+    const guide = "# Voice\nShort, plain sentences. No em-dashes. Ship and watch.";
+    const wrote = (await client.callTool({
+      name: "Write",
+      arguments: { file_path: VOICE_GUIDE_PATH, content: guide, ref: "main" },
     })) as ToolResult;
-    expect(saved.structuredContent!.ok).toBe(true);
+    expect(wrote.isError).not.toBe(true);
 
-    // Mirrored to a visible, user-editable doc.
     const guideDoc = await backend.readDoc(VOICE_GUIDE_PATH, "main");
     expect(guideDoc.md).toContain("Short, plain sentences");
 
@@ -101,6 +103,37 @@ describe("style MCP tools end-to-end", () => {
     })) as ToolResult;
     expect(after.structuredContent!.guide_md).toContain("Short, plain sentences");
     expect(after.structuredContent!.guide_stale).toBe(false);
+  });
+
+  it("AnalyzeSamples measures supplied content + compares to the profile, statelessly", async () => {
+    // Ensure a profile exists on disk first.
+    await client.callTool({ name: "GetStyle", arguments: {} });
+    const before = await backend.readStyleProfile();
+    expect(before).not.toBeNull();
+
+    const res = (await client.callTool({
+      name: "AnalyzeSamples",
+      arguments: {
+        samples: [
+          {
+            label: "site:about",
+            content: `I build small tools. I keep it short. I ship. ${PARA}`,
+          },
+        ],
+      },
+    })) as ToolResult;
+    const sc = res.structuredContent!;
+    expect((sc.metrics as { word_count: number }).word_count).toBeGreaterThan(0);
+    expect((sc.per_sample as unknown[]).length).toBe(1);
+    expect(sc.comparison).not.toBeNull();
+    expect(
+      (sc.comparison as { function_word_drift: number }).function_word_drift,
+    ).toBeGreaterThanOrEqual(0);
+
+    // Stateless: the cached profile is untouched.
+    const after = await backend.readStyleProfile();
+    expect(after!.fingerprint.digest).toBe(before!.fingerprint.digest);
+    expect(after!.computed_at).toBe(before!.computed_at);
   });
 
   it("StyleCheck flags AI tells and banned phrases", async () => {

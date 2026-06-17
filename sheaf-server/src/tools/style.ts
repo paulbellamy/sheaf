@@ -10,8 +10,19 @@ import {
   selectExemplars,
   selectSamples,
 } from "../style/corpus";
-import { renderMetricsSummary, styleCheck } from "../style/metrics";
-import { VOICE_GUIDE_PATH, isGuideStale } from "../style/profile";
+import {
+  compareMetrics,
+  computeMetrics,
+  renderMetricsSummary,
+  stripMarkdown,
+  styleCheck,
+  tokenizeWords,
+} from "../style/metrics";
+import {
+  VOICE_GUIDE_PATH,
+  isGuideStale,
+  isPlaceholderGuide,
+} from "../style/profile";
 
 /** Soft cap on the GetStyle text payload (~1.8k tokens). Exemplars are trimmed
  *  from the end if the assembled message would exceed it. */
@@ -23,16 +34,32 @@ const GUIDE_RENDER_CAP = 2_500;
  *
  * `GetStyle`  — compact, per-write read path: distilled guide + metrics digest
  *               + a few relevant exemplars (~1.5k tokens, never the whole vault).
- * `StyleSamples` — bootstrap input: full metrics + diverse sample passages for
- *               the agent to distill a guide from.
- * `SaveStyleGuide` — persist the agent-distilled guide (cache + visible doc).
+ * `StyleSamples` — bootstrap input: full metrics + diverse sample passages, so
+ *               the agent can write the guide doc (`Sheaf/Voice Guide.md`).
+ * `AnalyzeSamples` — deterministic stylometry over caller-supplied content (a
+ *               personal site, files the agent fetched), compared to the profile.
  * `StyleCheck` — deterministic "humanize" lint of a candidate passage.
+ *
+ * The prose guide itself is the visible `Sheaf/Voice Guide.md` doc (the agent
+ * writes it with the ordinary `Write` tool) — there is no SaveStyleGuide.
  */
 export function registerStyleTools(server: McpServer, backend: Backend): void {
   registerGetStyle(server, backend);
   registerStyleSamples(server, backend);
-  registerSaveStyleGuide(server, backend);
+  registerAnalyzeSamples(server, backend);
   registerStyleCheck(server, backend);
+}
+
+/** Read the distilled guide from the visible doc, or null if absent / still the
+ *  build-time placeholder. */
+async function readGuide(backend: Backend): Promise<string | null> {
+  try {
+    const doc = await backend.readDoc(VOICE_GUIDE_PATH, "main");
+    if (doc.md.trim().length === 0 || isPlaceholderGuide(doc.md)) return null;
+    return doc.md;
+  } catch {
+    return null;
+  }
 }
 
 function renderExemplars(exemplars: Exemplar[]): string {
@@ -69,19 +96,27 @@ function registerGetStyle(server: McpServer, backend: Backend): void {
         }
 
         const load = await loadOrRefreshProfile(backend, config);
-        const { profile, corpus, low_corpus } = load;
-        const guide_stale = isGuideStale(profile, config);
+        const { profile, corpus, allFiles, low_corpus } = load;
+
+        const fullGuide = await readGuide(backend);
+        const guideFile = allFiles.find((f) => f.path === VOICE_GUIDE_PATH);
+        const guideMtime = fullGuide ? (guideFile?.mtime_ms ?? null) : null;
+        const guide_stale = isGuideStale(
+          guideMtime,
+          corpus,
+          config.refresh_after_doc_changes,
+        );
+        const guideText = fullGuide
+          ? fullGuide.length > GUIDE_RENDER_CAP
+            ? fullGuide.slice(0, GUIDE_RENDER_CAP) + "…"
+            : fullGuide
+          : null;
 
         const exemplars = low_corpus
           ? []
           : await selectExemplars(backend, config, corpus, topic);
 
         const summary = renderMetricsSummary(profile.metrics, config.prefs);
-        const guideText = profile.guide_md
-          ? profile.guide_md.length > GUIDE_RENDER_CAP
-            ? profile.guide_md.slice(0, GUIDE_RENDER_CAP) + "…"
-            : profile.guide_md
-          : null;
 
         const structured = {
           enabled: true,
@@ -101,7 +136,7 @@ function registerGetStyle(server: McpServer, backend: Backend): void {
         }
         if (!guideText) {
           header.push(
-            "_No distilled voice guide yet. Bootstrap one: call StyleSamples, write a short guide, then SaveStyleGuide._",
+            "_No voice guide yet. Bootstrap one: call StyleSamples, then write `Sheaf/Voice Guide.md`._",
           );
         } else if (guide_stale) {
           header.push(
@@ -109,26 +144,22 @@ function registerGetStyle(server: McpServer, backend: Backend): void {
           );
         }
 
-        const sections = [
-          header.join("\n"),
-          guideText ? `## Voice guide\n${guideText}` : "",
-          `## Metrics\n${summary}`,
-          renderExemplars(exemplars),
-          "When you draft, match this voice, then run StyleCheck before you land the edit.",
-        ].filter((s) => s.length > 0);
-
-        // Budget enforcement: trim exemplars from the end until under cap.
-        let text = sections.join("\n\n");
-        while (text.length > GET_STYLE_CHAR_BUDGET && exemplars.length > 0) {
-          exemplars.pop();
-          const trimmed = [
+        const sectionsFor = (ex: Exemplar[]) =>
+          [
             header.join("\n"),
             guideText ? `## Voice guide\n${guideText}` : "",
             `## Metrics\n${summary}`,
-            renderExemplars(exemplars),
+            renderExemplars(ex),
             "When you draft, match this voice, then run StyleCheck before you land the edit.",
-          ].filter((s) => s.length > 0);
-          text = trimmed.join("\n\n");
+          ]
+            .filter((s) => s.length > 0)
+            .join("\n\n");
+
+        // Budget enforcement: trim exemplars from the end until under cap.
+        let text = sectionsFor(exemplars);
+        while (text.length > GET_STYLE_CHAR_BUDGET && exemplars.length > 0) {
+          exemplars.pop();
+          text = sectionsFor(exemplars);
         }
         structured.exemplars = exemplars;
 
@@ -149,7 +180,7 @@ function registerStyleSamples(server: McpServer, backend: Backend): void {
     {
       title: "StyleSamples",
       description:
-        "Bootstrap input for building/refreshing the voice guide: returns the full style metrics plus a diverse set of sample passages from the user's vault, and any existing guide. Read these, then write a compact prose style guide and save it with SaveStyleGuide.",
+        "Bootstrap input for building/refreshing the voice guide: returns the full style metrics plus a diverse set of sample passages from the user's vault, and any existing guide. Read these, then write a compact prose style guide to `Sheaf/Voice Guide.md` with the Write tool.",
       inputSchema: {
         max_samples: z.number().int().min(1).max(20).optional(),
         max_words_per_sample: z.number().int().min(20).max(400).optional(),
@@ -170,14 +201,7 @@ function registerStyleSamples(server: McpServer, backend: Backend): void {
           max_words_per_sample ?? 130,
         );
 
-        let existing_guide_md: string | null = profile.guide_md;
-        try {
-          const doc = await backend.readDoc(VOICE_GUIDE_PATH, "main");
-          if (doc.md.trim().length > 0) existing_guide_md = doc.md;
-        } catch {
-          // No visible guide doc yet — use the cached guide_md (or null).
-        }
-
+        const existing_guide_md = await readGuide(backend);
         const summary = renderMetricsSummary(profile.metrics, config.prefs);
         const structured = {
           metrics: profile.metrics,
@@ -189,7 +213,7 @@ function registerStyleSamples(server: McpServer, backend: Backend): void {
 
         const text = [
           "# Build the user's voice guide",
-          "Read the metrics and the sample passages below, then write a SHORT (≤400 word) prose style guide describing how this person writes — sentence rhythm, diction, punctuation habits, structure, and what to avoid. Refine the existing guide rather than discard it. Then call SaveStyleGuide.",
+          "Read the metrics and the sample passages below, then write a SHORT (≤400 word) prose style guide describing how this person writes — sentence rhythm, diction, punctuation habits, structure, and what to avoid. Refine the existing guide rather than discard it. Then save it by writing the doc `Sheaf/Voice Guide.md` (the Write tool).",
           `## Metrics\n${summary}`,
           existing_guide_md
             ? `## Existing guide (refine this)\n${existing_guide_md}`
@@ -209,48 +233,88 @@ function registerStyleSamples(server: McpServer, backend: Backend): void {
   );
 }
 
-function registerSaveStyleGuide(server: McpServer, backend: Backend): void {
+function registerAnalyzeSamples(server: McpServer, backend: Backend): void {
   server.registerTool(
-    "SaveStyleGuide",
+    "AnalyzeSamples",
     {
-      title: "SaveStyleGuide",
+      title: "AnalyzeSamples",
       description:
-        "Persist a distilled prose style guide describing the user's writing voice. Caches it for GetStyle and mirrors it to a visible, user-editable doc (Sheaf/Voice Guide.md).",
+        "Run the deterministic stylometry over writing you supply — e.g. pages from the user's personal site or files you fetched/read yourself — and compare it to their saved voice profile. Use this to fold extra sources into the voice guide: gather the text with your own tools (WebFetch/Read; crawl as asked), call this to measure it, then write the takeaways into `Sheaf/Voice Guide.md`. Stateless: it does not change the saved profile.",
       inputSchema: {
-        guide_md: z
-          .string()
+        samples: z
+          .array(
+            z.object({
+              label: z
+                .string()
+                .max(200)
+                .optional()
+                .describe("Where this came from, e.g. a URL or filename."),
+              content: z
+                .string()
+                .min(1)
+                .max(LIMITS.analyzeContent)
+                .describe("The raw text/markdown to analyze."),
+            }),
+          )
           .min(1)
-          .max(LIMITS.styleGuide)
-          .describe("The distilled voice guide, in markdown (compact — a page or less)."),
+          .max(20)
+          .describe("One entry per source page/file."),
+        compare: z
+          .boolean()
+          .optional()
+          .describe("Compare against the saved vault profile (default true)."),
       },
-      annotations: { readOnlyHint: false, openWorldHint: false },
+      annotations: { readOnlyHint: true, openWorldHint: true },
     },
-    async ({ guide_md }) => {
+    async ({ samples, compare }) => {
       try {
         const config = await backend.readStyleConfig();
-        const load = await loadOrRefreshProfile(backend, config);
-        const profile = load.profile;
+        const contents = samples.map((s) => s.content);
+        const metrics = computeMetrics(contents);
+        const summary = renderMetricsSummary(metrics, config.prefs);
+        const per_sample = samples.map((s) => ({
+          label: s.label ?? null,
+          word_count: tokenizeWords(stripMarkdown(s.content).prose).length,
+        }));
 
-        profile.guide_md = guide_md;
-        profile.guide_generated_at = Date.now();
-        profile.guide_doc_count = profile.fingerprint.doc_count;
-        await backend.writeStyleProfile(profile);
+        let comparison: Record<string, unknown> | null = null;
+        if (compare !== false) {
+          const load = await loadOrRefreshProfile(backend, config);
+          if (load.profile.metrics.word_count > 0) {
+            comparison = {
+              ...compareMetrics(metrics, load.profile.metrics),
+              profile_summary: renderMetricsSummary(
+                load.profile.metrics,
+                config.prefs,
+              ),
+            };
+          }
+        }
 
-        // Mirror to a visible, user-editable vault doc (excluded from the
-        // corpus by default so it can't feed itself).
-        await backend.writeDoc(VOICE_GUIDE_PATH, "main", guide_md, undefined, "agent");
+        const lines = [
+          "# Style analysis of supplied samples",
+          summary,
+        ];
+        if (comparison) {
+          lines.push(
+            "",
+            "## Compared to your saved voice (source minus your average)",
+            `- function-word drift: ${comparison.function_word_drift} (0 = identical, 1 = unrelated)`,
+            `- sentence length Δ: ${comparison.sentence_mean_delta} words`,
+            `- burstiness Δ: ${comparison.sentence_burstiness_delta}`,
+            `- contraction Δ: ${comparison.contraction_delta}`,
+            "",
+            "Decide what to carry into your voice guide (`Sheaf/Voice Guide.md`).",
+          );
+        }
 
         return {
-          content: [
-            {
-              type: "text",
-              text: `Saved voice guide (${guide_md.length} chars). Mirrored to ${VOICE_GUIDE_PATH} — the user can edit it there.`,
-            },
-          ],
+          content: [{ type: "text", text: lines.join("\n") }],
           structuredContent: {
-            ok: true,
-            guide_chars: guide_md.length,
-            path: VOICE_GUIDE_PATH,
+            metrics,
+            metrics_summary: summary,
+            per_sample,
+            comparison,
           },
         };
       } catch (e) {

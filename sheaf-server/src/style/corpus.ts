@@ -63,7 +63,10 @@ export function selectCorpus(
 
 export type ProfileLoad = {
   profile: StyleProfile;
+  /** Corpus after exclude globs (the user's writing). */
   corpus: CorpusFile[];
+  /** Every visible md doc, pre-exclude — lets callers find the guide doc mtime. */
+  allFiles: CorpusFile[];
   low_corpus: boolean;
   sampled: boolean;
   recomputed: boolean;
@@ -79,7 +82,8 @@ export async function loadOrRefreshProfile(
   io: StyleIO,
   config: StyleConfig,
 ): Promise<ProfileLoad> {
-  const corpus = selectCorpus(await io.statCorpus(), config);
+  const allFiles = await io.statCorpus();
+  const corpus = selectCorpus(allFiles, config);
   const fp = computeFingerprint(corpus);
   const ch = configHash(config);
   const cached = await io.readStyleProfile();
@@ -93,6 +97,7 @@ export async function loadOrRefreshProfile(
     return {
       profile: cached,
       corpus,
+      allFiles,
       low_corpus: cached.metrics.word_count < LOW_CORPUS_WORDS,
       sampled: false,
       recomputed: false,
@@ -129,9 +134,6 @@ export async function loadOrRefreshProfile(
     fingerprint: fp,
     config_hash: ch,
     metrics,
-    guide_md: cached?.guide_md ?? null,
-    guide_generated_at: cached?.guide_generated_at ?? null,
-    guide_doc_count: cached?.guide_doc_count ?? null,
     computed_at: Date.now(),
   };
   await io.writeStyleProfile(profile);
@@ -139,6 +141,7 @@ export async function loadOrRefreshProfile(
   return {
     profile,
     corpus,
+    allFiles,
     low_corpus: metrics.word_count < LOW_CORPUS_WORDS,
     sampled,
     recomputed: true,

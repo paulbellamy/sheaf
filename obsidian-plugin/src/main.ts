@@ -21,6 +21,7 @@ export default class SheafPlugin extends Plugin {
   private events!: SheafEventStream;
   private statusBar: HTMLElement | null = null;
   private host = new SheafServerHost();
+  private settingTab: SheafSettingTab | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -101,7 +102,8 @@ export default class SheafPlugin extends Plugin {
     this.statusBar = this.addStatusBarItem();
     this.updateStatusBar();
 
-    this.addSettingTab(new SheafSettingTab(this.app, this));
+    this.settingTab = new SheafSettingTab(this.app, this);
+    this.addSettingTab(this.settingTab);
 
     // Start the embedded server (if enabled) before opening the event stream
     // so the first SSE connect lands on a live server.
@@ -432,6 +434,7 @@ export default class SheafPlugin extends Plugin {
       case "agent_presence":
         this.agentConnected = event.connected;
         view?.setAgentPresence(event.connected);
+        this.settingTab?.onAgentPresenceChanged();
         this.updateStatusBar(event.connected);
         break;
       default:
