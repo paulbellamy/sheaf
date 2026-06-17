@@ -76,7 +76,7 @@ function registerGetStyle(server: McpServer, backend: Backend): void {
     {
       title: "GetStyle",
       description:
-        "Get the user's writing voice for a prose task: a compact distilled style guide, a metrics digest, explicit preferences, and 2-4 relevant exemplar passages from their vault. Call this before drafting or rewriting prose. Cheap and context-bounded.",
+        "Get the user's writing voice for a prose task: a compact distilled style guide (which carries their punctuation/word-choice rules), a metrics digest, and 2-4 relevant exemplar passages from their vault. Call this before drafting or rewriting prose. Cheap and context-bounded.",
       inputSchema: { topic: topicArg },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -116,7 +116,7 @@ function registerGetStyle(server: McpServer, backend: Backend): void {
           ? []
           : await selectExemplars(backend, config, corpus, topic);
 
-        const summary = renderMetricsSummary(profile.metrics, config.prefs);
+        const summary = renderMetricsSummary(profile.metrics);
 
         const structured = {
           enabled: true,
@@ -124,7 +124,6 @@ function registerGetStyle(server: McpServer, backend: Backend): void {
           guide_stale,
           low_corpus,
           metrics_summary: summary,
-          prefs: config.prefs,
           exemplars,
         };
 
@@ -202,11 +201,10 @@ function registerStyleSamples(server: McpServer, backend: Backend): void {
         );
 
         const existing_guide_md = await readGuide(backend);
-        const summary = renderMetricsSummary(profile.metrics, config.prefs);
+        const summary = renderMetricsSummary(profile.metrics);
         const structured = {
           metrics: profile.metrics,
           metrics_summary: summary,
-          prefs: config.prefs,
           samples,
           existing_guide_md,
         };
@@ -271,7 +269,7 @@ function registerAnalyzeSamples(server: McpServer, backend: Backend): void {
         const config = await backend.readStyleConfig();
         const contents = samples.map((s) => s.content);
         const metrics = computeMetrics(contents);
-        const summary = renderMetricsSummary(metrics, config.prefs);
+        const summary = renderMetricsSummary(metrics);
         const per_sample = samples.map((s) => ({
           label: s.label ?? null,
           word_count: tokenizeWords(stripMarkdown(s.content).prose).length,
@@ -283,10 +281,7 @@ function registerAnalyzeSamples(server: McpServer, backend: Backend): void {
           if (load.profile.metrics.word_count > 0) {
             comparison = {
               ...compareMetrics(metrics, load.profile.metrics),
-              profile_summary: renderMetricsSummary(
-                load.profile.metrics,
-                config.prefs,
-              ),
+              profile_summary: renderMetricsSummary(load.profile.metrics),
             };
           }
         }
@@ -330,7 +325,7 @@ function registerStyleCheck(server: McpServer, backend: Backend): void {
     {
       title: "StyleCheck",
       description:
-        "Deterministic 'humanize' lint: compares a candidate passage against the user's style profile and explicit preferences, flagging AI tells, banned phrases, and drift in sentence length / function words. Advisory — use it to self-correct before landing an edit.",
+        "Deterministic 'humanize' lint: compares a candidate passage against the user's measured style profile, flagging generic AI tells and drift in sentence length, em-dash use, and function words. (Voice-specific rules live in the guide from GetStyle.) Advisory — use it to self-correct before landing an edit.",
       inputSchema: {
         text: z
           .string()
@@ -347,7 +342,7 @@ function registerStyleCheck(server: McpServer, backend: Backend): void {
         const metrics =
           load.profile.metrics.word_count > 0 ? load.profile.metrics : null;
 
-        const report = styleCheck(text, metrics, config.prefs);
+        const report = styleCheck(text, metrics);
 
         const lines: string[] = [`verdict: ${report.verdict}`];
         if (report.suggestions.length > 0) {

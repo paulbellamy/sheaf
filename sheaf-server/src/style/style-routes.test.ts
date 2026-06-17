@@ -55,19 +55,19 @@ describe("style HTTP routes", () => {
   it("PUT persists a config the agent can read back", async () => {
     const config = defaultStyleConfig();
     config.enabled = false;
-    config.prefs.em_dash = "no";
-    config.prefs.banned_phrases = ["delve"];
+    config.exemplar_count = 4;
+    config.exclude_globs = ["**/Private/**"];
 
     const put = await inject("PUT", "/api/ui/style/config", config);
     expect(put.statusCode).toBe(200);
 
     const stored = await backend.readStyleConfig();
     expect(stored.enabled).toBe(false);
-    expect(stored.prefs.em_dash).toBe("no");
-    expect(stored.prefs.banned_phrases).toEqual(["delve"]);
+    expect(stored.exemplar_count).toBe(4);
+    expect(stored.exclude_globs).toEqual(["**/Private/**"]);
 
     const get = await inject("GET", "/api/ui/style/config");
-    expect(get.json().config.prefs.banned_phrases).toEqual(["delve"]);
+    expect(get.json().config.exclude_globs).toEqual(["**/Private/**"]);
   });
 
   it("PUT rejects an invalid config", async () => {

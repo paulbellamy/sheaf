@@ -8,15 +8,7 @@ import {
   stripMarkdown,
   styleCheck,
   tokenizeWords,
-  type StylePrefsLite,
 } from "./metrics";
-
-const DEFAULT_PREFS: StylePrefsLite = {
-  em_dash: "either",
-  oxford_comma: "either",
-  contractions: "either",
-  banned_phrases: [],
-};
 
 describe("stripMarkdown", () => {
   it("drops frontmatter, code, and markers but keeps prose + link text", () => {
@@ -112,22 +104,13 @@ describe("computeMetrics", () => {
 });
 
 describe("styleCheck", () => {
-  it("flags banned phrases as off", () => {
-    const r = styleCheck("This is very unique and special.", null, {
-      ...DEFAULT_PREFS,
-      banned_phrases: ["very unique"],
-    });
-    expect(r.hits.banned_phrases).toEqual([{ phrase: "very unique", count: 1 }]);
-    expect(r.verdict).toBe("off");
-  });
-
-  it("flags em-dashes when the user bans them", () => {
-    const r = styleCheck("First point — then another.", null, {
-      ...DEFAULT_PREFS,
-      em_dash: "no",
-    });
+  it("flags em-dash overuse vs a corpus that never uses them", () => {
+    const profile = computeMetrics([
+      "The cat sat on the mat. It was a warm day. We watched the rain start and stop.",
+    ]);
+    const r = styleCheck("First point — then another — and one more.", profile);
     expect(r.hits.em_dash).toBeGreaterThan(0);
-    expect(r.verdict).toBe("off");
+    expect(r.verdict).not.toBe("close");
     expect(r.suggestions.join(" ")).toMatch(/em-dash/i);
   });
 
@@ -135,18 +118,13 @@ describe("styleCheck", () => {
     const r = styleCheck(
       "Let us delve into the realm. Furthermore, this is a testament to robust, seamless design.",
       null,
-      DEFAULT_PREFS,
     );
     expect(r.hits.ai_tells.length).toBeGreaterThanOrEqual(3);
     expect(r.verdict).toBe("off");
   });
 
   it("passes clean prose with no profile", () => {
-    const r = styleCheck(
-      "The cat sat on the mat. It was a warm day.",
-      null,
-      DEFAULT_PREFS,
-    );
+    const r = styleCheck("The cat sat on the mat. It was a warm day.", null);
     expect(r.verdict).toBe("close");
     expect(r.has_profile).toBe(false);
     expect(r.suggestions).toHaveLength(0);
@@ -159,7 +137,6 @@ describe("styleCheck", () => {
     const r = styleCheck(
       "The team shipped the feature. The users liked it. We moved on to the next thing and it was fine.",
       profile,
-      DEFAULT_PREFS,
     );
     expect(r.has_profile).toBe(true);
     expect(r.deviations.function_word_drift).toBeLessThan(0.05);
@@ -188,15 +165,13 @@ describe("compareMetrics", () => {
 describe("renderMetricsSummary", () => {
   it("produces a compact multi-line digest", () => {
     const m = computeMetrics(["The cat sat. The dog ran. We watched them both."]);
-    const summary = renderMetricsSummary(m, DEFAULT_PREFS);
+    const summary = renderMetricsSummary(m);
     expect(summary).toMatch(/Sentences:/);
     expect(summary).toMatch(/Punctuation/);
     expect(summary.split("\n").length).toBeGreaterThanOrEqual(8);
   });
 
   it("notes an empty corpus", () => {
-    expect(renderMetricsSummary(computeMetrics([]), DEFAULT_PREFS)).toMatch(
-      /no corpus/i,
-    );
+    expect(renderMetricsSummary(computeMetrics([]))).toMatch(/no corpus/i);
   });
 });

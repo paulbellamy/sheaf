@@ -220,18 +220,18 @@ The flow on a prose task:
 
 1. \`GetStyle({ topic: "<a few keywords from the brief>" })\`. You get back a
    short **voice guide**, a **metrics digest** (sentence length, punctuation
-   habits, vocabulary), the user's explicit **preferences** (em-dash, Oxford
-   comma, contractions, banned phrases), and **2-4 exemplar passages** from
-   their own writing on (or near) the topic. This is bounded to ~1.5k tokens —
-   cheap to call on every prose thread.
-2. Draft in that voice — imitate the rhythm and diction of the exemplars, honor
-   the preferences, and avoid the AI tells the guide calls out.
+   habits, vocabulary), and **2-4 exemplar passages** from their own writing on
+   (or near) the topic. The guide is where punctuation and word-choice rules
+   live ("never uses em-dashes", "avoids 'delve'") — read and honor them. This
+   is bounded to ~1.5k tokens, cheap to call on every prose thread.
+2. Draft in that voice — imitate the rhythm and diction of the exemplars, follow
+   the guide's rules, and avoid the AI tells it calls out.
 3. Before you land the edit (or attach an option), \`StyleCheck({ text })\`. It's
-   a deterministic lint: it reports a \`verdict\` (\`close\` / \`drifting\` /
-   \`off\`) plus concrete suggestions (AI-tell phrasing, banned phrases,
-   sentence-length drift, em-dash overuse). If it's not \`close\`, revise using
-   the suggestions, then proceed. It's advisory — your judgment wins, but don't
-   ignore a hard hit (a banned phrase, or an em-dash when they've banned them).
+   a deterministic lint against the *measured* profile: it reports a \`verdict\`
+   (\`close\` / \`drifting\` / \`off\`) plus concrete suggestions (generic AI-tell
+   phrasing, sentence-length drift, em-dash overuse vs your corpus). If it's not
+   \`close\`, revise, then proceed. It's advisory and pref-free — it won't know
+   the guide's own rules, so enforce those yourself.
 
 If \`GetStyle\` reports \`low_corpus\` or has no guide yet, just write in a clear,
 neutral voice — don't invent a style from too little signal.
@@ -247,7 +247,10 @@ Either way:
    passages and the existing guide (if any).
 2. Read them and write a **compact** (≤400 word) prose style guide: how they
    build sentences, their diction and punctuation habits, how they structure a
-   piece, and what to avoid. Refine the existing guide rather than replace it.
+   piece, and what to avoid. Turn what the metrics reveal into concrete rules —
+   em-dash and contraction tendencies, Oxford-comma habit, words to avoid — since
+   the guide is the *only* place these live now. Refine the existing guide rather
+   than replace it.
 3. Save it by writing the doc \`Sheaf/Voice Guide.md\` with \`Write\` — that
    visible, user-editable doc *is* the guide (there's no separate save tool).
    Then, if this was a \`[sheaf:build-voice-guide]\` request thread,

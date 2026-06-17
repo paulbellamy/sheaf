@@ -29,13 +29,6 @@ export const LOW_CORPUS_WORDS = 400;
 export const METRICS_BYTE_CAP = 2 * 1024 * 1024;
 export const METRICS_DOC_CAP = 300;
 
-export type StylePrefs = {
-  em_dash: "yes" | "no" | "either";
-  oxford_comma: "yes" | "no" | "either";
-  contractions: "yes" | "no" | "either";
-  banned_phrases: string[];
-};
-
 export type StyleConfig = {
   /** User master switch. Voice matching only applies when this is true. */
   enabled: boolean;
@@ -49,7 +42,6 @@ export type StyleConfig = {
   refresh_after_doc_changes: number;
   /** How many exemplar passages `GetStyle` returns (clamped 1..4). */
   exemplar_count: number;
-  prefs: StylePrefs;
 };
 
 export type CorpusFingerprint = {
@@ -120,12 +112,6 @@ export function defaultStyleConfig(): StyleConfig {
     recency_half_life_days: 120,
     refresh_after_doc_changes: 25,
     exemplar_count: 3,
-    prefs: {
-      em_dash: "either",
-      oxford_comma: "either",
-      contractions: "either",
-      banned_phrases: [],
-    },
   };
 }
 
@@ -141,10 +127,6 @@ export function configHash(config: StyleConfig): string {
     exclude_globs: [...config.exclude_globs].sort(),
     recency_half_life_days: config.recency_half_life_days,
     exemplar_count: clampExemplarCount(config.exemplar_count),
-    prefs: {
-      ...config.prefs,
-      banned_phrases: [...config.prefs.banned_phrases].sort(),
-    },
   });
   return createHash("sha256").update(canonical).digest("hex").slice(0, 16);
 }

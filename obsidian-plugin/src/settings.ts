@@ -52,7 +52,6 @@ export function mergeStyle(loaded?: Partial<StyleConfig>): StyleConfig {
     ...base,
     ...loaded,
     exclude_globs: loaded.exclude_globs ?? base.exclude_globs,
-    prefs: { ...base.prefs, ...(loaded.prefs ?? {}) },
   };
 }
 
@@ -303,51 +302,13 @@ export class SheafSettingTab extends PluginSettingTab {
         s.settingEl.style.display = "block";
       });
 
-    const pref = (
-      name: string,
-      desc: string,
-      key: "em_dash" | "oxford_comma" | "contractions",
-    ) => {
-      new Setting(containerEl)
-        .setName(name)
-        .setDesc(desc)
-        .addDropdown((d) =>
-          d
-            .addOption("either", "No preference")
-            .addOption("yes", "Use")
-            .addOption("no", "Avoid")
-            .setValue(style.prefs[key])
-            .onChange((v) => {
-              style.prefs[key] = v as "yes" | "no" | "either";
-              save();
-            }),
-        );
-    };
-    pref("Em-dashes", "Whether you use em-dashes (—).", "em_dash");
-    pref("Oxford comma", "Serial comma before the final 'and'/'or'.", "oxford_comma");
-    pref("Contractions", "Whether you write don't / it's / we're.", "contractions");
-
-    new Setting(containerEl)
-      .setName("Banned phrases")
-      .setDesc(
-        "Phrases the agent must avoid (one per line) — your personal list of clichés or AI tells. StyleCheck flags these.",
-      )
-      .then((s) => {
-        const ta = s.controlEl.createEl("textarea");
-        ta.value = style.prefs.banned_phrases.join("\n");
-        ta.rows = 3;
-        ta.style.width = "100%";
-        ta.style.fontSize = "0.85em";
-        ta.placeholder = "delve\ngame-changer\nleverage";
-        ta.addEventListener("change", () => {
-          style.prefs.banned_phrases = ta.value
-            .split("\n")
-            .map((l) => l.trim())
-            .filter((l) => l.length > 0);
-          save();
-        });
-        s.settingEl.style.display = "block";
-      });
+    const guideNote = containerEl.createDiv();
+    guideNote.style.fontSize = "0.85em";
+    guideNote.style.opacity = "0.7";
+    guideNote.style.margin = "0.25em 0 0.75em";
+    guideNote.setText(
+      "Punctuation and word-choice rules (em-dashes, contractions, words to avoid) live in your voice guide — edit Sheaf/Voice Guide.md, or just tell the agent.",
+    );
 
     new Setting(containerEl)
       .setName("Exemplars per draft")

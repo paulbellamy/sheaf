@@ -22,7 +22,6 @@ export type {
   CorpusFingerprint,
   StyleConfig,
   StyleProfile,
-  StylePrefs,
 } from "../style/profile";
 
 export { defaultStyleConfig } from "../style/profile";

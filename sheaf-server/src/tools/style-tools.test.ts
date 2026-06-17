@@ -136,32 +136,23 @@ describe("style MCP tools end-to-end", () => {
     expect(after!.computed_at).toBe(before!.computed_at);
   });
 
-  it("StyleCheck flags AI tells and banned phrases", async () => {
-    await backend.writeStyleConfig({
-      ...(await backend.readStyleConfig()),
-      prefs: {
-        em_dash: "no",
-        oxford_comma: "either",
-        contractions: "either",
-        banned_phrases: ["game-changer"],
-      },
-    });
+  it("StyleCheck flags AI tells and em-dash overuse vs the corpus", async () => {
+    // Seed the profile from the (em-dash-free) corpus.
+    await client.callTool({ name: "GetStyle", arguments: {} });
 
     const res = (await client.callTool({
       name: "StyleCheck",
       arguments: {
-        text: "Let us delve into this realm — it is a robust, seamless game-changer. Furthermore, it is a testament to design.",
+        text: "Let us delve into this realm — it is a robust, seamless tapestry. Furthermore, it is a testament to design.",
       },
     })) as ToolResult;
     const sc = res.structuredContent!;
     expect(sc.verdict).toBe("off");
     const hits = sc.hits as {
       em_dash: number;
-      banned_phrases: { phrase: string }[];
       ai_tells: { phrase: string }[];
     };
     expect(hits.em_dash).toBeGreaterThan(0);
-    expect(hits.banned_phrases.some((b) => b.phrase === "game-changer")).toBe(true);
     expect(hits.ai_tells.length).toBeGreaterThanOrEqual(3);
   });
 

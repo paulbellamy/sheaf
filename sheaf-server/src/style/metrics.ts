@@ -31,7 +31,8 @@ const NGRAM_STOPWORDS = new Set<string>(FUNCTION_WORDS);
 
 /** Phrases the post-trained "blurry-JPEG" voice over-produces. Counts are
  *  reported per 1k words so they're comparable across passage lengths. The
- *  user's own `banned_phrases` are appended to this list at check time. */
+ *  user's own words-to-avoid live in their voice guide, which the agent reads
+ *  separately — this list is the generic, always-on baseline. */
 export const AI_TELL_PATTERNS: readonly { name: string; re: RegExp }[] = [
   { name: "delve", re: /\bdelve(?:s|d|ing)?\b/gi },
   { name: "leverage", re: /\bleverage(?:s|d|ing)?\b/gi },
@@ -369,19 +370,10 @@ export type StyleCheckReport = {
   };
   hits: {
     em_dash: number;
-    banned_phrases: { phrase: string; count: number }[];
     ai_tells: { phrase: string; count: number }[];
-    oxford_violations: number;
   };
   verdict: "close" | "drifting" | "off";
   suggestions: string[];
-};
-
-export type StylePrefsLite = {
-  em_dash: "yes" | "no" | "either";
-  oxford_comma: "yes" | "no" | "either";
-  contractions: "yes" | "no" | "either";
-  banned_phrases: string[];
 };
 
 /** Cosine distance (0 = identical direction, 1 = orthogonal) between two
@@ -425,19 +417,16 @@ export function compareMetrics(a: StyleMetrics, b: StyleMetrics): MetricComparis
   };
 }
 
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 /**
- * Compare a candidate passage against a profile + the user's explicit prefs.
- * Purely deterministic — the agent reads the verdict + suggestions and decides
- * whether to revise. Never throws; never blocks.
+ * Compare a candidate passage against the measured profile. Purely
+ * deterministic and pref-free — voice rules (em-dashes, words to avoid, …) live
+ * in the prose voice guide, which the agent reads separately. This flags drift
+ * from the *measured* style plus the built-in AI-tell list. Advisory; never
+ * throws or blocks.
  */
 export function styleCheck(
   text: string,
   profile: StyleMetrics | null,
-  prefs: StylePrefsLite,
 ): StyleCheckReport {
   const m = computeMetrics([text]);
   const hasProfile = profile !== null && profile.word_count > 0;
@@ -451,14 +440,6 @@ export function styleCheck(
         function_word_drift: 0,
       };
 
-  const banned: { phrase: string; count: number }[] = [];
-  for (const phrase of prefs.banned_phrases) {
-    if (!phrase.trim()) continue;
-    const re = new RegExp(`\\b${escapeRegExp(phrase.trim())}\\b`, "gi");
-    const count = countMatches(text, re);
-    if (count > 0) banned.push({ phrase: phrase.trim(), count });
-  }
-
   const tells: { phrase: string; count: number }[] = [];
   for (const { name, re } of AI_TELL_PATTERNS) {
     const count = countMatches(text, new RegExp(re.source, re.flags));
@@ -467,24 +448,15 @@ export function styleCheck(
   tells.sort((a, b) => b.count - a.count);
 
   const emDashCount = countMatches(text, /—|--/g);
-  const oxfordViolations =
-    prefs.oxford_comma === "no"
-      ? countMatches(text, /,\s+(?:and|or|nor)\b/gi)
-      : 0;
+  // "Overuse" is measured, not a preference: the corpus barely uses em-dashes
+  // but this draft does.
+  const emDashOveruse =
+    hasProfile && profile!.punctuation.em_dash === 0 && m.punctuation.em_dash > 0;
 
   const suggestions: string[] = [];
-  if (prefs.em_dash === "no" && emDashCount > 0) {
-    suggestions.push(
-      `${emDashCount} em-dash${emDashCount === 1 ? "" : "es"} — you prefer none; recast with commas, colons, or separate sentences.`,
-    );
-  } else if (hasProfile && profile!.punctuation.em_dash === 0 && m.punctuation.em_dash > 0) {
+  if (emDashOveruse) {
     suggestions.push(
       `Em-dashes appear here but never in your corpus — consider commas or periods instead.`,
-    );
-  }
-  if (banned.length > 0) {
-    suggestions.push(
-      `Banned phrasing: ${banned.map((b) => `"${b.phrase}" (${b.count})`).join(", ")}.`,
     );
   }
   if (tells.length > 0) {
@@ -500,7 +472,6 @@ export function styleCheck(
   }
   if (
     hasProfile &&
-    prefs.contractions !== "no" &&
     profile!.contraction_rate >= 0.5 &&
     m.contraction_rate < 0.2
   ) {
@@ -508,18 +479,11 @@ export function styleCheck(
       `You usually write with contractions; this reads more formal than your voice.`,
     );
   }
-  if (oxfordViolations > 0) {
-    suggestions.push(
-      `${oxfordViolations} serial comma${oxfordViolations === 1 ? "" : "s"} before a conjunction — you prefer none.`,
-    );
-  }
 
   // Roll the signals up into one verdict.
   let verdict: StyleCheckReport["verdict"] = "close";
-  const hardHits = banned.length + (prefs.em_dash === "no" && emDashCount > 0 ? 1 : 0);
   const drift = deviations.function_word_drift;
   if (
-    hardHits > 0 ||
     tells.length >= 3 ||
     drift >= 0.35 ||
     Math.abs(deviations.sentence_mean_delta) >= 10
@@ -529,7 +493,7 @@ export function styleCheck(
     tells.length >= 1 ||
     drift >= 0.18 ||
     Math.abs(deviations.sentence_mean_delta) >= 6 ||
-    suggestions.length > 0
+    emDashOveruse
   ) {
     verdict = "drifting";
   }
@@ -537,23 +501,16 @@ export function styleCheck(
   return {
     has_profile: hasProfile,
     deviations,
-    hits: {
-      em_dash: emDashCount,
-      banned_phrases: banned,
-      ai_tells: tells,
-      oxford_violations: oxfordViolations,
-    },
+    hits: { em_dash: emDashCount, ai_tells: tells },
     verdict,
     suggestions,
   };
 }
 
 /** Human-readable digest of a profile — the compact form `GetStyle` returns
- *  instead of the full metric blob (~8-12 lines). */
-export function renderMetricsSummary(
-  m: StyleMetrics,
-  prefs: StylePrefsLite,
-): string {
+ *  instead of the full metric blob (~8-10 lines). Descriptive only; voice rules
+ *  live in the prose guide. */
+export function renderMetricsSummary(m: StyleMetrics): string {
   if (m.word_count === 0) return "(no corpus analyzed yet)";
   const topFn = Object.entries(m.function_words)
     .sort((a, b) => b[1] - a[1])
@@ -576,13 +533,9 @@ export function renderMetricsSummary(
     `Serial-comma tendency: ${Math.round(m.punctuation.oxford_comma_rate * 100)}%.`,
     `Frequent function words: ${topFn}.`,
     phrases ? `Recurring phrasing: ${phrases}.` : `Recurring phrasing: (none repeated).`,
-    `Preferences — em-dash: ${prefs.em_dash}, Oxford comma: ${prefs.oxford_comma}, contractions: ${prefs.contractions}.`,
   ];
   if (tells.length > 0) {
     lines.push(`Note: corpus already contains "${tells.join('", "')}" — not necessarily tells for you.`);
-  }
-  if (prefs.banned_phrases.length > 0) {
-    lines.push(`Banned phrases: ${prefs.banned_phrases.map((p) => `"${p}"`).join(", ")}.`);
   }
   return lines.join("\n");
 }

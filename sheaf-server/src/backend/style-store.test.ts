@@ -45,14 +45,14 @@ describe("StubBackend style store", () => {
 
     const next = defaultStyleConfig();
     next.enabled = false;
-    next.prefs.em_dash = "no";
-    next.prefs.banned_phrases = ["very unique"];
+    next.exemplar_count = 2;
+    next.exclude_globs = ["**/Private/**"];
     await backend.writeStyleConfig(next);
 
     const read = await backend.readStyleConfig();
     expect(read.enabled).toBe(false);
-    expect(read.prefs.em_dash).toBe("no");
-    expect(read.prefs.banned_phrases).toEqual(["very unique"]);
+    expect(read.exemplar_count).toBe(2);
+    expect(read.exclude_globs).toEqual(["**/Private/**"]);
   });
 
   it("round-trips a computed profile and keeps it out of the doc list", async () => {
