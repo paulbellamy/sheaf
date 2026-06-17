@@ -205,7 +205,8 @@ export function registerThreadTools(
     "ResolveThread",
     {
       title: "ResolveThread",
-      description: "Mark a thread as accepted (closes the conversation).",
+      description:
+        "Mark a thread as accepted (closes the conversation). Only resolve once all the work is done — the requested change has landed (or none was needed) and there are no outstanding questions or follow-ups for the user. If you asked a clarifying question, presented options to pick, or flagged a broader change, leave the thread open instead.",
       inputSchema: { thread_id: threadIdArg },
       annotations: { readOnlyHint: false, openWorldHint: false },
     },
