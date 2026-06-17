@@ -12,7 +12,7 @@ import { CommentModal } from "./views/comment-modal";
 import { ReviewModal } from "./views/review-modal";
 import { ThreadsView, VIEW_TYPE_SHEAF_THREADS } from "./views/threads-view";
 import { buildPanelRequestMessage } from "./review";
-import { flashField } from "./editor/flash";
+import { flashField, mountFlashStyles } from "./editor/flash";
 
 export default class SheafPlugin extends Plugin {
   settings: SheafSettings = DEFAULT_SETTINGS;
@@ -36,7 +36,12 @@ export default class SheafPlugin extends Plugin {
     );
 
     // Backs the transient highlight when a thread card is clicked (flash.ts).
+    // updateOptions() flushes the field into any editor already open when the
+    // plugin loads — registerEditorExtension alone only reaches editors opened
+    // afterward. mountFlashStyles injects the CSS (no separate styles.css).
     this.registerEditorExtension(flashField);
+    this.app.workspace.updateOptions();
+    this.register(mountFlashStyles());
 
     this.addRibbonIcon("message-square", "Sheaf threads", () => {
       void this.activateThreadsView();

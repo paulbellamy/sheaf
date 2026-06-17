@@ -46,3 +46,26 @@ export function flashRange(view: EditorView, from: number, to: number): void {
     view.dispatch({ effects: clearFlash.of(null) });
   }, FLASH_MS);
 }
+
+/**
+ * Styles for the `sheaf-flash` decoration. Injected from JS (see main.ts)
+ * rather than shipped as a separate styles.css: the plugin installs as a
+ * drop-in `main.js` + `manifest.json` (see README), so a standalone
+ * stylesheet wouldn't travel with it. Mounting from code keeps the flash
+ * self-contained in the bundle. Returns a disposer that removes the <style>.
+ */
+export function mountFlashStyles(): () => void {
+  const style = document.createElement("style");
+  style.textContent = `
+@keyframes sheaf-flash {
+  from { background-color: var(--text-highlight-bg, rgba(255, 208, 0, 0.4)); }
+  to   { background-color: transparent; }
+}
+.sheaf-flash {
+  border-radius: 2px;
+  animation: sheaf-flash ${FLASH_MS}ms ease-out;
+}`;
+  document.head.appendChild(style);
+  return () => style.remove();
+}
+
