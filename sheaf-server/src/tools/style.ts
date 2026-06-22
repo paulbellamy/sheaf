@@ -16,6 +16,7 @@ import {
   renderMetricsSummary,
   stripMarkdown,
   styleCheck,
+  styleDistance,
   tokenizeWords,
 } from "../style/metrics";
 import {
@@ -48,6 +49,7 @@ export function registerStyleTools(server: McpServer, backend: Backend): void {
   registerStyleSamples(server, backend);
   registerAnalyzeSamples(server, backend);
   registerStyleCheck(server, backend);
+  registerStyleJudge(server, backend);
 }
 
 /** Read the distilled guide from the visible doc, or null if absent / still the
@@ -349,6 +351,11 @@ function registerStyleCheck(server: McpServer, backend: Backend): void {
           "## Mechanical checks (deterministic)",
           `verdict: ${report.verdict}`,
         ];
+        if (report.style_distance !== null) {
+          lines.push(
+            `style distance: ${report.style_distance} (0 = identical to your measured voice; aim < 0.15)`,
+          );
+        }
         if (report.suggestions.length > 0) {
           lines.push("", "suggestions:");
           for (const s of report.suggestions) lines.push(`- ${s}`);
@@ -383,6 +390,78 @@ function registerStyleCheck(server: McpServer, backend: Backend): void {
         return {
           content: [{ type: "text", text: lines.join("\n") }],
           structuredContent: { ...report, guide_md: guide },
+        };
+      } catch (e) {
+        return toToolError(e);
+      }
+    },
+  );
+}
+
+function registerStyleJudge(server: McpServer, backend: Backend): void {
+  server.registerTool(
+    "StyleJudge",
+    {
+      title: "StyleJudge",
+      description:
+        "A comparative 'voice critic' pass: returns your candidate rewrite next to real passages of the user's own writing, plus the candidate's measured style-distance, so you can judge — harshly and impartially — whether it reads like the same author, and revise until it does. Stronger than StyleCheck's mechanical lint; use it as the review step of a bounded revise loop. For a truly blind test, have a separate sub-agent do the judging.",
+      inputSchema: {
+        candidate: z
+          .string()
+          .min(1)
+          .max(LIMITS.styleText)
+          .describe("The rewrite to judge."),
+        topic: topicArg,
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ candidate, topic }) => {
+      try {
+        const config = await backend.readStyleConfig();
+        const load = await loadOrRefreshProfile(backend, config);
+        const { profile, corpus, low_corpus } = load;
+
+        const reals = low_corpus
+          ? []
+          : await selectExemplars(backend, config, corpus, topic);
+        const candDist =
+          profile.metrics.word_count > 0
+            ? styleDistance(computeMetrics([candidate]), profile.metrics)
+            : null;
+
+        const cappedCandidate =
+          candidate.length > 6000 ? candidate.slice(0, 6000) + "…" : candidate;
+
+        const lines: string[] = [
+          "# Voice critic pass",
+          "Read this as a harsh, impartial stranger. Below is a CANDIDATE rewrite and real passages of the user's own writing. Does the candidate read like the same author? Pinpoint what gives it away — rhythm, diction, punctuation, hedging, AI tells — and revise the candidate to match, or report that it's indistinguishable.",
+          candDist !== null
+            ? `Candidate style-distance from the profile: ${candDist} (0 = identical on measurable axes; low is necessary, not sufficient).`
+            : "No corpus profile yet — judge against the passages below by feel.",
+          "For a genuinely blind test, have a separate sub-agent judge without knowing which passage is the candidate.",
+          "",
+          "## Candidate",
+          cappedCandidate,
+        ];
+        if (reals.length > 0) {
+          lines.push("", "## Real passages (the user's writing)");
+          for (const r of reals) lines.push(`### ${r.path}\n${r.excerpt}`);
+        } else {
+          lines.push(
+            "",
+            low_corpus
+              ? "_(corpus too small for reference passages)_"
+              : "_(no reference passages found)_",
+          );
+        }
+
+        return {
+          content: [{ type: "text", text: lines.join("\n") }],
+          structuredContent: {
+            candidate_style_distance: candDist,
+            low_corpus,
+            real_samples: reals,
+          },
         };
       } catch (e) {
         return toToolError(e);

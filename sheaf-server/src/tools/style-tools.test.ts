@@ -162,9 +162,30 @@ describe("style MCP tools end-to-end", () => {
     };
     expect(hits.em_dash).toBeGreaterThan(0);
     expect(hits.ai_tells.length).toBeGreaterThanOrEqual(3);
+    // A 0..1 style_distance is surfaced when a profile exists.
+    expect(typeof sc.style_distance).toBe("number");
     // The voice guide is returned so the agent can apply its written rules.
     expect(sc.guide_md).toContain("Never use em-dashes");
     expect(res.content[0].text!).toContain("Avoid the word 'tapestry'");
+  });
+
+  it("StyleJudge returns the candidate beside real passages + a style distance", async () => {
+    await client.callTool({ name: "GetStyle", arguments: {} });
+
+    const res = (await client.callTool({
+      name: "StyleJudge",
+      arguments: {
+        candidate:
+          "Let us delve into this realm — a robust, seamless tapestry, moreover.",
+        topic: "shipping changes",
+      },
+    })) as ToolResult;
+    const sc = res.structuredContent!;
+    expect(typeof sc.candidate_style_distance).toBe("number");
+    expect(Array.isArray(sc.real_samples)).toBe(true);
+    expect((sc.real_samples as unknown[]).length).toBeGreaterThan(0);
+    expect(res.content[0].text!).toContain("Voice critic pass");
+    expect(res.content[0].text!).toContain("delve into this realm");
   });
 
   it("GetStyle short-circuits when voice matching is disabled", async () => {

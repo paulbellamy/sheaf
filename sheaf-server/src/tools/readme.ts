@@ -210,7 +210,10 @@ and can be ignored.
 - \`GetStyle({topic?})\` — the user's writing voice for a prose task: compact
   guide + metrics + preferences + relevant exemplars. Call before drafting prose.
 - \`StyleCheck({text})\` — deterministic lint of a draft against the measured
-  profile, **plus the voice guide** so you can judge its written rules too.
+  profile (verdict + 0..1 \`style_distance\`), **plus the voice guide** so you can
+  judge its written rules too.
+- \`StyleJudge({candidate})\` — stronger review: your draft beside real passages
+  of the user's writing, for a critic/discrimination pass before you land it.
 - \`StyleSamples()\` — vault metrics + sample passages to bootstrap the guide;
   save the guide by \`Write\`-ing \`Sheaf/Voice Guide.md\`.
 - \`AnalyzeSamples({samples})\` — measure writing you supply (fetched site/files)
@@ -246,13 +249,22 @@ The flow on a prose task:
    is bounded to ~1.5k tokens, cheap to call on every prose thread.
 2. Draft in that voice — imitate the rhythm and diction of the exemplars, follow
    the guide's rules, and avoid the AI tells it calls out.
-3. Before you land the edit (or attach an option), \`StyleCheck({ text })\`. It
-   returns **two** things: a deterministic lint against the *measured* profile (a
-   \`verdict\` plus suggestions — generic AI-tell phrasing, sentence-length drift,
-   em-dash overuse vs your corpus), **and the voice guide itself**. The mechanical
-   verdict does not cover the guide's written rules — read the passage against the
-   returned guide and fix anything that breaks it. Revise if either flags
-   something, then proceed. Advisory.
+3. Before you land the edit (or attach an option), run a **bounded
+   check-and-revise loop** (at most ~3 passes):
+   a. \`StyleCheck({ text })\` — a deterministic lint against the *measured*
+      profile (a \`verdict\`, a 0..1 \`style_distance\`, and suggestions: AI-tell
+      phrasing, sentence-length drift, em-dash overuse) **plus the voice guide
+      itself**. The mechanical lint does not cover the guide's written rules —
+      read the passage against the returned guide and fix anything that breaks
+      them.
+   b. If the verdict isn't \`close\` (or \`style_distance\` ≥ ~0.15), or a guide
+      rule is broken, revise and re-check. Stop once it's \`close\` and the guide
+      is satisfied, or after ~3 passes — **don't chase the number into stilted
+      prose**; a low distance is necessary, not sufficient, and clarity wins.
+   c. For a higher-stakes rewrite, escalate to \`StyleJudge({ candidate })\`: it
+      sets your draft beside real passages of the user's writing so you can
+      judge, as a stranger, whether it reads like the same author — then revise.
+   Then land the edit. All of this is advisory — your judgment wins.
 
 If \`GetStyle\` reports \`low_corpus\` or has no guide yet, just write in a clear,
 neutral voice — don't invent a style from too little signal.

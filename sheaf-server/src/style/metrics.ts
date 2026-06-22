@@ -372,6 +372,9 @@ export type StyleCheckReport = {
     em_dash: number;
     ai_tells: { phrase: string; count: number }[];
   };
+  /** 0..1 blended distance from the measured profile (lower = closer); null
+   *  when there's no profile to compare against. The loop's stop signal. */
+  style_distance: number | null;
   verdict: "close" | "drifting" | "off";
   suggestions: string[];
 };
@@ -415,6 +418,74 @@ export function compareMetrics(a: StyleMetrics, b: StyleMetrics): MetricComparis
     sentence_burstiness_delta: round(a.sentence.burstiness - b.sentence.burstiness),
     contraction_delta: round(a.contraction_rate - b.contraction_rate),
   };
+}
+
+const clamp01 = (x: number): number => Math.max(0, Math.min(1, x));
+
+function punctuationDistance(
+  a: StyleMetrics["punctuation"],
+  b: StyleMetrics["punctuation"],
+): number {
+  const keys = [
+    "em_dash",
+    "en_dash",
+    "semicolon",
+    "colon",
+    "parens",
+    "exclamation",
+    "question",
+    "ellipsis",
+  ] as const;
+  let sum = 0;
+  for (const k of keys) sum += clamp01(Math.abs(a[k] - b[k]) / 5);
+  return sum / keys.length;
+}
+
+function totalTellRate(t: Record<string, number>): number {
+  return Object.values(t).reduce((s, n) => s + n, 0);
+}
+
+/**
+ * A single 0..1 "style distance" of a candidate vs the profile (lower = closer)
+ * — an objective stop-condition for a draft → check → revise loop. A weighted
+ * blend of the component deltas, dominated by the function-word fingerprint.
+ *
+ * Necessary, not sufficient: a low distance means the *measurable* axes line up,
+ * not that the prose is good or that it follows the guide's qualitative rules.
+ * Don't optimize it to zero — past a point you're Goodharting the metric into
+ * stilted text. Returns 0 when there's nothing to compare against.
+ */
+export function styleDistance(
+  candidate: StyleMetrics,
+  profile: StyleMetrics,
+): number {
+  if (profile.word_count === 0 || candidate.word_count === 0) return 0;
+  const fnDrift = functionWordDrift(
+    candidate.function_words,
+    profile.function_words,
+  );
+  const sentence = clamp01(
+    Math.abs(candidate.sentence.mean_len - profile.sentence.mean_len) / 12,
+  );
+  const burst = clamp01(
+    Math.abs(candidate.sentence.burstiness - profile.sentence.burstiness) / 0.5,
+  );
+  const contraction = clamp01(
+    Math.abs(candidate.contraction_rate - profile.contraction_rate),
+  );
+  const punct = punctuationDistance(candidate.punctuation, profile.punctuation);
+  // Penalize only AI-tells the candidate adds beyond what the corpus already has.
+  const tells = clamp01(
+    Math.max(0, totalTellRate(candidate.ai_tells) - totalTellRate(profile.ai_tells)) / 10,
+  );
+  const d =
+    0.4 * fnDrift +
+    0.2 * sentence +
+    0.1 * burst +
+    0.1 * contraction +
+    0.1 * punct +
+    0.1 * tells;
+  return round(d);
 }
 
 /**
@@ -480,20 +551,29 @@ export function styleCheck(
     );
   }
 
+  const styleDist = hasProfile ? styleDistance(m, profile!) : null;
+  if (styleDist !== null && styleDist >= 0.15) {
+    suggestions.push(
+      `Overall style distance ${styleDist} (aim < 0.15) — the draft diverges from your measured voice on sentence rhythm, function words, or punctuation.`,
+    );
+  }
+
   // Roll the signals up into one verdict.
   let verdict: StyleCheckReport["verdict"] = "close";
   const drift = deviations.function_word_drift;
   if (
     tells.length >= 3 ||
     drift >= 0.35 ||
-    Math.abs(deviations.sentence_mean_delta) >= 10
+    Math.abs(deviations.sentence_mean_delta) >= 10 ||
+    (styleDist !== null && styleDist >= 0.3)
   ) {
     verdict = "off";
   } else if (
     tells.length >= 1 ||
     drift >= 0.18 ||
     Math.abs(deviations.sentence_mean_delta) >= 6 ||
-    emDashOveruse
+    emDashOveruse ||
+    (styleDist !== null && styleDist >= 0.15)
   ) {
     verdict = "drifting";
   }
@@ -502,6 +582,7 @@ export function styleCheck(
     has_profile: hasProfile,
     deviations,
     hits: { em_dash: emDashCount, ai_tells: tells },
+    style_distance: styleDist,
     verdict,
     suggestions,
   };

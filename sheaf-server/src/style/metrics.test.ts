@@ -7,6 +7,7 @@ import {
   splitSentences,
   stripMarkdown,
   styleCheck,
+  styleDistance,
   tokenizeWords,
 } from "./metrics";
 
@@ -159,6 +160,42 @@ describe("compareMetrics", () => {
     const cmp = compareMetrics(terse, verbose);
     expect(cmp.sentence_mean_delta).toBeLessThan(0); // terse has shorter sentences
     expect(Math.abs(cmp.function_word_drift)).toBeGreaterThan(0);
+  });
+});
+
+describe("styleDistance", () => {
+  it("is ~0 for identical text and larger for divergent text, bounded 0..1", () => {
+    const profile = computeMetrics([
+      "The team shipped the change. Nobody noticed at first. Then the numbers moved and we knew.",
+    ]);
+    const near = styleDistance(profile, profile);
+    expect(near).toBeLessThan(0.05);
+
+    const far = styleDistance(
+      computeMetrics([
+        "Furthermore, we must delve into the realm — it is a robust, seamless tapestry; moreover, leveraging synergies remains, arguably, a pivotal testament to the ever-evolving landscape.",
+      ]),
+      profile,
+    );
+    expect(far).toBeGreaterThan(near);
+    expect(far).toBeGreaterThanOrEqual(0);
+    expect(far).toBeLessThanOrEqual(1);
+  });
+
+  it("returns 0 when there's nothing to compare", () => {
+    const profile = computeMetrics(["A short note here."]);
+    expect(styleDistance(computeMetrics([]), profile)).toBe(0);
+    expect(styleDistance(profile, computeMetrics([]))).toBe(0);
+  });
+
+  it("is surfaced on the StyleCheck report when a profile exists", () => {
+    const profile = computeMetrics([
+      "The cat sat on the mat. It was a warm day. We watched the rain.",
+    ]);
+    const withProfile = styleCheck("A calm, plain sentence about nothing.", profile);
+    expect(withProfile.style_distance).not.toBeNull();
+    const noProfile = styleCheck("A calm, plain sentence.", null);
+    expect(noProfile.style_distance).toBeNull();
   });
 });
 
