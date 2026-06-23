@@ -188,6 +188,28 @@ describe("style MCP tools end-to-end", () => {
     expect(res.content[0].text!).toContain("delve into this realm");
   });
 
+  it("StyleJudge blind mode hides the candidate among real passages with an answer key", async () => {
+    await client.callTool({ name: "GetStyle", arguments: {} });
+
+    const candidate =
+      "Let us delve into this realm — a robust, seamless tapestry, moreover.";
+    const res = (await client.callTool({
+      name: "StyleJudge",
+      arguments: { candidate, blind: true },
+    })) as ToolResult;
+    const sc = res.structuredContent!;
+    expect(sc.blind).toBe(true);
+    const passages = sc.passages as { label: string; text: string }[];
+    // Candidate + the real passages, all present and shuffled together.
+    expect(passages.length).toBeGreaterThan(1);
+    const idx = sc.candidate_index as number;
+    expect(passages[idx].text).toContain("delve into this realm");
+    expect(sc.candidate_label).toBe(`Passage ${idx + 1}`);
+    // The packet instructs delegating to a sub-agent and carries an answer key.
+    expect(res.content[0].text!).toContain("fresh sub-agent");
+    expect(res.content[0].text!).toContain("ANSWER KEY");
+  });
+
   it("GetStyle short-circuits when voice matching is disabled", async () => {
     await backend.writeStyleConfig({
       ...(await backend.readStyleConfig()),

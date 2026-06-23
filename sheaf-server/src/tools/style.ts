@@ -398,13 +398,22 @@ function registerStyleCheck(server: McpServer, backend: Backend): void {
   );
 }
 
+/** Deterministic 0..mod-1 index from a string, so the blind packet's candidate
+ *  position is stable (reproducible) without being predictably first. */
+function stableIndex(s: string, mod: number): number {
+  if (mod <= 0) return 0;
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return h % mod;
+}
+
 function registerStyleJudge(server: McpServer, backend: Backend): void {
   server.registerTool(
     "StyleJudge",
     {
       title: "StyleJudge",
       description:
-        "A comparative 'voice critic' pass: returns your candidate rewrite next to real passages of the user's own writing, plus the candidate's measured style-distance, so you can judge — harshly and impartially — whether it reads like the same author, and revise until it does. Stronger than StyleCheck's mechanical lint; use it as the review step of a bounded revise loop. For a truly blind test, have a separate sub-agent do the judging.",
+        "A comparative 'voice critic' pass over a candidate rewrite. Default: returns the candidate next to real passages of the user's writing + its style-distance, for you to judge whether it reads like the same author. With `blind: true`, returns a shuffled, unlabeled packet (candidate hidden among real passages) plus an answer key for YOU only — hand the packet to a fresh sub-agent (e.g. the Task tool) to pick the odd-one-out, then compare to the key: if it fingers the candidate, the rewrite is distinguishable; revise. Use as the review step of a bounded revise loop.",
       inputSchema: {
         candidate: z
           .string()
@@ -412,10 +421,16 @@ function registerStyleJudge(server: McpServer, backend: Backend): void {
           .max(LIMITS.styleText)
           .describe("The rewrite to judge."),
         topic: topicArg,
+        blind: z
+          .boolean()
+          .optional()
+          .describe(
+            "Return a shuffled, unlabeled packet + answer key for a blind sub-agent discrimination test.",
+          ),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ candidate, topic }) => {
+    async ({ candidate, topic, blind }) => {
       try {
         const config = await backend.readStyleConfig();
         const load = await loadOrRefreshProfile(backend, config);
@@ -432,13 +447,69 @@ function registerStyleJudge(server: McpServer, backend: Backend): void {
         const cappedCandidate =
           candidate.length > 6000 ? candidate.slice(0, 6000) + "…" : candidate;
 
+        // --- Blind mode: a shuffled, unlabeled discrimination packet ---------
+        if (blind) {
+          if (reals.length === 0) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: "Can't run a blind test — no reference passages (corpus too small or none found). Fall back to a non-blind critic pass (call without `blind`).",
+                },
+              ],
+              structuredContent: { blind: true, low_corpus, candidate_style_distance: candDist },
+            };
+          }
+          const items = reals.map((r) => ({ text: r.excerpt, candidate: false }));
+          const idx = stableIndex(candidate, items.length + 1);
+          items.splice(idx, 0, { text: cappedCandidate, candidate: true });
+          const candidateIndex = items.findIndex((it) => it.candidate);
+          const candidateLabel = `Passage ${candidateIndex + 1}`;
+          const passages = items.map((it, i) => ({
+            label: `Passage ${i + 1}`,
+            text: it.text,
+          }));
+
+          const text = [
+            "# Blind voice check — delegate to a fresh sub-agent",
+            "Spawn a fresh sub-agent (e.g. the Task tool) and give it ONLY the passages below, verbatim. Do NOT tell it which is which, that one is a rewrite, or anything about this task. Ask it exactly:",
+            "",
+            "> These passages may be by different authors; one may be an imitation of the others' author. Which single passage least matches that author's voice, and why?",
+            "",
+            "Then map its answer back with the key below. If it names the candidate, the rewrite is distinguishable — revise and re-run. If it names a real passage or can't decide, the rewrite passes this blind test.",
+            candDist !== null
+              ? `Candidate style-distance: ${candDist} (measurable axes only).`
+              : "",
+            "",
+            "## Passages (hand these to the sub-agent)",
+            ...passages.map((p) => `### ${p.label}\n${p.text}`),
+            "",
+            `## ANSWER KEY — do NOT show the sub-agent`,
+            `The candidate (rewrite) is ${candidateLabel}.`,
+          ]
+            .filter((l) => l.length > 0)
+            .join("\n");
+
+          return {
+            content: [{ type: "text", text }],
+            structuredContent: {
+              blind: true,
+              candidate_index: candidateIndex,
+              candidate_label: candidateLabel,
+              candidate_style_distance: candDist,
+              passages,
+            },
+          };
+        }
+
+        // --- Default: labeled comparative critic pass ------------------------
         const lines: string[] = [
           "# Voice critic pass",
           "Read this as a harsh, impartial stranger. Below is a CANDIDATE rewrite and real passages of the user's own writing. Does the candidate read like the same author? Pinpoint what gives it away — rhythm, diction, punctuation, hedging, AI tells — and revise the candidate to match, or report that it's indistinguishable.",
           candDist !== null
             ? `Candidate style-distance from the profile: ${candDist} (0 = identical on measurable axes; low is necessary, not sufficient).`
             : "No corpus profile yet — judge against the passages below by feel.",
-          "For a genuinely blind test, have a separate sub-agent judge without knowing which passage is the candidate.",
+          "For a genuinely blind test, call again with `blind: true` and hand the packet to a fresh sub-agent.",
           "",
           "## Candidate",
           cappedCandidate,

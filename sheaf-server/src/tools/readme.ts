@@ -212,8 +212,9 @@ and can be ignored.
 - \`StyleCheck({text})\` — deterministic lint of a draft against the measured
   profile (verdict + 0..1 \`style_distance\`), **plus the voice guide** so you can
   judge its written rules too.
-- \`StyleJudge({candidate})\` — stronger review: your draft beside real passages
-  of the user's writing, for a critic/discrimination pass before you land it.
+- \`StyleJudge({candidate, blind?})\` — stronger review: your draft beside real
+  passages (critic pass), or \`blind: true\` for a shuffled, unlabeled packet to
+  hand a fresh sub-agent for a blind discrimination test.
 - \`StyleSamples()\` — vault metrics + sample passages to bootstrap the guide;
   save the guide by \`Write\`-ing \`Sheaf/Voice Guide.md\`.
 - \`AnalyzeSamples({samples})\` — measure writing you supply (fetched site/files)
@@ -261,9 +262,15 @@ The flow on a prose task:
       rule is broken, revise and re-check. Stop once it's \`close\` and the guide
       is satisfied, or after ~3 passes — **don't chase the number into stilted
       prose**; a low distance is necessary, not sufficient, and clarity wins.
-   c. For a higher-stakes rewrite, escalate to \`StyleJudge({ candidate })\`: it
-      sets your draft beside real passages of the user's writing so you can
-      judge, as a stranger, whether it reads like the same author — then revise.
+   c. For a higher-stakes rewrite, escalate to \`StyleJudge({ candidate })\` — it
+      sets your draft beside real passages of the user's writing for a critic
+      pass. For the strongest, *blind* check, call \`StyleJudge({ candidate,
+      blind: true })\`: it returns a shuffled, unlabeled packet (your draft hidden
+      among real passages) plus an answer key for you. Hand the packet to a
+      **fresh sub-agent** (e.g. the Task tool) to name the odd-one-out, then
+      compare its pick to the key — if it fingers your draft, it's
+      distinguishable, so revise. (Sheaf can't spawn the sub-agent; that's yours
+      to run, and don't leak the answer key to it.)
    Then land the edit. All of this is advisory — your judgment wins.
 
 If \`GetStyle\` reports \`low_corpus\` or has no guide yet, just write in a clear,
