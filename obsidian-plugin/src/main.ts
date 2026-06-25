@@ -1,4 +1,12 @@
-import { Editor, FileSystemAdapter, MarkdownView, Notice, Plugin } from "obsidian";
+import {
+  Editor,
+  FileSystemAdapter,
+  MarkdownView,
+  Notice,
+  Plugin,
+  TAbstractFile,
+  TFile,
+} from "obsidian";
 
 import { SheafApiError, SheafClient } from "./sheaf-client";
 import { SheafEventStream, type BackendEvent } from "./sheaf-events";
@@ -103,6 +111,16 @@ export default class SheafPlugin extends Plugin {
               }
             });
         });
+      }),
+    );
+
+    // A vault rename moves the `.md` but leaves sheaf's sidecars (threads,
+    // version history, drafts) pinned to the old path. Reconcile them on the
+    // server — which also wakes the connected agent — and follow the rename in
+    // the open threads panel so it doesn't go blank on the now-stale path.
+    this.registerEvent(
+      this.app.vault.on("rename", (file, oldPath) => {
+        void this.onFileRenamed(file, oldPath);
       }),
     );
 
@@ -217,6 +235,28 @@ export default class SheafPlugin extends Plugin {
    */
   vaultPathToSheafPath(vaultPath: string): string {
     return vaultPath;
+  }
+
+  /**
+   * Handle a vault rename. Only markdown renames carry sheaf state; folder and
+   * non-`.md` renames are ignored. Pushes the path change to the server (best
+   * effort — the server may be down or external) and tells the threads panel to
+   * re-anchor if it was showing the renamed doc.
+   */
+  private async onFileRenamed(
+    file: TAbstractFile,
+    oldPath: string,
+  ): Promise<void> {
+    if (!(file instanceof TFile) || file.extension !== "md") return;
+    const from = this.vaultPathToSheafPath(oldPath);
+    const to = this.vaultPathToSheafPath(file.path);
+    if (from === to) return;
+    try {
+      await this.client.renameDoc(from, to);
+    } catch (err) {
+      console.warn("sheaf: could not sync rename to server", err);
+    }
+    this.getThreadsView()?.onDocRenamed(from, to);
   }
 
   private async activateThreadsView(): Promise<void> {

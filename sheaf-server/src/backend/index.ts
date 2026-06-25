@@ -243,6 +243,20 @@ export interface Backend {
 
   readDoc(path: DocPath, ref?: Ref): Promise<DocContent>;
 
+  /**
+   * Reconcile sheaf's sidecar state after a doc has been renamed `from` → `to`.
+   *
+   * The `.md` move itself is the caller's job (in the Obsidian prototype the
+   * vault renames the file out from under us); this only fixes the metadata
+   * that would otherwise orphan: thread sidecars and their stored target
+   * paths, per-doc version counters/history, and any draft whose `base_path`
+   * or `touches` referenced `from`. Emits a `thread_changed` for every moved
+   * thread so the UI and the connected agent re-resolve against `to`.
+   *
+   * No-op when `from === to`. Returns the ids of the threads that moved.
+   */
+  renameDoc(from: DocPath, to: DocPath, origin?: Origin): Promise<ThreadId[]>;
+
   writeDoc(
     path: DocPath,
     ref: Ref,

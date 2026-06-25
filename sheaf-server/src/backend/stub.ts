@@ -688,6 +688,87 @@ export class StubBackend implements Backend {
     };
   }
 
+  renameDoc(from: DocPath, to: DocPath, origin: Origin = "ui"): Promise<ThreadId[]> {
+    return this.withLock(async () => {
+      assertVaultPath(from);
+      assertVaultPath(to);
+      if (from === to) return [];
+
+      // 1. Move every thread (main + draft-scoped) whose targets reference
+      //    `from`: rewrite the matching target paths, write the sidecar at its
+      //    new home, and delete the stale one. `saveThread` derives the sidecar
+      //    location from `targets[0].path`, so rewrite before saving.
+      const moved: { id: ThreadId; target_paths: DocPath[] }[] = [];
+      const staleDirs = new Set<string>();
+      for (const f of await this.allThreadFiles()) {
+        const raw = await readFileNoFollow(f);
+        const validated = threadOnDiskSchema.safeParse(yaml.parse(raw));
+        if (!validated.success) continue; // skip drifted/corrupt sidecar
+        const t = validated.data as Thread;
+        if (!t.targets.some((tg) => tg.path === from)) continue;
+        t.draft_id = this.draftIdFromFilePath(f);
+        t.targets = t.targets.map((tg) =>
+          tg.path === from ? { ...tg, path: to } : tg,
+        ) as Thread["targets"];
+        staleDirs.add(path.dirname(f));
+        await fs.rm(f, { force: true });
+        await this.saveThread(t);
+        moved.push({ id: t.id, target_paths: t.targets.map((tg) => tg.path) });
+      }
+      // Best-effort cleanup of the now-empty `<from>.threads/` dirs we emptied.
+      for (const dir of staleDirs) {
+        await fs.rmdir(dir).catch(() => {});
+      }
+
+      // 2. Carry the per-doc version counter + history across to `to` (the
+      //    doc's identity is its path). Don't clobber an existing `to`.
+      const counter = this.versionCounters.get(from);
+      if (counter !== undefined && !this.versionCounters.has(to)) {
+        this.versionCounters.set(to, counter);
+      }
+      this.versionCounters.delete(from);
+      const history = this.versionHistory.get(from);
+      if (history !== undefined && !this.versionHistory.has(to)) {
+        this.versionHistory.set(to, history);
+      }
+      this.versionHistory.delete(from);
+
+      // 3. Repoint any draft whose `base_path`/`touches` named `from`, and move
+      //    its override `.md` (the draft's working copy) to the new path.
+      for (const d of await this.listDrafts()) {
+        const touchedFrom =
+          d.base_path === from || (d.touches ?? []).includes(from);
+        if (!touchedFrom) continue;
+        const meta = await this.loadDraftMeta(d.draft_id);
+        if (meta.base_path === from) meta.base_path = to;
+        if (meta.touches) {
+          meta.touches = meta.touches.map((p) => (p === from ? to : p));
+        }
+        await this.saveDraftMeta(meta);
+        const src = this.absDraft(d.draft_id, from);
+        try {
+          await fs.stat(src);
+          const dest = this.absDraft(d.draft_id, to);
+          await this.ensureDir(path.dirname(dest));
+          await copyFileNoFollow(src, dest);
+          await fs.rm(src, { force: true });
+        } catch {
+          // No override on disk for this draft — meta repoint is enough.
+        }
+      }
+
+      // 4. Tell every consumer (UI panels + the connected agent) the threads
+      //    now live on `to` so they re-resolve.
+      for (const m of moved) {
+        this.emit(
+          { kind: "thread_changed", thread_id: m.id, target_paths: m.target_paths },
+          origin,
+        );
+      }
+      return moved.map((m) => m.id);
+    });
+  }
+
   writeDoc(
     p: DocPath,
     ref: Ref,

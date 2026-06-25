@@ -229,6 +229,19 @@ export class ThreadsView extends ItemView {
     await this.refreshCurrent();
   }
 
+  /**
+   * Follow a doc rename. Obsidian mutates the open `TFile`'s `path` in place
+   * (and fires no `file-open`), so `currentFile` still points at the right
+   * editor — only `currentDocPath`, captured as a string, has gone stale.
+   * Repoint it and refetch so the panel keeps showing the doc's threads (which
+   * the server has just moved onto `to`) instead of going blank.
+   */
+  onDocRenamed(from: string, to: string): void {
+    if (this.currentDocPath !== from) return;
+    this.currentDocPath = to;
+    void this.refreshCurrent();
+  }
+
   private async onFileOpen(file: TFile | null): Promise<void> {
     this.currentFile = file;
     this.currentDocPath = file ? this.plugin.vaultPathToSheafPath(file.path) : null;
