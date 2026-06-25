@@ -739,19 +739,42 @@ export class ThreadsView extends ItemView {
     input.style.flex = "1";
     input.style.fontSize = "0.85em";
     input.style.padding = "0.3em 0.4em";
-    input.style.resize = "vertical";
+    // The box grows and shrinks to fit its content (see autoResize), so disable
+    // manual resizing and hide the scrollbar until we hit the cap.
+    input.style.resize = "none";
+    input.style.overflowY = "hidden";
     input.style.minHeight = "1.8em";
     input.style.border = "1px solid var(--background-modifier-border)";
     input.style.borderRadius = "3px";
     input.style.background = "var(--background-primary)";
     input.style.color = "var(--text-normal)";
+
+    // Auto-expand/contract the textarea to fit its content, capped at maxHeight
+    // (beyond which it scrolls). Reset to "auto" first so scrollHeight reflects
+    // the content's true height when shrinking, not the previous taller box.
+    const maxHeight = 200;
+    const autoResize = () => {
+      // The panel re-renders wholesale on every backend event, so the deferred
+      // rAF below can fire after this textarea has been detached and replaced.
+      // Skip the (invisible, wasted) layout pass in that case.
+      if (!input.isConnected) return;
+      input.style.height = "auto";
+      const next = Math.min(input.scrollHeight, maxHeight);
+      input.style.height = `${next}px`;
+      input.style.overflowY = input.scrollHeight > maxHeight ? "auto" : "hidden";
+    };
+
     // Restore any reply the user had typed before the last re-render, and keep
     // the stash in sync as they type so the next re-render doesn't drop it.
     input.value = this.replyDrafts.get(thread.id) ?? "";
     input.addEventListener("input", () => {
       if (input.value) this.replyDrafts.set(thread.id, input.value);
       else this.replyDrafts.delete(thread.id);
+      autoResize();
     });
+    // Size to the restored draft once the element is laid out (scrollHeight is
+    // only meaningful after it's in the DOM).
+    requestAnimationFrame(autoResize);
 
     const send = wrap.createEl("button", { text: "Send" });
     send.style.fontSize = "0.8em";
@@ -764,6 +787,7 @@ export class ThreadsView extends ItemView {
       try {
         await this.plugin.client.replyThread(thread.id, message);
         input.value = "";
+        autoResize();
         this.replyDrafts.delete(thread.id);
         await this.refreshCurrent();
       } catch (err) {
