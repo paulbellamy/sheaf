@@ -2,7 +2,7 @@ import { App } from "obsidian";
 
 import { DocStore } from "./doc-store";
 import { spawnAcpAgent, type SpawnedAgent } from "./agent-host";
-import { getAcpAgent } from "./registry";
+import { getAcpAgent, type AcpEffort } from "./registry";
 import { makeToVaultPath, obsidianVaultFs } from "./vault-fs";
 import { requestAcpPermission } from "../views/acp-permission-modal";
 import {
@@ -45,11 +45,13 @@ export class AcpController {
     agentId: string,
     vaultRoot: string,
     serverUrl: string,
+    effort: AcpEffort = "default",
   ): Promise<void> {
     const spec = getAcpAgent(agentId);
     if (!spec) throw new Error(`unknown ACP agent: ${agentId}`);
     this.disconnect();
     const myGen = this.generation;
+    const effortEnv = spec.effortEnv?.(effort) ?? {};
 
     const docs = new DocStore(obsidianVaultFs(this.deps.app.vault.adapter));
     const base = serverUrl.replace(/\/$/, "");
@@ -75,6 +77,7 @@ export class AcpController {
             headers: [{ name: "X-Sheaf-Doc", value: docPath }],
           },
         ],
+        env: effortEnv,
         onExit: (code) => {
           if (this.generation !== myGen) return; // a superseded agent — ignore
           this.agent = null;

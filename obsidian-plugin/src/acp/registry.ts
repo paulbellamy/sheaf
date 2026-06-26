@@ -22,7 +22,23 @@ export interface AcpAgentSpec {
   env?: Record<string, string>;
   /** Shown when the command isn't found, so the user can install it. */
   installHint: string;
+  /**
+   * Map a reasoning-effort level to the env vars that apply it for this agent
+   * (both adapters take effort via env, not a flag). `"default"` returns no
+   * override, leaving the agent's own default. Absent → the agent ignores effort.
+   */
+  effortEnv?: (effort: AcpEffort) => Record<string, string>;
 }
+
+/** Reasoning-effort levels exposed in the UI. "default" = the agent's own. */
+export type AcpEffort = "default" | "low" | "medium" | "high";
+
+export const ACP_EFFORTS: readonly AcpEffort[] = [
+  "default",
+  "low",
+  "medium",
+  "high",
+];
 
 export const ACP_AGENTS: readonly AcpAgentSpec[] = [
   {
@@ -31,6 +47,10 @@ export const ACP_AGENTS: readonly AcpAgentSpec[] = [
     command: "npx",
     args: ["-y", "@agentclientprotocol/claude-agent-acp"],
     installHint: "npm install -g @agentclientprotocol/claude-agent-acp",
+    // CLAUDE_CODE_EFFORT_LEVEL takes precedence over every other effort source
+    // and is inherited by the Claude Code process the adapter spawns.
+    effortEnv: (effort): Record<string, string> =>
+      effort === "default" ? {} : { CLAUDE_CODE_EFFORT_LEVEL: effort },
   },
   {
     id: "codex",
@@ -38,6 +58,11 @@ export const ACP_AGENTS: readonly AcpAgentSpec[] = [
     command: "npx",
     args: ["-y", "@agentclientprotocol/codex-acp"],
     installHint: "npm install -g @agentclientprotocol/codex-acp",
+    // codex-acp merges CODEX_CONFIG (JSON) into the Codex session config.
+    effortEnv: (effort): Record<string, string> =>
+      effort === "default"
+        ? {}
+        : { CODEX_CONFIG: JSON.stringify({ model_reasoning_effort: effort }) },
   },
 ];
 

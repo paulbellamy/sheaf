@@ -190,6 +190,7 @@ export default class SheafPlugin extends Plugin {
         this.settings.acpAgentId,
         root,
         this.settings.serverUrl,
+        this.settings.acpEffort,
       );
       new Notice("Sheaf: ACP agent connected.");
     } catch (err) {

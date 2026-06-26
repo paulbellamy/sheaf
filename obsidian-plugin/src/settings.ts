@@ -1,6 +1,11 @@
 import { App, PluginSettingTab, Setting, TextComponent } from "obsidian";
 import type SheafPlugin from "./main";
-import { ACP_AGENTS, DEFAULT_ACP_AGENT_ID } from "./acp/registry";
+import {
+  ACP_AGENTS,
+  ACP_EFFORTS,
+  type AcpEffort,
+  DEFAULT_ACP_AGENT_ID,
+} from "./acp/registry";
 
 /**
  * A reviewer role the agent channels during a panel review. `id` is the slug
@@ -23,6 +28,8 @@ export type SheafSettings = {
   runServer: boolean;
   /** Which ACP adapter "Connect ACP agent" spawns (id from the registry). */
   acpAgentId: string;
+  /** Reasoning-effort level passed to the ACP agent on spawn. */
+  acpEffort: AcpEffort;
   personas: ReviewPersona[];
 };
 
@@ -75,6 +82,7 @@ export const DEFAULT_SETTINGS: SheafSettings = {
   showResolved: true,
   runServer: true,
   acpAgentId: DEFAULT_ACP_AGENT_ID,
+  acpEffort: "default",
   personas: DEFAULT_PERSONAS,
 };
 
@@ -172,6 +180,22 @@ export class SheafSettingTab extends PluginSettingTab {
         d.setValue(this.plugin.settings.acpAgentId);
         d.onChange(async (v) => {
           this.plugin.settings.acpAgentId = v;
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("Reasoning effort")
+      .setDesc(
+        "Effort level passed to the agent on connect. “Default” leaves the agent's own default. Applies on the next connect.",
+      )
+      .addDropdown((d) => {
+        for (const e of ACP_EFFORTS) {
+          d.addOption(e, e[0].toUpperCase() + e.slice(1));
+        }
+        d.setValue(this.plugin.settings.acpEffort);
+        d.onChange(async (v) => {
+          this.plugin.settings.acpEffort = v as AcpEffort;
           await this.plugin.saveSettings();
         });
       });

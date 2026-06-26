@@ -17,6 +17,7 @@ import {
   prettyPersona,
   reviewPersonaId,
 } from "../review";
+import { ACP_AGENTS, ACP_EFFORTS, type AcpEffort } from "../acp/registry";
 
 export const VIEW_TYPE_SHEAF_THREADS = "sheaf-threads";
 
@@ -320,6 +321,43 @@ export class ThreadsView extends ItemView {
         // Re-renders via onConnectionChange on success/failure.
         void this.plugin.connectAcp();
       }
+    });
+
+    // Agent + effort selectors. They configure the *next* connect, so they're
+    // disabled while an agent is live (disconnect to change, then reconnect).
+    const acpLive = this.plugin.acpConnected();
+    const configRow = header.createDiv();
+    configRow.style.display = "flex";
+    configRow.style.gap = "0.5em";
+    configRow.style.marginTop = "0.4em";
+    configRow.style.fontSize = "0.8em";
+
+    const agentSel = configRow.createEl("select");
+    agentSel.title = "Which ACP agent to spawn";
+    agentSel.disabled = acpLive;
+    for (const a of ACP_AGENTS) {
+      const opt = agentSel.createEl("option", { text: a.displayName });
+      opt.value = a.id;
+      if (a.id === this.plugin.settings.acpAgentId) opt.selected = true;
+    }
+    agentSel.addEventListener("change", () => {
+      this.plugin.settings.acpAgentId = agentSel.value;
+      void this.plugin.saveSettings();
+    });
+
+    const effortSel = configRow.createEl("select");
+    effortSel.title = "Reasoning effort passed to the agent on connect";
+    effortSel.disabled = acpLive;
+    for (const e of ACP_EFFORTS) {
+      const opt = effortSel.createEl("option", {
+        text: e === "default" ? "Effort: default" : `Effort: ${e}`,
+      });
+      opt.value = e;
+      if (e === this.plugin.settings.acpEffort) opt.selected = true;
+    }
+    effortSel.addEventListener("change", () => {
+      this.plugin.settings.acpEffort = effortSel.value as AcpEffort;
+      void this.plugin.saveSettings();
     });
 
     // No agent listening → show how to connect one (or how to start the

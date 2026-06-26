@@ -26,6 +26,8 @@ export interface SpawnedAgent {
 export interface SpawnAgentOptions extends AcpConnectionOptions {
   /** Called when the subprocess exits (so the plugin can update presence). */
   onExit?: (code: number | null) => void;
+  /** Extra env merged over the spec's (e.g. the effort-level vars). */
+  env?: Record<string, string>;
 }
 
 export function spawnAcpAgent(
@@ -40,7 +42,7 @@ export function spawnAcpAgent(
   const command = resolveCommand(spec.command);
   const child = spawn(command, spec.args, {
     cwd: opts.cwd,
-    env: spawnEnv(spec.env),
+    env: spawnEnv({ ...spec.env, ...opts.env }),
     stdio: ["pipe", "pipe", "pipe"],
     shell: process.platform === "win32",
   });

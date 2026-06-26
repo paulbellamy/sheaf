@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   ACP_AGENTS,
+  ACP_EFFORTS,
   DEFAULT_ACP_AGENT_ID,
   getAcpAgent,
 } from "./registry";
@@ -30,5 +31,29 @@ describe("ACP agent registry", () => {
   it("looks up by id and returns undefined for unknown ids", () => {
     expect(getAcpAgent("claude-code")?.displayName).toBe("Claude Code");
     expect(getAcpAgent("nope")).toBeUndefined();
+  });
+});
+
+describe("ACP effort → env mapping", () => {
+  it("exposes default/low/medium/high", () => {
+    expect([...ACP_EFFORTS]).toEqual(["default", "low", "medium", "high"]);
+  });
+
+  it("default returns no env override for either agent", () => {
+    for (const a of ACP_AGENTS) {
+      expect(a.effortEnv?.("default")).toEqual({});
+    }
+  });
+
+  it("claude-code maps effort to CLAUDE_CODE_EFFORT_LEVEL", () => {
+    expect(getAcpAgent("claude-code")?.effortEnv?.("high")).toEqual({
+      CLAUDE_CODE_EFFORT_LEVEL: "high",
+    });
+  });
+
+  it("codex maps effort to CODEX_CONFIG json", () => {
+    expect(getAcpAgent("codex")?.effortEnv?.("medium")).toEqual({
+      CODEX_CONFIG: JSON.stringify({ model_reasoning_effort: "medium" }),
+    });
   });
 });
