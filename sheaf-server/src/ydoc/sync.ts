@@ -16,6 +16,13 @@ import * as Y from "yjs";
 
 const TEXT_KEY = "content";
 
+/**
+ * The CRDT document handle. Re-exported so consumers (e.g. the plugin) can type
+ * against it without taking a direct `yjs` dependency — Yjs stays an internal
+ * detail of this module.
+ */
+export type YDoc = Y.Doc;
+
 /** A fresh Y.Doc whose `content` Y.Text holds `md`. */
 export function markdownToYDoc(md: string): Y.Doc {
   const doc = new Y.Doc();
