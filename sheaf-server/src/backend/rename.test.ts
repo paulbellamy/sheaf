@@ -158,6 +158,76 @@ describe("StubBackend.renameDoc", () => {
     expect(view.md).toContain("draft edit");
   });
 
+  it("carries the version counter onto the new path", async () => {
+    // Read inits the counter to 1; a main write bumps it to 2.
+    await backend.readDoc("notes/old.md", "main");
+    await backend.writeDoc("notes/old.md", "main", "# Old\n\nbumped\n");
+
+    await fs.rename(
+      path.join(root, "notes", "old.md"),
+      path.join(root, "notes", "new.md"),
+    );
+    await backend.renameDoc("notes/old.md", "notes/new.md");
+
+    // 2 proves the counter moved — a fresh init for a non-empty doc would be 1.
+    const doc = await backend.readDoc("notes/new.md", "main");
+    expect(doc.version_counter).toBe(2);
+  });
+
+  it("leaves a sibling with an overlapping prefix untouched", async () => {
+    await fs.writeFile(path.join(root, "notesextra.md"), "# Extra\n\nsibling\n");
+    const sib = await backend.addThread({
+      ref: "main",
+      author: "user",
+      message: "on sibling",
+      targets: [{ path: "notesextra.md", scope: "doc" }],
+    });
+    const inside = await backend.addThread({
+      ref: "main",
+      author: "user",
+      message: "inside folder",
+      targets: [{ path: "notes/old.md", scope: "doc" }],
+    });
+
+    // `notesextra.md` shares the `notes` prefix but is not under the folder.
+    await fs.rename(path.join(root, "notes"), path.join(root, "archive"));
+    const moved = await backend.renameDoc("notes", "archive");
+
+    expect(moved).toEqual([inside]);
+    const s = await backend.readThread(sib);
+    expect(s.targets[0].path).toBe("notesextra.md");
+    expect(
+      await backend.listThreads({ path: "notesextra.md", ref: "main" }),
+    ).toHaveLength(1);
+  });
+
+  it("rewrites only the affected target of a multi-target thread", async () => {
+    await fs.writeFile(path.join(root, "other.md"), "# Other\n\nelsewhere\n");
+    const id = await backend.addThread({
+      ref: "main",
+      author: "user",
+      message: "spans two docs",
+      targets: [
+        { path: "other.md", scope: "doc" },
+        { path: "notes/old.md", scope: "doc" },
+      ],
+    });
+
+    await fs.rename(
+      path.join(root, "notes", "old.md"),
+      path.join(root, "notes", "new.md"),
+    );
+    await backend.renameDoc("notes/old.md", "notes/new.md");
+
+    const t = await backend.readThread(id);
+    expect(t.targets.map((x) => x.path)).toEqual(["other.md", "notes/new.md"]);
+    const onNew = await backend.listThreads({ path: "notes/new.md", ref: "main" });
+    expect(onNew.map((x) => x.id)).toContain(id);
+    expect(
+      await backend.listThreads({ path: "notes/old.md", ref: "main" }),
+    ).toHaveLength(0);
+  });
+
   it("rejects infra paths", async () => {
     await expect(
       backend.renameDoc("notes/old.md", ".drafts/sneaky.md"),

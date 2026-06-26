@@ -258,10 +258,14 @@ export default class SheafPlugin extends Plugin {
     if (from === to) return;
     try {
       await this.client.renameDoc(from, to);
+      // Re-anchor the panel only once the server has actually moved the
+      // threads — otherwise refetching the new path returns nothing and the
+      // panel goes blank. On failure leave it on the old path (whose threads
+      // are still intact server-side); a later file switch recovers.
+      this.getThreadsView()?.onDocRenamed(from, to);
     } catch (err) {
       console.warn("sheaf: could not sync rename to server", err);
     }
-    this.getThreadsView()?.onDocRenamed(from, to);
   }
 
   private async activateThreadsView(): Promise<void> {
