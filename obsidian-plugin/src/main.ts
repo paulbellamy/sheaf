@@ -6,6 +6,7 @@ import {
   Plugin,
   TAbstractFile,
   TFile,
+  TFolder,
 } from "obsidian";
 
 import { SheafApiError, SheafClient } from "./sheaf-client";
@@ -238,16 +239,20 @@ export default class SheafPlugin extends Plugin {
   }
 
   /**
-   * Handle a vault rename. Only markdown renames carry sheaf state; folder and
-   * non-`.md` renames are ignored. Pushes the path change to the server (best
-   * effort — the server may be down or external) and tells the threads panel to
-   * re-anchor if it was showing the renamed doc.
+   * Handle a vault rename. Markdown files carry thread state directly; folders
+   * carry it for every doc under them (Obsidian fires one event for the folder,
+   * not per descendant), so both are forwarded as a single `from → to` the
+   * server expands. Non-markdown files have no sheaf state and are skipped.
+   * Pushes the change to the server (best effort — it may be down or external)
+   * and tells the threads panel to re-anchor if it was showing an affected doc.
    */
   private async onFileRenamed(
     file: TAbstractFile,
     oldPath: string,
   ): Promise<void> {
-    if (!(file instanceof TFile) || file.extension !== "md") return;
+    const isFolder = file instanceof TFolder;
+    const isMarkdown = file instanceof TFile && file.extension === "md";
+    if (!isFolder && !isMarkdown) return;
     const from = this.vaultPathToSheafPath(oldPath);
     const to = this.vaultPathToSheafPath(file.path);
     if (from === to) return;

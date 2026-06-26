@@ -102,6 +102,62 @@ describe("StubBackend.renameDoc", () => {
     expect(view.md).toContain("edited");
   });
 
+  it("remaps every descendant when a folder is renamed", async () => {
+    await fs.mkdir(path.join(root, "notes", "sub"), { recursive: true });
+    await fs.writeFile(path.join(root, "notes", "sub", "b.md"), "# B\n\ndeep\n");
+
+    const idA = await backend.addThread({
+      ref: "main",
+      author: "user",
+      message: "on a",
+      targets: [{ path: "notes/old.md", scope: "doc" }],
+    });
+    const idB = await backend.addThread({
+      ref: "main",
+      author: "user",
+      message: "on b",
+      targets: [{ path: "notes/sub/b.md", scope: "doc" }],
+    });
+
+    // Simulate the vault's folder rename: the OS moves the whole tree, sidecars
+    // included, but the YAML still carries the old `notes/…` target paths.
+    await fs.rename(path.join(root, "notes"), path.join(root, "archive"));
+
+    const moved = await backend.renameDoc("notes", "archive");
+    expect(moved.sort()).toEqual([idA, idB].sort());
+
+    const a = await backend.readThread(idA);
+    expect(a.targets[0].path).toBe("archive/old.md");
+    const b = await backend.readThread(idB);
+    expect(b.targets[0].path).toBe("archive/sub/b.md");
+
+    expect(
+      await backend.listThreads({ path: "archive/old.md", ref: "main" }),
+    ).toHaveLength(1);
+    expect(
+      await backend.listThreads({ path: "archive/sub/b.md", ref: "main" }),
+    ).toHaveLength(1);
+    expect(
+      await backend.listThreads({ path: "notes/old.md", ref: "main" }),
+    ).toHaveLength(0);
+  });
+
+  it("repoints a draft override sitting under a renamed folder", async () => {
+    const [draftId] = await backend.fork("notes/old.md", 1);
+    await backend.writeDoc("notes/old.md", draftId, "# Old\n\ndraft edit\n");
+
+    // Folder rename moves the visible tree but never the hidden `.drafts/`.
+    await fs.rename(path.join(root, "notes"), path.join(root, "archive"));
+
+    await backend.renameDoc("notes", "archive");
+
+    const d = (await backend.listDrafts()).find((x) => x.draft_id === draftId)!;
+    expect(d.base_path).toBe("archive/old.md");
+    expect(d.touches).toContain("archive/old.md");
+    const view = await backend.readDoc("archive/old.md", draftId);
+    expect(view.md).toContain("draft edit");
+  });
+
   it("rejects infra paths", async () => {
     await expect(
       backend.renameDoc("notes/old.md", ".drafts/sneaky.md"),

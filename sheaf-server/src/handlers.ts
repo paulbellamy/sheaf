@@ -118,10 +118,11 @@ const renameBodySchema = z.object({
 });
 
 /**
- * Reconcile sidecar state after the vault renamed a doc `from` → `to`. The
- * Obsidian plugin fires this when the user renames the open file so threads,
- * version history, and drafts follow the doc instead of orphaning on the old
- * path. The `.md` move is the vault's job; this only fixes sheaf's metadata.
+ * Reconcile sidecar state after the vault renamed `from` → `to` — either a
+ * single doc or a whole folder (the backend remaps every descendant). The
+ * Obsidian plugin fires this on `vault.on("rename")` so threads, version
+ * history, and drafts follow the move instead of orphaning on the old path.
+ * The byte move is the vault's job; this only fixes sheaf's metadata.
  */
 export async function renameDoc(
   backend: Backend,

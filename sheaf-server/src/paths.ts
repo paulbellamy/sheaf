@@ -70,6 +70,23 @@ export function assertVaultPath(p: string): void {
 }
 
 /**
+ * Remap `p` when it sits at or under a renamed path `from` → `to`. Returns the
+ * rewritten path, or null when `p` is unaffected. One routine covers both
+ * Obsidian rename shapes: a file rename (`p === from`) and a folder rename
+ * (`p` is a descendant of the folder, `from + "/…"`). Pure string logic — the
+ * caller decides what to do with the result.
+ */
+export function remapRenamedPath(
+  p: string,
+  from: string,
+  to: string,
+): string | null {
+  if (p === from) return to;
+  if (p.startsWith(from + "/")) return to + p.slice(from.length);
+  return null;
+}
+
+/**
  * Plugin paths live at the repo root (not under the data root) and are
  * served read-only. They carry the bundled skills and scripts so agents can
  * discover how to use the MCP without installing the plugin locally.

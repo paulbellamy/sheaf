@@ -34,6 +34,7 @@ import {
   assertThreadId,
   assertVaultPath,
   isPluginPath,
+  remapRenamedPath,
   safeJoin,
 } from "../paths";
 import {
@@ -694,10 +695,17 @@ export class StubBackend implements Backend {
       assertVaultPath(to);
       if (from === to) return [];
 
-      // 1. Move every thread (main + draft-scoped) whose targets reference
-      //    `from`: rewrite the matching target paths, write the sidecar at its
-      //    new home, and delete the stale one. `saveThread` derives the sidecar
-      //    location from `targets[0].path`, so rewrite before saving.
+      // `from`/`to` may be a single doc or a folder — `remapRenamedPath`
+      // covers both, so a folder rename reconciles every descendant in one
+      // pass. The vault has already moved the bytes on disk (a folder rename
+      // carries the `.threads` sidecars with it; a file rename leaves them
+      // behind). Either way we re-derive each sidecar's home from its rewritten
+      // target path, so the same routine lands both shapes correctly.
+
+      // 1. Rewrite every thread (main + draft-scoped) with a target at or under
+      //    `from`. `saveThread` derives the sidecar location from
+      //    `targets[0].path`, so rewriting before saving moves the file to its
+      //    new home; we delete whatever stale copy `allThreadFiles` found.
       const moved: { id: ThreadId; target_paths: DocPath[] }[] = [];
       const staleDirs = new Set<string>();
       for (const f of await this.allThreadFiles()) {
@@ -705,60 +713,72 @@ export class StubBackend implements Backend {
         const validated = threadOnDiskSchema.safeParse(yaml.parse(raw));
         if (!validated.success) continue; // skip drifted/corrupt sidecar
         const t = validated.data as Thread;
-        if (!t.targets.some((tg) => tg.path === from)) continue;
+        const next = t.targets.map((tg) => ({
+          tg,
+          path: remapRenamedPath(tg.path, from, to),
+        }));
+        if (!next.some((n) => n.path !== null)) continue;
         t.draft_id = this.draftIdFromFilePath(f);
-        t.targets = t.targets.map((tg) =>
-          tg.path === from ? { ...tg, path: to } : tg,
+        t.targets = next.map(({ tg, path: np }) =>
+          np === null ? tg : { ...tg, path: np },
         ) as Thread["targets"];
         staleDirs.add(path.dirname(f));
         await fs.rm(f, { force: true });
         await this.saveThread(t);
         moved.push({ id: t.id, target_paths: t.targets.map((tg) => tg.path) });
       }
-      // Best-effort cleanup of the now-empty `<from>.threads/` dirs we emptied.
+      // Best-effort cleanup of any now-empty `.threads/` dir we emptied (a
+      // no-op when the sidecar's new home is the same dir, e.g. a folder
+      // rename where the tree already moved underneath us).
       for (const dir of staleDirs) {
         await fs.rmdir(dir).catch(() => {});
       }
 
-      // 2. Carry the per-doc version counter + history across to `to` (the
-      //    doc's identity is its path). Don't clobber an existing `to`.
-      const counter = this.versionCounters.get(from);
-      if (counter !== undefined && !this.versionCounters.has(to)) {
-        this.versionCounters.set(to, counter);
-      }
-      this.versionCounters.delete(from);
-      const history = this.versionHistory.get(from);
-      if (history !== undefined && !this.versionHistory.has(to)) {
-        this.versionHistory.set(to, history);
-      }
-      this.versionHistory.delete(from);
+      // 2. Carry per-doc version counters + history onto their new paths (the
+      //    doc's identity is its path). Don't clobber an existing destination.
+      this.remapMapKeys(this.versionCounters, from, to);
+      this.remapMapKeys(this.versionHistory, from, to);
 
-      // 3. Repoint any draft whose `base_path`/`touches` named `from`, and move
-      //    its override `.md` (the draft's working copy) to the new path.
+      // 3. Repoint any draft whose `base_path`/`touches` sits under `from`, and
+      //    move its override `.md` working copies (under `.drafts/`, which the
+      //    vault never touches) to match.
       for (const d of await this.listDrafts()) {
-        const touchedFrom =
-          d.base_path === from || (d.touches ?? []).includes(from);
-        if (!touchedFrom) continue;
         const meta = await this.loadDraftMeta(d.draft_id);
-        if (meta.base_path === from) meta.base_path = to;
+        const touches = meta.touches ?? [meta.base_path];
+        let metaChanged = false;
+        for (const tp of touches) {
+          const np = remapRenamedPath(tp, from, to);
+          if (np === null) continue;
+          const src = this.absDraft(d.draft_id, tp);
+          try {
+            await fs.stat(src);
+            const dest = this.absDraft(d.draft_id, np);
+            await this.ensureDir(path.dirname(dest));
+            await copyFileNoFollow(src, dest);
+            await fs.rm(src, { force: true });
+          } catch {
+            // No override on disk for this path — meta repoint is enough.
+          }
+        }
+        const nbp = remapRenamedPath(meta.base_path, from, to);
+        if (nbp !== null) {
+          meta.base_path = nbp;
+          metaChanged = true;
+        }
         if (meta.touches) {
-          meta.touches = meta.touches.map((p) => (p === from ? to : p));
+          const rewritten = meta.touches.map(
+            (p) => remapRenamedPath(p, from, to) ?? p,
+          );
+          if (rewritten.some((p, i) => p !== meta.touches![i])) {
+            meta.touches = rewritten;
+            metaChanged = true;
+          }
         }
-        await this.saveDraftMeta(meta);
-        const src = this.absDraft(d.draft_id, from);
-        try {
-          await fs.stat(src);
-          const dest = this.absDraft(d.draft_id, to);
-          await this.ensureDir(path.dirname(dest));
-          await copyFileNoFollow(src, dest);
-          await fs.rm(src, { force: true });
-        } catch {
-          // No override on disk for this draft — meta repoint is enough.
-        }
+        if (metaChanged) await this.saveDraftMeta(meta);
       }
 
       // 4. Tell every consumer (UI panels + the connected agent) the threads
-      //    now live on `to` so they re-resolve.
+      //    now live on their new paths so they re-resolve.
       for (const m of moved) {
         this.emit(
           { kind: "thread_changed", thread_id: m.id, target_paths: m.target_paths },
@@ -767,6 +787,25 @@ export class StubBackend implements Backend {
       }
       return moved.map((m) => m.id);
     });
+  }
+
+  /**
+   * Move every key of `map` that sits at or under `from` onto its remapped
+   * path, in place. Skips a destination that already has a value (a real
+   * collision shouldn't happen — the vault wouldn't allow two docs at one
+   * path — but we don't overwrite if it does).
+   */
+  private remapMapKeys<V>(
+    map: Map<DocPath, V>,
+    from: DocPath,
+    to: DocPath,
+  ): void {
+    for (const [p, v] of [...map]) {
+      const np = remapRenamedPath(p, from, to);
+      if (np === null) continue;
+      map.delete(p);
+      if (!map.has(np)) map.set(np, v);
+    }
   }
 
   writeDoc(
