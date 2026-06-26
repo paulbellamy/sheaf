@@ -189,7 +189,8 @@ describe("MCP doc-scoping over HTTP", () => {
     header?: string;
   }): Promise<string[]> {
     const url = new URL(`${base}/api/mcp`);
-    if (scope?.query) url.searchParams.set("doc", scope.query);
+    // `!== undefined` so an empty-string query (`?doc=`) is still sent.
+    if (scope?.query !== undefined) url.searchParams.set("doc", scope.query);
     const transport = new StreamableHTTPClientTransport(
       url,
       scope?.header
@@ -209,6 +210,31 @@ describe("MCP doc-scoping over HTTP", () => {
     }
   }
 
+  // Raw initialize POST so we can assert the HTTP status for malformed scopes
+  // (the MCP client would just throw on a 4xx).
+  async function mcpInitStatus(shape: (u: URL) => void): Promise<number> {
+    const url = new URL(`${base}/api/mcp`);
+    shape(url);
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2024-11-05",
+          capabilities: {},
+          clientInfo: { name: "t", version: "0.0.0" },
+        },
+      }),
+    });
+    return res.status;
+  }
+
   it("unscoped connection sees every doc's threads", async () => {
     expect(await listThreadIds()).toEqual([idA, idB].sort());
   });
@@ -220,5 +246,31 @@ describe("MCP doc-scoping over HTTP", () => {
 
   it("X-Sheaf-Doc header scopes the queue to that doc", async () => {
     expect(await listThreadIds({ header: A })).toEqual([idA]);
+  });
+
+  it("?doc= wins over X-Sheaf-Doc when both are present", async () => {
+    expect(await listThreadIds({ query: A, header: B })).toEqual([idA]);
+  });
+
+  it("empty ?doc= falls through to the X-Sheaf-Doc header", async () => {
+    expect(await listThreadIds({ query: "", header: A })).toEqual([idA]);
+  });
+
+  it("rejects a repeated ?doc= param (fails closed, not open)", async () => {
+    const status = await mcpInitStatus((u) => {
+      u.searchParams.append("doc", A);
+      u.searchParams.append("doc", B);
+    });
+    expect(status).toBe(400);
+  });
+
+  it("rejects a malformed scope path instead of yielding an empty queue", async () => {
+    expect(
+      await mcpInitStatus((u) => u.searchParams.set("doc", "../secret.md")),
+    ).toBe(400);
+  });
+
+  it("accepts a well-formed scope", async () => {
+    expect(await mcpInitStatus((u) => u.searchParams.set("doc", A))).toBe(200);
   });
 });

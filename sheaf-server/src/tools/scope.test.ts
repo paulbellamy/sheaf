@@ -69,10 +69,24 @@ describe("thread tools doc-scoping", () => {
     client: Client,
     docPath: string,
   ): Promise<ToolResult> {
+    return addThreadOn(client, [docPath]);
+  }
+
+  async function addThreadOn(
+    client: Client,
+    docPaths: string[],
+  ): Promise<ToolResult> {
     return call(client, "AddThread", {
-      targets: [{ path: docPath, char_range: { from: 0, to: 5 } }],
-      message: `comment on ${docPath}`,
+      targets: docPaths.map((p) => ({
+        path: p,
+        char_range: { from: 0, to: 5 },
+      })),
+      message: `comment on ${docPaths.join(", ")}`,
     });
+  }
+
+  function errMessage(res: ToolResult): string {
+    return (res.structuredContent as { message?: string } | undefined)?.message ?? "";
   }
 
   function threadId(res: ToolResult): string {
@@ -165,5 +179,41 @@ describe("thread tools doc-scoping", () => {
     // The in-scope thread is still actionable.
     const okReply = await call(c, "ReplyThread", { thread_id: idA, message: "y" });
     expect(okReply.isError).toBeFalsy();
+  });
+
+  it("a cross-cutting thread is visible + actionable under each target's scope (ANY-match)", async () => {
+    // Seed a thread targeting BOTH docs via the unscoped client (a scoped
+    // AddThread would reject the foreign target — see the next test).
+    const u = await connect();
+    const idAB = threadId(await addThreadOn(u, [A, B]));
+
+    const sa = await connect(A);
+    expect(listedIds(await call(sa, "ListThreads", { ref: "main" }))).toContain(idAB);
+    expect((await call(sa, "ReadThread", { thread_id: idAB })).isError).toBeFalsy();
+    expect(
+      (await call(sa, "ReplyThread", { thread_id: idAB, message: "ok" })).isError,
+    ).toBeFalsy();
+
+    // Visible under the OTHER target's scope too, and resolvable there.
+    const sb = await connect(B);
+    expect(listedIds(await call(sb, "ListThreads", { ref: "main" }))).toContain(idAB);
+    expect((await call(sb, "ResolveThread", { thread_id: idAB })).isError).toBeFalsy();
+  });
+
+  it("scoped AddThread rejects a partial-overlap target set, naming the foreign doc (EVERY-match)", async () => {
+    const c = await connect(A);
+    const res = await addThreadOn(c, [A, B]);
+    expect(res.isError).toBe(true);
+    expect(errCode(res)).toBe("out_of_scope");
+    expect(errMessage(res)).toContain(B);
+  });
+
+  it("a nonexistent thread_id under scope surfaces thread_not_found, not out_of_scope", async () => {
+    const c = await connect(A);
+    // Valid id format, but no such thread — the scope guard reads it first, so
+    // the missing-thread error must win over out_of_scope (404 vs 403).
+    const res = await call(c, "ReadThread", { thread_id: "thrd_doesnotexist01" });
+    expect(res.isError).toBe(true);
+    expect(errCode(res)).toBe("thread_not_found");
   });
 });

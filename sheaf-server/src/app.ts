@@ -1,13 +1,15 @@
 import Fastify, {
   type FastifyInstance,
   type FastifyReply,
+  type FastifyRequest,
 } from "fastify";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
 import type { Backend } from "./backend/index";
 import { getBackend } from "./backend/factory";
 import { buildServer, type ToolSurface } from "./server";
-import { errorResult } from "./errors";
+import { err, errorResult } from "./errors";
+import { assertVaultPath } from "./paths";
 import { pipeEvents, reserveSseClient, type SseSink } from "./events";
 import {
   acceptDraft,
@@ -56,6 +58,38 @@ function isLoopbackHost(hostHeader: string | undefined): boolean {
   }
   host = host.toLowerCase();
   return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
+/**
+ * Resolve a request's per-connection doc scope (ACP §3.1), failing CLOSED.
+ *
+ * Scoping is a security boundary — a malformed scope must error, never silently
+ * widen to the whole vault. Rules:
+ * - `?doc=` takes precedence over the `X-Sheaf-Doc` header.
+ * - A repeated/array value for either is ambiguous → reject (`invalid_path`),
+ *   so a duplicated param can't drop the scope and open every doc.
+ * - An empty value is treated as absent (query falls through to header, header
+ *   to no scope) rather than suppressing the header.
+ * - A provided scope must be a valid vault path (`assertVaultPath`), so a typo
+ *   or traversal attempt fails loudly instead of yielding an empty queue.
+ * - Returns `undefined` when no scope is supplied — the legitimate global case.
+ */
+function resolveDocScope(req: FastifyRequest): string | undefined {
+  const rawQuery = (req.query as Record<string, unknown> | undefined)?.["doc"];
+  const rawHeader = req.headers["x-sheaf-doc"];
+  if (Array.isArray(rawQuery) || Array.isArray(rawHeader)) {
+    throw err.invalidPath(
+      "doc scope must be a single value, not a repeated parameter",
+    );
+  }
+  const queryDoc =
+    typeof rawQuery === "string" && rawQuery !== "" ? rawQuery : undefined;
+  const headerDoc =
+    typeof rawHeader === "string" && rawHeader !== "" ? rawHeader : undefined;
+  const scope = queryDoc ?? headerDoc;
+  if (scope === undefined) return undefined;
+  assertVaultPath(scope); // throws invalid_path on a malformed scope
+  return scope;
 }
 
 export function buildSheafApp(
@@ -271,19 +305,24 @@ export function buildSheafApp(
     method: ["GET", "POST", "DELETE"],
     url: "/api/mcp",
     handler: async (req, reply) => {
+      // Per-connection doc scope (ACP per-session MCP registration, §3.1).
+      // Resolved fail-closed: a malformed scope is rejected here, before the
+      // reply is hijacked for the transport, rather than silently widening to
+      // the whole vault.
+      let docScope: string | undefined;
+      try {
+        docScope = resolveDocScope(req);
+      } catch (e) {
+        const er = errorResult(e);
+        reply.code(er.status).send(er.json);
+        return;
+      }
       // Stateless: every request reconstructs a fresh server/transport pair.
       // The backend is shared, so on-disk state carries across requests.
       const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: undefined,
         enableJsonResponse: true,
       });
-      // Per-connection doc scope (ACP per-session MCP registration, §3.1):
-      // `?doc=` takes precedence over the `X-Sheaf-Doc` header; empty => none.
-      const headerScope = req.headers["x-sheaf-doc"];
-      const docScope =
-        (q(req, "doc") ??
-          (typeof headerScope === "string" ? headerScope : undefined)) ||
-        undefined;
       const server = buildServer(backend, { tools: opts.tools, docScope });
       await server.connect(transport);
       reply.raw.on("close", () => {

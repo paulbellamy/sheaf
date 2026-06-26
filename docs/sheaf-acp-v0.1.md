@@ -129,11 +129,13 @@ one embedded server still serves every doc — the scope rides per request, so
 each session's connection is independently clamped. the `ReadMe` loop loses its
 "load the whole queue" step; "your queue" becomes "this doc's open threads."
 
-**Implemented** server-side: `buildServer`/`buildSheafApp` take `docScope`, the
-`/api/mcp` route reads it from `?doc=` (precedence) or the `X-Sheaf-Doc` header,
-and the thread tools clamp accordingly (`out_of_scope` error on violation). The
-ACP client that sets `?doc` per session is the next phase; the `ReadMe` rewrite
-lands with it.
+**Implemented** server-side: `buildServer` takes `docScope`; the `/api/mcp`
+route resolves the scope per request — `?doc=` (precedence) or the `X-Sheaf-Doc`
+header — and passes it to `buildServer` per connection. Resolution fails
+**closed**: a repeated/array param or a non-vault path is rejected
+(`invalid_path`, 400), never silently widened to the whole vault. The thread
+tools clamp accordingly (`out_of_scope`, 403, on violation). The ACP client that
+sets `?doc` per session is the next phase; the `ReadMe` rewrite lands with it.
 
 a **cross-cutting** thread (targets X *and* Y) surfaces in both sessions' queues
 (any target matches the scope). that's correct, but it breaks serial-within-doc
