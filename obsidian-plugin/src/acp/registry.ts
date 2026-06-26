@@ -67,11 +67,11 @@ export const ACP_AGENTS: readonly AcpAgentSpec[] = [
     command: "npx",
     args: ["-y", "@agentclientprotocol/codex-acp"],
     installHint: "npm install -g @agentclientprotocol/codex-acp",
-    // codex-acp merges CODEX_CONFIG (JSON) into the Codex session config. Codex
-    // tops out at "high" (model_reasoning_effort has no xhigh/max), so clamp.
+    // codex-acp merges CODEX_CONFIG (JSON) into the Codex session config. Codex's
+    // model_reasoning_effort goes up to "xhigh" (model-dependent) but has no
+    // "max", so clamp only max → xhigh; everything else passes through.
     effortEnv: (effort): Record<string, string> => {
-      const codexEffort =
-        effort === "xhigh" || effort === "max" ? "high" : effort;
+      const codexEffort = effort === "max" ? "xhigh" : effort;
       return {
         CODEX_CONFIG: JSON.stringify({ model_reasoning_effort: codexEffort }),
       };

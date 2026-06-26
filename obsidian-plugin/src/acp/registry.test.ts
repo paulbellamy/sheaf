@@ -46,14 +46,14 @@ describe("ACP effort → env mapping", () => {
     }
   });
 
-  it("codex passes low/medium/high through and clamps xhigh/max to high", () => {
+  it("codex passes low/medium/high/xhigh through and clamps only max to xhigh", () => {
     const codex = getAcpAgent("codex")!;
     const effort = (e: (typeof ACP_EFFORTS)[number]) =>
       JSON.parse(codex.effortEnv!(e).CODEX_CONFIG).model_reasoning_effort;
     expect(effort("low")).toBe("low");
     expect(effort("medium")).toBe("medium");
     expect(effort("high")).toBe("high");
-    expect(effort("xhigh")).toBe("high");
-    expect(effort("max")).toBe("high");
+    expect(effort("xhigh")).toBe("xhigh"); // codex supports xhigh natively
+    expect(effort("max")).toBe("xhigh"); // only max is unsupported → clamp
   });
 });

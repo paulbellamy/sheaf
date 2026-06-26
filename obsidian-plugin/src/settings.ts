@@ -188,7 +188,7 @@ export class SheafSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Reasoning effort")
       .setDesc(
-        "Claude Code reasoning effort passed to the agent on connect (Codex clamps xhigh/max to high). Applies on the next connect.",
+        "Claude Code reasoning effort passed to the agent on connect (Codex has no max; max runs as xhigh). Applies on the next connect.",
       )
       .addDropdown((d) => {
         for (const e of ACP_EFFORTS) {
