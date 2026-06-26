@@ -51,7 +51,7 @@ replaces the *agent channel*.
 │                                                                                            │
 │  acp client                                                                                │
 │    • spawns the adapter subprocess (claude-code-acp | codex-acp) over stdio                │
-│    • initialize → session/new(cwd=vault, mcpServers=[sheaf /api/mcp via http])             │
+│    • initialize → session/new(cwd=vault, mcpServers=[sheaf /api/mcp?doc=<path> via http])  │
 │    • services fs/read_text_file & fs/write_text_file → ydoc (client-write path)            │
 │    • renders session/update (thoughts, plan, tool calls) in the threads panel              │
 │    • answers session/request_permission with the keep/discard/propose gate                 │
@@ -60,15 +60,17 @@ replaces the *agent channel*.
                                               │ acp / json-rpc / stdio
                                   ┌───────────▼────────────┐
                                   │  adapter subprocess     │
-                                  │  (claude-code-acp …)    │──── mcp/http ──▶ sheaf /api/mcp
-                                  └─────────────────────────┘     (thread tools)
+                                  │  (claude-code-acp …)    │──── mcp/http ──▶ sheaf /api/mcp?doc=<path>
+                                  └─────────────────────────┘     (thread tools, doc-scoped)
 ```
 
 the unlock: **acp carries mcp.** `session/new` takes an `mcpServers` list (stdio
 or http transport) that the agent must connect to ([session-setup][setup]). so
 the plugin hands the agent its own thread tools automatically — no user-typed
 `claude mcp add`. acp handles lifecycle/streaming/permissions/fs; mcp-over-acp
-handles sheaf's domain. they compose; it was never either/or.
+handles sheaf's domain. they compose; it was never either/or. crucially the
+registration is **per session**, so each doc's session gets the sheaf mcp
+**scoped to that doc** (§3.1) — the agent only ever sees its own doc's threads.
 
 [setup]: https://agentclientprotocol.com/protocol/session-setup
 
@@ -101,6 +103,35 @@ mechanics:
   blocks. the agent's `session/update`s render on the thread card; its `fs/write`
   flows through the ydoc; `request_permission` is the accept gate; on stop the
   thread is resolved.
+
+### 3.1 the queue is doc-scoped, server-enforced
+
+per-doc sessions only hold if the agent's **work queue** is also per-doc.
+today it isn't: `ListThreads`'s `path` is optional and the `ReadMe` loop tells
+the agent to call `ListThreads(ref:"main")` with no path — pulling **every
+doc's** open threads (the whole-vault queue). that's correct for the current
+one-global-agent model and wrong for per-doc sessions: doc X's session would
+see, and could grab, doc Y's work.
+
+fix: bind the doc scope into the **per-session mcp registration** so isolation
+is a property of the wiring, not agent discipline. the http `mcpServers` entry
+carries `url` + `headers` ([session-setup][setup]), so X's session registers the
+sheaf mcp as `…/api/mcp?doc=<X>` (or an `X-Sheaf-Doc: <X>` header). the server
+reads that scope and:
+
+- defaults `ListThreads` `path` to the scope doc and ignores a wider request —
+  the connection cannot enumerate other docs' threads.
+- clamps `ReadThread` / `AddThread` / `ReplyThread` / `ResolveThread` /
+  `AttachDraftPayload` to threads targeting the scope doc; a `thread_id` or
+  target outside it is rejected.
+
+one embedded server still serves every doc — the scope rides per request, so
+each session's connection is independently clamped. the `ReadMe` loop loses its
+"load the whole queue" step; "your queue" becomes "this doc's open threads."
+
+a **cross-cutting** thread (targets X *and* Y) surfaces in both sessions' queues
+(any target matches the scope). that's correct, but it breaks serial-within-doc
+across the two — folded into the deferred multi-target edge below.
 
 rejected alternatives: per-*thread* (too granular — loses "make §4 match the
 change you just made in §2" context, churns sessions); per-*workspace*
@@ -147,6 +178,8 @@ mode.
 
 - **keep (thread-on-doc):** `ListThreads`, `ReadThread`, `ReplyThread`,
   `ResolveThread`, `AddThread`, `AttachDraftPayload`, `Glob`, `Grep`, `ReadMe`.
+  the thread tools are **doc-scoped** on a scoped connection (§3.1) — `path` is
+  implied by the session's scope, not supplied by the agent.
 - **drop from the plugin's surface:** `Read`, `Edit`, `Write` → now acp `fs/*`.
 - **gate by mode, don't delete:** `Fork`, `Propose`, `Merge`, `DeclineDraft`.
 
