@@ -116,6 +116,54 @@ describe("JsonRpcPeer — incoming", () => {
   });
 });
 
+describe("JsonRpcPeer — edge cases", () => {
+  it("honors an incoming request with id 0 (not treated as missing)", async () => {
+    const sent: any[] = [];
+    const peer = new JsonRpcPeer((line) => sent.push(JSON.parse(line)));
+    peer.onRequest("ping", () => "pong");
+    peer.receive(JSON.stringify({ jsonrpc: "2.0", id: 0, method: "ping" }));
+    await tick();
+    expect(sent[0]).toEqual({ jsonrpc: "2.0", id: 0, result: "pong" });
+  });
+
+  it("routes out-of-order responses to the correct caller", async () => {
+    const sent: any[] = [];
+    const peer = new JsonRpcPeer((line) => sent.push(JSON.parse(line)));
+    const p1 = peer.request("a");
+    const p2 = peer.request("b");
+    const [id1, id2] = [sent[0].id, sent[1].id];
+    // Respond in reverse order.
+    peer.receive(JSON.stringify({ jsonrpc: "2.0", id: id2, result: "B" }));
+    peer.receive(JSON.stringify({ jsonrpc: "2.0", id: id1, result: "A" }));
+    await expect(p1).resolves.toBe("A");
+    await expect(p2).resolves.toBe("B");
+  });
+
+  it("resolves a request whose response result is null", async () => {
+    const sent: any[] = [];
+    const peer = new JsonRpcPeer((line) => sent.push(JSON.parse(line)));
+    const p = peer.request("fs/write_text_file");
+    peer.receive(JSON.stringify({ jsonrpc: "2.0", id: sent[0].id, result: null }));
+    await expect(p).resolves.toBeNull();
+  });
+
+  it("contains a throwing notification handler and keeps processing", async () => {
+    const sent: any[] = [];
+    const peer = new JsonRpcPeer((line) => sent.push(JSON.parse(line)));
+    peer.onNotification("boom", () => {
+      throw new Error("handler blew up");
+    });
+    peer.onRequest("ping", () => "pong");
+    expect(() =>
+      peer.receive(JSON.stringify({ jsonrpc: "2.0", method: "boom" })),
+    ).not.toThrow();
+    // A subsequent message is still handled.
+    peer.receive(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }));
+    await tick();
+    expect(sent[0]).toEqual({ jsonrpc: "2.0", id: 1, result: "pong" });
+  });
+});
+
 describe("JsonRpcPeer — lifecycle", () => {
   it("rejects in-flight and subsequent requests after close()", async () => {
     const peer = new JsonRpcPeer(() => {});

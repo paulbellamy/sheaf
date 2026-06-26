@@ -118,6 +118,22 @@ describe("AcpConnection — driving the agent", () => {
     });
   });
 
+  it("cancel is a no-op without a session, and notifies once one exists", async () => {
+    const { agent, conn } = harness();
+    const onCancel = vi.fn();
+    agent.onNotification("session/cancel", onCancel);
+    agent.onRequest("session/new", () => ({ sessionId: "sess_a" }));
+    agent.onRequest("session/prompt", () => ({ stopReason: "end_turn" }));
+
+    await conn.cancel("notes/a.md"); // no session yet
+    expect(onCancel).not.toHaveBeenCalled();
+
+    await conn.prompt("notes/a.md", [textBlock("go")]);
+    await conn.cancel("notes/a.md");
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(onCancel.mock.calls[0][0]).toEqual({ sessionId: "sess_a" });
+  });
+
   it("reuses one session per doc across prompts", async () => {
     const { agent, conn } = harness();
     const newSession = vi.fn(() => ({ sessionId: "sess_a" }));

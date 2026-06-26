@@ -167,7 +167,15 @@ export class JsonRpcPeer {
 
   private handleNotification(method: string, params: unknown): void {
     const handler = this.notificationHandlers.get(method);
-    if (handler) handler(params);
+    if (!handler) return;
+    // Contain a throwing handler: notifications are dispatched synchronously
+    // from receive(), so an uncaught throw would abort the rest of the agent's
+    // buffered stdout chunk.
+    try {
+      handler(params);
+    } catch (e) {
+      console.error(`acp: notification handler for ${method} threw`, e);
+    }
   }
 
   private send(message: unknown): void {
