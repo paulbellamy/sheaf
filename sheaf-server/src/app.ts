@@ -6,7 +6,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 
 import type { Backend } from "./backend/index";
 import { getBackend } from "./backend/factory";
-import { buildServer } from "./server";
+import { buildServer, type ToolSurface } from "./server";
 import { errorResult } from "./errors";
 import { pipeEvents, reserveSseClient, type SseSink } from "./events";
 import {
@@ -60,7 +60,7 @@ function isLoopbackHost(hostHeader: string | undefined): boolean {
 
 export function buildSheafApp(
   backend: Backend = getBackend(),
-  opts: { allowedOrigins?: string[] } = {},
+  opts: { allowedOrigins?: string[]; tools?: ToolSurface } = {},
 ): FastifyInstance {
   const app = Fastify({
     logger: false,
@@ -277,7 +277,7 @@ export function buildSheafApp(
         sessionIdGenerator: undefined,
         enableJsonResponse: true,
       });
-      const server = buildServer(backend);
+      const server = buildServer(backend, { tools: opts.tools });
       await server.connect(transport);
       reply.raw.on("close", () => {
         void server.close().catch(() => {});

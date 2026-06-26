@@ -180,8 +180,12 @@ mode.
   `ResolveThread`, `AddThread`, `AttachDraftPayload`, `Glob`, `Grep`, `ReadMe`.
   the thread tools are **doc-scoped** on a scoped connection (§3.1) — `path` is
   implied by the session's scope, not supplied by the agent.
-- **drop from the plugin's surface:** `Read`, `Edit`, `Write` → now acp `fs/*`.
-- **gate by mode, don't delete:** `Fork`, `Propose`, `Merge`, `DeclineDraft`.
+- **drop from the plugin's surface:** `Read`, `Edit`, `Write` → now acp `fs/*`
+  (deferred — these stay registered until the acp fs path exists).
+- **gate by surface, don't delete:** `Fork`, `Propose`, `Merge`, `DeclineDraft`,
+  `DraftChanges`. The whole draft surface is omitted in `tools: "thread-only"`
+  (the option `buildServer`/`buildSheafApp` take); `fork()` etc. stay in the
+  backend for the web prototype. **Implemented.**
 
 on `Fork` specifically: it is **load-bearing in `sheaf-server`, not dead code.**
 the bare `Fork` mcp tool is unused by the plugin, but `backend.forkAndAttachThreads()`

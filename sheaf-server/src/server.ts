@@ -18,13 +18,36 @@ import { registerWorkspaceTools } from "./tools/workspaces";
 import { registerWrite } from "./tools/write";
 
 /**
- * Build an MCP server instance with all sheaf tools registered.
+ * Which tool surface to expose.
+ *
+ * - `"full"` (default) — every tool, including the draft-workflow tools. Used
+ *   by the web prototype, which drives the fork/propose/merge flow.
+ * - `"thread-only"` — omits the draft-workflow tools (Fork, Propose, Merge,
+ *   DeclineDraft, DraftChanges). Used by the Obsidian plugin, which runs in
+ *   thread-on-doc mode and never touches drafts. The draft tools stay in the
+ *   backend (the prototype needs them); they're just not registered here.
+ */
+export type ToolSurface = "full" | "thread-only";
+
+export interface BuildServerOptions {
+  tools?: ToolSurface;
+}
+
+/**
+ * Build an MCP server instance with sheaf tools registered.
  *
  * Factory because the Streamable HTTP transport creates a fresh server per
  * request in stateless mode. The Backend itself is module-scoped and shared
  * across requests (see getBackend() in backend/factory.ts).
+ *
+ * `opts.tools` selects the tool surface (see {@link ToolSurface}); it defaults
+ * to `"full"` so existing callers (`buildServer()`) are unchanged.
  */
-export function buildServer(backend: Backend = getBackend()): McpServer {
+export function buildServer(
+  backend: Backend = getBackend(),
+  opts: BuildServerOptions = {},
+): McpServer {
+  const { tools = "full" } = opts;
   const server = new McpServer(
     {
       name: "sheaf",
@@ -43,11 +66,13 @@ export function buildServer(backend: Backend = getBackend()): McpServer {
   registerEdit(server, backend);
   registerGlob(server, backend);
   registerGrep(server, backend);
-  registerFork(server, backend);
-  registerPropose(server, backend);
-  registerMerge(server, backend);
-  registerDeclineDraft(server, backend);
-  registerDraftChanges(server, backend);
+  if (tools !== "thread-only") {
+    registerFork(server, backend);
+    registerPropose(server, backend);
+    registerMerge(server, backend);
+    registerDeclineDraft(server, backend);
+    registerDraftChanges(server, backend);
+  }
   registerListDocs(server, backend);
   registerWorkspaceTools(server, backend);
   registerThreadTools(server, backend);
