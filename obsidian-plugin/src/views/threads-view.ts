@@ -18,6 +18,7 @@ import {
   reviewPersonaId,
 } from "../review";
 import { ACP_AGENTS, ACP_EFFORTS, type AcpEffort } from "../acp/registry";
+import type { ActivitySnapshot } from "../acp/activity-store";
 
 export const VIEW_TYPE_SHEAF_THREADS = "sheaf-threads";
 
@@ -90,6 +91,9 @@ export class ThreadsView extends ItemView {
   private docText: string | null = null;
   private threads: Thread[] = [];
   private agentConnected = false;
+  private activityEl: HTMLElement | null = null;
+  private storeUnsub: (() => void) | null = null;
+  private activityRenderQueued = false;
   // Per-thread selected variant index. Resets when the thread's payload changes.
   private selectedVariant = new Map<string, number>();
   // Per-thread pending reply text. The panel re-renders wholesale on every
@@ -204,17 +208,174 @@ export class ThreadsView extends ItemView {
         }
       }),
     );
+    // Live agent-activity: re-render the activity subtree on store changes
+    // (debounced — message/thought chunks can burst) and tick while a turn is
+    // active so the elapsed/stalled hint stays current.
+    this.storeUnsub = this.plugin
+      .acpActivity()
+      .subscribe(() => this.scheduleActivityRender());
+    this.registerInterval(window.setInterval(() => this.tickActivity(), 2000));
+
     const active = this.app.workspace.getActiveFile();
     if (active) void this.onFileOpen(active);
   }
 
   async onClose(): Promise<void> {
+    this.storeUnsub?.();
+    this.storeUnsub = null;
+    this.activityEl = null;
     this.contentEl.empty();
   }
 
   setAgentPresence(connected: boolean): void {
     this.agentConnected = connected;
     this.render();
+  }
+
+  private scheduleActivityRender(): void {
+    if (this.activityRenderQueued) return;
+    this.activityRenderQueued = true;
+    window.setTimeout(() => {
+      this.activityRenderQueued = false;
+      this.renderActivity();
+    }, 120);
+  }
+
+  /** Keep the elapsed/stalled hint fresh while a turn is in flight. */
+  private tickActivity(): void {
+    if (!this.currentDocPath) return;
+    const snap = this.plugin.acpActivity().snapshot(this.currentDocPath);
+    if (snap && snap.state !== "idle" && snap.state !== "dead") {
+      this.renderActivity();
+    }
+  }
+
+  /** Patch the activity subtree in place from the current doc's snapshot. */
+  private renderActivity(): void {
+    const el = this.activityEl;
+    if (!el || !el.isConnected) return;
+    el.empty();
+    const docPath = this.currentDocPath;
+    if (!docPath) return;
+    const snap = this.plugin.acpActivity().snapshot(docPath);
+    if (!snap) return;
+    // Nothing worth showing for an untouched/idle doc.
+    if (
+      snap.state === "idle" &&
+      snap.plan.length === 0 &&
+      snap.toolCalls.length === 0 &&
+      !snap.stopReason
+    ) {
+      return;
+    }
+
+    el.style.padding = "0.5em";
+    el.style.borderBottom = "1px solid var(--background-modifier-border)";
+    el.style.fontSize = "0.85em";
+
+    const statusRow = el.createDiv();
+    statusRow.style.display = "flex";
+    statusRow.style.alignItems = "center";
+    statusRow.style.justifyContent = "space-between";
+    statusRow.style.gap = "0.5em";
+
+    const { text, color } = this.describeActivity(snap);
+    const label = statusRow.createDiv();
+    label.setText(text);
+    label.style.color = color;
+    label.style.fontWeight = "500";
+
+    if (
+      snap.state === "working" ||
+      snap.state === "thinking" ||
+      snap.state === "stalled"
+    ) {
+      const stop = statusRow.createEl("button", { text: "Stop" });
+      stop.style.fontSize = "0.8em";
+      stop.style.flexShrink = "0";
+      stop.title = "Cancel the agent's current turn";
+      stop.addEventListener("click", () =>
+        this.plugin.cancelAgentTurn(docPath),
+      );
+    }
+
+    if (snap.plan.length > 0) {
+      const planEl = el.createDiv();
+      planEl.style.marginTop = "0.4em";
+      for (const p of snap.plan) {
+        const row = planEl.createDiv();
+        const mark =
+          p.status === "completed"
+            ? "☑"
+            : p.status === "in_progress"
+              ? "◐"
+              : "☐";
+        row.setText(`${mark} ${p.content}`); // setText = plain text (injection-safe)
+        row.style.opacity = p.status === "completed" ? "0.6" : "1";
+        if (p.status === "in_progress") row.style.fontWeight = "500";
+      }
+    }
+
+    if (snap.toolCalls.length > 0) {
+      const toolsEl = el.createDiv();
+      toolsEl.style.marginTop = "0.4em";
+      toolsEl.style.opacity = "0.85";
+      // Last few — a full timeline is the maximalist view.
+      for (const t of snap.toolCalls.slice(-6)) {
+        const row = toolsEl.createDiv();
+        const icon =
+          t.status === "completed"
+            ? "✓"
+            : t.status === "failed"
+              ? "✗"
+              : t.status === "in_progress"
+                ? "⟳"
+                : "·";
+        row.setText(`${icon} ${t.title}`);
+        if (t.status === "failed") row.style.color = "var(--text-error)";
+      }
+    }
+  }
+
+  private describeActivity(snap: ActivitySnapshot): {
+    text: string;
+    color: string;
+  } {
+    const secs = Math.round(
+      (snap.state === "stalled" ? snap.quietMs : snap.elapsedMs) / 1000,
+    );
+    switch (snap.state) {
+      case "thinking":
+        return { text: `Thinking… (${secs}s)`, color: "var(--text-muted)" };
+      case "working":
+        return {
+          text: `⟳ ${snap.currentTool ?? "Working"}… (${secs}s)`,
+          color: "var(--text-normal)",
+        };
+      case "waiting":
+        return {
+          text: "⏸ Waiting for your input",
+          color: "var(--text-warning)",
+        };
+      case "stalled":
+        return {
+          text: `⚠ Possibly stuck — quiet for ${secs}s`,
+          color: "var(--text-warning)",
+        };
+      case "dead":
+        return {
+          text: `✗ Agent crashed${snap.dead ? `: ${snap.dead}` : ""}`,
+          color: "var(--text-error)",
+        };
+      default: // idle
+        return {
+          text:
+            snap.stopReason && snap.stopReason !== "end_turn"
+              ? `■ Stopped (${snap.stopReason})`
+              : "✓ Done",
+          color: "var(--text-muted)",
+        };
+    }
   }
 
   async refreshCurrent(): Promise<void> {
@@ -357,6 +518,12 @@ export class ThreadsView extends ItemView {
       this.plugin.settings.acpEffort = effortSel.value as AcpEffort;
       void this.plugin.saveSettings();
     });
+
+    // Live agent activity for the current doc (plan, current step, state, stop
+    // reason, Stop button). Its own node so store updates patch it in place
+    // without a full panel re-render.
+    this.activityEl = el.createDiv();
+    this.renderActivity();
 
     // No agent listening → show how to connect one (or how to start the
     // server, if it's the server that's down). Shown regardless of whether a

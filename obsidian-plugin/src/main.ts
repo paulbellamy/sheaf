@@ -23,6 +23,7 @@ import { ThreadsView, VIEW_TYPE_SHEAF_THREADS } from "./views/threads-view";
 import { buildPanelRequestMessage } from "./review";
 import { flashField, mountFlashStyles } from "./editor/flash";
 import { AcpController } from "./acp/controller";
+import type { ActivityStore } from "./acp/activity-store";
 import { ACP_EFFORTS, DEFAULT_ACP_EFFORT } from "./acp/registry";
 
 export default class SheafPlugin extends Plugin {
@@ -210,6 +211,16 @@ export default class SheafPlugin extends Plugin {
   /** True when the plugin has a live ACP agent (distinct from a manual MCP one). */
   acpConnected(): boolean {
     return this.acp?.connected === true;
+  }
+
+  /** The per-doc activity model the threads panel renders. */
+  acpActivity(): ActivityStore {
+    return this.acp.activity;
+  }
+
+  /** Cancel the agent's in-flight turn on `docPath`. */
+  cancelAgentTurn(docPath: string): void {
+    this.acp.cancel(docPath);
   }
 
   async loadSettings(): Promise<void> {

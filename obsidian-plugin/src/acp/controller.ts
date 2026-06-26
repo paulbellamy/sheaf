@@ -1,5 +1,6 @@
 import { App } from "obsidian";
 
+import { ActivityStore } from "./activity-store";
 import { DocStore } from "./doc-store";
 import { spawnAcpAgent, type SpawnedAgent } from "./agent-host";
 import { DEFAULT_ACP_EFFORT, getAcpAgent, type AcpEffort } from "./registry";
@@ -33,6 +34,8 @@ export class AcpController {
   // Bumped on every connect/disconnect so a *previous* agent's late exit can't
   // clear the live one (a killed child's "exit" fires after the new one is up).
   private generation = 0;
+  /** Per-doc activity the harness UI renders. Persists across connects. */
+  readonly activity = new ActivityStore();
 
   constructor(private readonly deps: AcpControllerDeps) {}
 
@@ -60,8 +63,16 @@ export class AcpController {
       spec,
       docs,
       {
-        onPermission: (req) => requestAcpPermission(this.deps.app, req),
-        onUpdate: (n) => this.deps.onStatus(summarizeUpdate(n)),
+        onPermission: (req, docPath) => {
+          if (docPath) this.activity.setPermission(docPath, true);
+          return requestAcpPermission(this.deps.app, req).finally(() => {
+            if (docPath) this.activity.setPermission(docPath, false);
+          });
+        },
+        onUpdate: (n, docPath) => {
+          if (docPath) this.activity.ingest(docPath, n.update);
+          this.deps.onStatus(summarizeUpdate(n));
+        },
       },
       {
         cwd: vaultRoot,
@@ -81,6 +92,7 @@ export class AcpController {
         onExit: (code) => {
           if (this.generation !== myGen) return; // a superseded agent — ignore
           this.agent = null;
+          this.activity.agentExited(`agent exited (code ${code ?? "?"})`);
           this.deps.onStatus(`ACP agent exited (${code ?? "?"})`);
           this.deps.onConnectionChange?.(false);
         },
@@ -119,8 +131,9 @@ export class AcpController {
   async promptForThread(docPath: string, brief: string): Promise<void> {
     const agent = this.agent;
     if (!agent) return;
+    this.activity.turnStarted(docPath);
     try {
-      await agent.connection.prompt(docPath, [
+      const res = await agent.connection.prompt(docPath, [
         textBlock(
           `A new sheaf comment thread was posted on "${docPath}":\n\n${brief}\n\n` +
             "Use the sheaf MCP tools to read the open thread(s) on this doc and " +
@@ -128,13 +141,21 @@ export class AcpController {
             "file tools, then resolve.",
         ),
       ]);
+      this.activity.turnEnded(docPath, res.stopReason);
     } catch (e) {
       // Don't let a prompt/session-creation failure vanish (callers fire this
-      // with `void`); surface it on the status channel.
+      // with `void`); surface it on the status channel. (A crash also marks the
+      // doc dead via onExit, which wins over this abort in the snapshot.)
+      this.activity.turnAborted(docPath);
       const detail = e instanceof Error ? e.message : String(e);
       console.error("sheaf: ACP prompt failed", e);
       this.deps.onStatus(`ACP prompt failed: ${detail}`);
     }
+  }
+
+  /** Cancel the in-flight turn for a doc (best-effort; resolves as cancelled). */
+  cancel(docPath: string): void {
+    void this.agent?.connection.cancel(docPath);
   }
 }
 
