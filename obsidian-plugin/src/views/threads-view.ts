@@ -188,7 +188,9 @@ export class ThreadsView extends ItemView {
   async onOpen(): Promise<void> {
     this.contentEl.empty();
     this.contentEl.addClass("sheaf-threads-view");
-    this.agentConnected = this.plugin.agentConnected;
+    // Combined presence (manual MCP *or* a spawned ACP agent) — reading the
+    // raw SSE-only flag here showed "no agent" even with an ACP agent live.
+    this.agentConnected = this.plugin.isAgentPresent();
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
         void this.onFileOpen(file);
@@ -281,7 +283,13 @@ export class ThreadsView extends ItemView {
     header.style.padding = "0.5em";
     header.style.borderBottom = "1px solid var(--background-modifier-border)";
 
-    const presence = header.createDiv();
+    const presenceRow = header.createDiv();
+    presenceRow.style.display = "flex";
+    presenceRow.style.alignItems = "center";
+    presenceRow.style.justifyContent = "space-between";
+    presenceRow.style.gap = "0.5em";
+
+    const presence = presenceRow.createDiv();
     presence.setText(
       this.agentConnected ? "● agent connected" : "○ no agent listening",
     );
@@ -290,6 +298,29 @@ export class ThreadsView extends ItemView {
     presence.style.color = this.agentConnected
       ? "var(--text-success)"
       : "var(--text-muted)";
+
+    // Connect/disconnect the plugin-managed ACP agent. Labelled by ACP state
+    // specifically (not the combined presence) — it only controls the
+    // subprocess the plugin spawns, not a manually-attached MCP agent.
+    const acpConnected = this.plugin.acpConnected();
+    const acpBtn = presenceRow.createEl("button", {
+      text: acpConnected ? "Disconnect" : "Connect agent",
+    });
+    acpBtn.style.fontSize = "0.8em";
+    acpBtn.style.flexShrink = "0";
+    acpBtn.title = acpConnected
+      ? "Stop the ACP agent the plugin started"
+      : "Start the configured ACP agent (Settings → Sheaf → ACP agent)";
+    acpBtn.addEventListener("click", () => {
+      if (this.plugin.acpConnected()) {
+        this.plugin.disconnectAcp();
+      } else {
+        acpBtn.disabled = true;
+        acpBtn.setText("Connecting…");
+        // Re-renders via onConnectionChange on success/failure.
+        void this.plugin.connectAcp();
+      }
+    });
 
     // No agent listening → show how to connect one (or how to start the
     // server, if it's the server that's down). Shown regardless of whether a

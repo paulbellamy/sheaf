@@ -96,15 +96,14 @@ export default class SheafPlugin extends Plugin {
     this.addCommand({
       id: "sheaf-acp-connect",
       name: "Connect ACP agent",
-      callback: () => void this.connectAcpAgent(),
+      callback: () => void this.connectAcp(),
     });
 
     this.addCommand({
       id: "sheaf-acp-disconnect",
       name: "Disconnect ACP agent",
       callback: () => {
-        this.acp.disconnect();
-        new Notice("Sheaf: ACP agent disconnected");
+        this.disconnectAcp();
       },
     });
 
@@ -179,7 +178,7 @@ export default class SheafPlugin extends Plugin {
    * agent the sheaf MCP (scoped per doc) over session/new, services its file
    * I/O through the ydoc, and gates writes via a permission modal.
    */
-  private async connectAcpAgent(): Promise<void> {
+  async connectAcp(): Promise<void> {
     const root = this.vaultRoot();
     if (!root) {
       new Notice("Sheaf: ACP needs a local-filesystem vault.");
@@ -198,6 +197,17 @@ export default class SheafPlugin extends Plugin {
       const msg = err instanceof Error ? err.message : String(err);
       new Notice(`Sheaf: ACP connect failed — ${msg}`, 8000);
     }
+  }
+
+  /** Stop the ACP agent the plugin started. */
+  disconnectAcp(): void {
+    this.acp.disconnect();
+    new Notice("Sheaf: ACP agent disconnected");
+  }
+
+  /** True when the plugin has a live ACP agent (distinct from a manual MCP one). */
+  acpConnected(): boolean {
+    return this.acp?.connected === true;
   }
 
   async loadSettings(): Promise<void> {
@@ -501,9 +511,14 @@ export default class SheafPlugin extends Plugin {
    * a live ACP connection (and vice versa).
    */
   private refreshAgentPresence(): void {
-    const present = this.agentConnected || this.acp?.connected === true;
+    const present = this.isAgentPresent();
     this.getThreadsView()?.setAgentPresence(present);
     this.updateStatusBar(present);
+  }
+
+  /** Agent present via *either* signal — a manual MCP agent or a spawned ACP one. */
+  isAgentPresent(): boolean {
+    return this.agentConnected || this.acp?.connected === true;
   }
 
   private getThreadsView(): ThreadsView | null {
