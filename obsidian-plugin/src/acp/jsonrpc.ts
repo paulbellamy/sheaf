@@ -171,6 +171,9 @@ export class JsonRpcPeer {
   }
 
   private send(message: unknown): void {
+    // Drop anything produced after close — e.g. a request handler (permission
+    // modal) that resolves after the agent died must not write to a dead pipe.
+    if (this.closed) return;
     this.write(JSON.stringify(message) + "\n");
   }
 }

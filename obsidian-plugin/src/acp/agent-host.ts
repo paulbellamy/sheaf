@@ -40,7 +40,15 @@ export function spawnAcpAgent(
   });
 
   const peer = new JsonRpcPeer((line) => {
-    child.stdin.write(line);
+    // Best-effort: drop writes once the pipe is gone (the child died), and let
+    // the 'error' listener below catch any async EPIPE so it can't crash the
+    // renderer.
+    if (child.stdin.writable) child.stdin.write(line);
+  });
+
+  child.stdin.on("error", (err) => {
+    console.error(`[acp:${spec.id}] stdin error`, err);
+    peer.close(`agent ${spec.id} stdin error: ${String(err)}`);
   });
 
   // Split stdout into newline-delimited JSON messages.

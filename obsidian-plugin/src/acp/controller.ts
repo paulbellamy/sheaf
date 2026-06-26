@@ -28,6 +28,9 @@ export interface AcpControllerDeps {
 
 export class AcpController {
   private agent: SpawnedAgent | null = null;
+  // Bumped on every connect/disconnect so a *previous* agent's late exit can't
+  // clear the live one (a killed child's "exit" fires after the new one is up).
+  private generation = 0;
 
   constructor(private readonly deps: AcpControllerDeps) {}
 
@@ -44,6 +47,7 @@ export class AcpController {
     const spec = getAcpAgent(agentId);
     if (!spec) throw new Error(`unknown ACP agent: ${agentId}`);
     this.disconnect();
+    const myGen = this.generation;
 
     const docs = new DocStore(obsidianVaultFs(this.deps.app.vault.adapter));
     const base = serverUrl.replace(/\/$/, "");
@@ -70,13 +74,24 @@ export class AcpController {
           },
         ],
         onExit: (code) => {
+          if (this.generation !== myGen) return; // a superseded agent — ignore
           this.agent = null;
           this.deps.onStatus(`ACP agent exited (${code ?? "?"})`);
         },
       },
     );
 
-    await this.agent.connection.initialize();
+    try {
+      await this.agent.connection.initialize();
+    } catch (e) {
+      // Spawn/initialize failed (e.g. the adapter isn't installed → ENOENT).
+      // Tear down so `connected` doesn't lie, and surface the install hint.
+      this.disconnect();
+      const detail = e instanceof Error ? e.message : String(e);
+      throw new Error(
+        `${spec.displayName} didn't start (${detail}). Install it with: ${spec.installHint}`,
+      );
+    }
     this.deps.onStatus(`ACP agent connected (${spec.displayName})`);
   }
 
@@ -84,6 +99,7 @@ export class AcpController {
   disconnect(): void {
     this.agent?.dispose();
     this.agent = null;
+    this.generation++; // invalidate the old agent's pending exit handler
   }
 
   /**
@@ -94,14 +110,22 @@ export class AcpController {
   async promptForThread(docPath: string, brief: string): Promise<void> {
     const agent = this.agent;
     if (!agent) return;
-    await agent.connection.prompt(docPath, [
-      textBlock(
-        `A new sheaf comment thread was posted on "${docPath}":\n\n${brief}\n\n` +
-          "Use the sheaf MCP tools to read the open thread(s) on this doc and act " +
-          "on each per the sheaf operating guide — edit the doc with your file " +
-          "tools, then resolve.",
-      ),
-    ]);
+    try {
+      await agent.connection.prompt(docPath, [
+        textBlock(
+          `A new sheaf comment thread was posted on "${docPath}":\n\n${brief}\n\n` +
+            "Use the sheaf MCP tools to read the open thread(s) on this doc and " +
+            "act on each per the sheaf operating guide — edit the doc with your " +
+            "file tools, then resolve.",
+        ),
+      ]);
+    } catch (e) {
+      // Don't let a prompt/session-creation failure vanish (callers fire this
+      // with `void`); surface it on the status channel.
+      const detail = e instanceof Error ? e.message : String(e);
+      console.error("sheaf: ACP prompt failed", e);
+      this.deps.onStatus(`ACP prompt failed: ${detail}`);
+    }
   }
 }
 
