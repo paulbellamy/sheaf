@@ -7,6 +7,7 @@ import {
   Notice,
 } from "obsidian";
 import type { EditorView } from "@codemirror/view";
+import { remapRenamedPath } from "sheaf-server/types";
 import type SheafPlugin from "../main";
 import type { Thread, ThreadDraftBody } from "../sheaf-client";
 import { flashRange } from "../editor/flash";
@@ -227,6 +228,23 @@ export class ThreadsView extends ItemView {
     if (!this.currentDocPath) return;
     if (!targetPaths.includes(this.currentDocPath)) return;
     await this.refreshCurrent();
+  }
+
+  /**
+   * Follow a rename of the open doc — directly, or via a renamed ancestor
+   * folder (`from`/`to` are then the folder paths, and `remapRenamedPath`
+   * rewrites the descendant). Obsidian mutates the open `TFile`'s `path` in
+   * place (and fires no `file-open`), so `currentFile` still points at the
+   * right editor — only `currentDocPath`, captured as a string, has gone stale.
+   * Repoint it and refetch so the panel keeps showing the doc's threads (which
+   * the server has just moved) instead of going blank.
+   */
+  onDocRenamed(from: string, to: string): void {
+    if (!this.currentDocPath) return;
+    const next = remapRenamedPath(this.currentDocPath, from, to);
+    if (next === null) return;
+    this.currentDocPath = next;
+    void this.refreshCurrent();
   }
 
   private async onFileOpen(file: TFile | null): Promise<void> {

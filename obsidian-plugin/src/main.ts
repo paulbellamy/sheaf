@@ -1,4 +1,13 @@
-import { Editor, FileSystemAdapter, MarkdownView, Notice, Plugin } from "obsidian";
+import {
+  Editor,
+  FileSystemAdapter,
+  MarkdownView,
+  Notice,
+  Plugin,
+  TAbstractFile,
+  TFile,
+  TFolder,
+} from "obsidian";
 
 import { SheafApiError, SheafClient } from "./sheaf-client";
 import { SheafEventStream, type BackendEvent } from "./sheaf-events";
@@ -103,6 +112,16 @@ export default class SheafPlugin extends Plugin {
               }
             });
         });
+      }),
+    );
+
+    // A vault rename moves the `.md` but leaves sheaf's sidecars (threads,
+    // version history, drafts) pinned to the old path. Reconcile them on the
+    // server — which also wakes the connected agent — and follow the rename in
+    // the open threads panel so it doesn't go blank on the now-stale path.
+    this.registerEvent(
+      this.app.vault.on("rename", (file, oldPath) => {
+        void this.onFileRenamed(file, oldPath);
       }),
     );
 
@@ -217,6 +236,36 @@ export default class SheafPlugin extends Plugin {
    */
   vaultPathToSheafPath(vaultPath: string): string {
     return vaultPath;
+  }
+
+  /**
+   * Handle a vault rename. Markdown files carry thread state directly; folders
+   * carry it for every doc under them (Obsidian fires one event for the folder,
+   * not per descendant), so both are forwarded as a single `from → to` the
+   * server expands. Non-markdown files have no sheaf state and are skipped.
+   * Pushes the change to the server (best effort — it may be down or external)
+   * and tells the threads panel to re-anchor if it was showing an affected doc.
+   */
+  private async onFileRenamed(
+    file: TAbstractFile,
+    oldPath: string,
+  ): Promise<void> {
+    const isFolder = file instanceof TFolder;
+    const isMarkdown = file instanceof TFile && file.extension === "md";
+    if (!isFolder && !isMarkdown) return;
+    const from = this.vaultPathToSheafPath(oldPath);
+    const to = this.vaultPathToSheafPath(file.path);
+    if (from === to) return;
+    try {
+      await this.client.renameDoc(from, to);
+      // Re-anchor the panel only once the server has actually moved the
+      // threads — otherwise refetching the new path returns nothing and the
+      // panel goes blank. On failure leave it on the old path (whose threads
+      // are still intact server-side); a later file switch recovers.
+      this.getThreadsView()?.onDocRenamed(from, to);
+    } catch (err) {
+      console.warn("sheaf: could not sync rename to server", err);
+    }
   }
 
   private async activateThreadsView(): Promise<void> {

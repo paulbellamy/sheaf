@@ -112,6 +112,28 @@ export async function docVersions(
   return { status: 200, json: { path: opts.path, versions } };
 }
 
+const renameBodySchema = z.object({
+  from: z.string().min(1).max(512),
+  to: z.string().min(1).max(512),
+});
+
+/**
+ * Reconcile sidecar state after the vault renamed `from` → `to` — either a
+ * single doc or a whole folder (the backend remaps every descendant). The
+ * Obsidian plugin fires this on `vault.on("rename")` so threads, version
+ * history, and drafts follow the move instead of orphaning on the old path.
+ * The byte move is the vault's job; this only fixes sheaf's metadata.
+ */
+export async function renameDoc(
+  backend: Backend,
+  opts: { body: unknown },
+): Promise<HandlerResult> {
+  const parsed = renameBodySchema.safeParse(opts.body);
+  if (!parsed.success) return invalidBody(parsed.error);
+  const moved = await backend.renameDoc(parsed.data.from, parsed.data.to);
+  return { status: 200, json: { ok: true, moved_threads: moved } };
+}
+
 /* --------------------------------------------------------------- threads -- */
 
 const charRangeSchema = z.object({

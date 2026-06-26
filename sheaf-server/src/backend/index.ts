@@ -11,6 +11,8 @@
  * the form "draft_<uuid>".
  */
 
+export { remapRenamedPath } from "../paths";
+
 export type Ref = "main" | string;
 
 export type DocPath = string;
@@ -242,6 +244,22 @@ export interface Backend {
   grep(opts: GrepOptions): Promise<GrepResult>;
 
   readDoc(path: DocPath, ref?: Ref): Promise<DocContent>;
+
+  /**
+   * Reconcile sheaf's sidecar state after a rename `from` → `to`. `from`/`to`
+   * may name a single doc OR a folder — a folder rename reconciles every
+   * descendant in one pass (see `remapRenamedPath`).
+   *
+   * The byte move itself is the caller's job (in the Obsidian prototype the
+   * vault renames out from under us); this only fixes the metadata that would
+   * otherwise orphan: thread sidecars and their stored target paths, per-doc
+   * version counters/history, and any draft whose `base_path`/`touches` sat
+   * under `from`. Emits a `thread_changed` for every moved thread so the UI
+   * and the connected agent re-resolve against the new paths.
+   *
+   * No-op when `from === to`. Returns the ids of the threads that moved.
+   */
+  renameDoc(from: DocPath, to: DocPath, origin?: Origin): Promise<ThreadId[]>;
 
   writeDoc(
     path: DocPath,
