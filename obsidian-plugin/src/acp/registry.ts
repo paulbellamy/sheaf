@@ -29,15 +29,15 @@ export const ACP_AGENTS: readonly AcpAgentSpec[] = [
     id: "claude-code",
     displayName: "Claude Code",
     command: "npx",
-    args: ["-y", "@zed-industries/claude-code-acp"],
-    installHint: "npm install -g @zed-industries/claude-code-acp",
+    args: ["-y", "@agentclientprotocol/claude-agent-acp"],
+    installHint: "npm install -g @agentclientprotocol/claude-agent-acp",
   },
   {
     id: "codex",
     displayName: "Codex",
     command: "npx",
-    args: ["-y", "@zed-industries/codex-acp"],
-    installHint: "npm install -g @zed-industries/codex-acp",
+    args: ["-y", "@agentclientprotocol/codex-acp"],
+    installHint: "npm install -g @agentclientprotocol/codex-acp",
   },
 ];
 
