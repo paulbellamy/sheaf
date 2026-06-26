@@ -158,6 +158,27 @@ export class SheafClient {
     }
   }
 
+  /**
+   * Tell the server a doc was renamed `from` → `to` so it moves the doc's
+   * threads, version history, and drafts onto the new path. The vault has
+   * already moved the `.md`; this reconciles sheaf's sidecar state and wakes
+   * the connected agent. Returns the ids of the threads that moved.
+   */
+  async renameDoc(from: string, to: string): Promise<string[]> {
+    const url = `${this.baseUrl}/api/ui/rename`;
+    const res = await requestUrl({
+      url,
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ from, to }),
+      throw: false,
+    });
+    if (res.status >= 400) {
+      throw new SheafApiError(describeError(res.status, res.json), res.status, res.json);
+    }
+    return (res.json as { moved_threads: string[] }).moved_threads;
+  }
+
   async ping(): Promise<boolean> {
     try {
       const res = await requestUrl({
