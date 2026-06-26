@@ -42,6 +42,8 @@ function harness(opts?: {
   agent = new JsonRpcPeer((line) => client.receive(line));
 
   const onUpdate = vi.fn<AcpCallbacks["onUpdate"]>();
+  const onFileOp = vi.fn<NonNullable<AcpCallbacks["onFileOp"]>>();
+  const onSessionModes = vi.fn<NonNullable<AcpCallbacks["onSessionModes"]>>();
   const onPermission =
     opts?.permission ??
     vi.fn<AcpCallbacks["onPermission"]>(async () => ({
@@ -52,7 +54,7 @@ function harness(opts?: {
   const conn = new AcpConnection(
     client,
     docs,
-    { onUpdate, onPermission },
+    { onUpdate, onPermission, onFileOp, onSessionModes },
     {
       cwd: "/vault",
       mcpServersFor: (docPath) => [
@@ -68,7 +70,7 @@ function harness(opts?: {
     },
   );
 
-  return { agent, conn, onUpdate, onPermission };
+  return { agent, conn, onUpdate, onPermission, onFileOp, onSessionModes };
 }
 
 describe("AcpConnection — driving the agent", () => {
@@ -249,5 +251,65 @@ describe("AcpConnection — serving the agent's calls (client-write path)", () =
     const [notif, docPath] = onUpdate.mock.calls[0];
     expect(notif.update.sessionUpdate).toBe("agent_thought_chunk");
     expect(docPath).toBe("notes/a.md");
+  });
+
+  it("emits onFileOp for fs reads/writes, routed to the session's doc", async () => {
+    const { agent, conn, onFileOp } = harness({ fs: fakeFs({ "notes/a.md": "x" }) });
+    agent.onRequest("session/new", () => ({ sessionId: "sess_a" }));
+    agent.onRequest("session/prompt", () => ({ stopReason: "end_turn" }));
+    await conn.prompt("notes/a.md", [textBlock("go")]); // maps sess_a → notes/a.md
+
+    await agent.request("fs/read_text_file", {
+      sessionId: "sess_a",
+      path: "/vault/notes/a.md",
+    });
+    await agent.request("fs/write_text_file", {
+      sessionId: "sess_a",
+      path: "/vault/notes/a.md",
+      content: "y",
+    });
+
+    expect(onFileOp.mock.calls).toEqual([
+      ["read", "notes/a.md", "notes/a.md"],
+      ["write", "notes/a.md", "notes/a.md"],
+    ]);
+  });
+});
+
+describe("AcpConnection — modes", () => {
+  it("reports a new session's modes via onSessionModes", async () => {
+    const { agent, conn, onSessionModes } = harness();
+    agent.onRequest("session/new", () => ({
+      sessionId: "sess_a",
+      modes: {
+        currentModeId: "edit",
+        availableModes: [
+          { id: "edit", name: "Edit" },
+          { id: "review", name: "Review" },
+        ],
+      },
+    }));
+    agent.onRequest("session/prompt", () => ({ stopReason: "end_turn" }));
+    await conn.prompt("notes/a.md", [textBlock("go")]);
+
+    expect(onSessionModes).toHaveBeenCalledWith("notes/a.md", "edit", [
+      { id: "edit", name: "Edit" },
+      { id: "review", name: "Review" },
+    ]);
+  });
+
+  it("setMode sends session/set_mode on the doc's session", async () => {
+    const { agent, conn } = harness();
+    agent.onRequest("session/new", () => ({ sessionId: "sess_a" }));
+    agent.onRequest("session/prompt", () => ({ stopReason: "end_turn" }));
+    await conn.prompt("notes/a.md", [textBlock("go")]);
+
+    let seen: any;
+    agent.onRequest("session/set_mode", (p) => {
+      seen = p;
+      return null;
+    });
+    await conn.setMode("notes/a.md", "review");
+    expect(seen).toEqual({ sessionId: "sess_a", modeId: "review" });
   });
 });

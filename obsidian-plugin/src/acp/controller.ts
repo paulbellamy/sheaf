@@ -8,6 +8,7 @@ import { makeToVaultPath, obsidianVaultFs } from "./vault-fs";
 import { requestAcpPermission } from "../views/acp-permission-modal";
 import {
   textBlock,
+  type ContentBlock,
   type McpServerConfig,
   type SessionNotification,
 } from "./protocol";
@@ -85,6 +86,11 @@ export class AcpController {
           if (docPath) this.activity.ingest(docPath, n.update);
           this.deps.onStatus(summarizeUpdate(n));
         },
+        onFileOp: (op, path, docPath) => {
+          if (docPath) this.activity.fileOp(docPath, op, path);
+        },
+        onSessionModes: (docPath, current, available) =>
+          this.activity.setAvailableModes(docPath, available, current),
       },
       {
         cwd: vaultRoot,
@@ -141,33 +147,51 @@ export class AcpController {
    * when no agent is connected (the manual-MCP flow still works on its own).
    */
   async promptForThread(docPath: string, brief: string): Promise<void> {
-    const agent = this.agent;
-    if (!agent) return;
-    this.activity.turnStarted(docPath);
-    try {
-      const res = await agent.connection.prompt(docPath, [
-        textBlock(
-          `A new sheaf comment thread was posted on "${docPath}":\n\n${brief}\n\n` +
-            "Use the sheaf MCP tools to read the open thread(s) on this doc and " +
-            "act on each per the sheaf operating guide — edit the doc with your " +
-            "file tools, then resolve.",
-        ),
-      ]);
-      this.activity.turnEnded(docPath, res.stopReason);
-    } catch (e) {
-      // Don't let a prompt/session-creation failure vanish (callers fire this
-      // with `void`); surface it on the status channel. (A crash also marks the
-      // doc dead via onExit, which wins over this abort in the snapshot.)
-      this.activity.turnAborted(docPath);
-      const detail = e instanceof Error ? e.message : String(e);
-      console.error("sheaf: ACP prompt failed", e);
-      this.deps.onStatus(`ACP prompt failed: ${detail}`);
-    }
+    await this.runPrompt(docPath, [
+      textBlock(
+        `A new sheaf comment thread was posted on "${docPath}":\n\n${brief}\n\n` +
+          "Use the sheaf MCP tools to read the open thread(s) on this doc and " +
+          "act on each per the sheaf operating guide — edit the doc with your " +
+          "file tools, then resolve.",
+      ),
+    ]);
+  }
+
+  /** Send a free-form follow-up into the doc's live session (user interjection). */
+  async interject(docPath: string, text: string): Promise<void> {
+    await this.runPrompt(docPath, [textBlock(text)]);
   }
 
   /** Cancel the in-flight turn for a doc (best-effort; resolves as cancelled). */
   cancel(docPath: string): void {
     void this.agent?.connection.cancel(docPath);
+  }
+
+  /** Switch the agent's mode for a doc (e.g. edit ↔ review). */
+  setMode(docPath: string, modeId: string): void {
+    void this.agent?.connection.setMode(docPath, modeId).then(
+      () => this.activity.setMode(docPath, modeId),
+      (e) => this.deps.onStatus(`set mode failed: ${String(e)}`),
+    );
+  }
+
+  /** Run a prompt turn on a doc's session, tracking it in the activity store. */
+  private async runPrompt(docPath: string, blocks: ContentBlock[]): Promise<void> {
+    const agent = this.agent;
+    if (!agent) return;
+    this.activity.turnStarted(docPath);
+    try {
+      const res = await agent.connection.prompt(docPath, blocks);
+      this.activity.turnEnded(docPath, res.stopReason);
+    } catch (e) {
+      // Don't let a prompt/session-creation failure vanish (callers fire this
+      // with `void`); surface it. (A crash also marks the doc dead via onExit,
+      // which wins over this abort in the snapshot.)
+      this.activity.turnAborted(docPath);
+      const detail = e instanceof Error ? e.message : String(e);
+      console.error("sheaf: ACP prompt failed", e);
+      this.deps.onStatus(`ACP prompt failed: ${detail}`);
+    }
   }
 }
 

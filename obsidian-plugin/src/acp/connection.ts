@@ -15,6 +15,7 @@ import {
   type RequestPermissionParams,
   type RequestPermissionResult,
   type SessionNotification,
+  type SetModeParams,
   type WriteTextFileParams,
 } from "./protocol";
 import { DocStore } from "./doc-store";
@@ -40,6 +41,18 @@ export interface AcpCallbacks {
   ): Promise<RequestPermissionResult>;
   /** A streamed session update (message/thought chunk, plan, tool call). */
   onUpdate(notif: SessionNotification, docPath: string | undefined): void;
+  /** An fs op the client serviced for the agent (the file read/written). */
+  onFileOp?(
+    op: "read" | "write",
+    path: string,
+    docPath: string | undefined,
+  ): void;
+  /** A new session's mode set, learned from session/new. */
+  onSessionModes?(
+    docPath: string,
+    currentModeId: string,
+    availableModes: Array<{ id: string; name: string }>,
+  ): void;
 }
 
 export interface AcpConnectionOptions {
@@ -113,6 +126,13 @@ export class AcpConnection {
     this.peer.notify(ACP_METHOD.cancel, { sessionId });
   }
 
+  /** Switch the agent's mode for a doc's session (e.g. edit ↔ review). */
+  async setMode(docPath: string, modeId: string): Promise<void> {
+    const sessionId = await this.sessions.sessionFor(docPath);
+    const params: SetModeParams = { sessionId, modeId };
+    await this.peer.request(ACP_METHOD.setMode, params);
+  }
+
   private async createSession(docPath: string): Promise<string> {
     const params: NewSessionParams = {
       cwd: this.opts.cwd,
@@ -122,6 +142,13 @@ export class AcpConnection {
       ACP_METHOD.newSession,
       params,
     );
+    if (res.modes) {
+      this.cb.onSessionModes?.(
+        docPath,
+        res.modes.currentModeId,
+        res.modes.availableModes,
+      );
+    }
     return res.sessionId;
   }
 
@@ -132,12 +159,14 @@ export class AcpConnection {
   ): Promise<ReadTextFileResult> {
     const rel = this.requireVaultPath(p.path);
     const content = await this.docs.read(rel);
+    this.cb.onFileOp?.("read", rel, this.sessions.docForSession(p.sessionId));
     return { content: sliceLines(content, p.line, p.limit) };
   }
 
   private async onWriteTextFile(p: WriteTextFileParams): Promise<null> {
     const rel = this.requireVaultPath(p.path);
     await this.docs.write(rel, p.content);
+    this.cb.onFileOp?.("write", rel, this.sessions.docForSession(p.sessionId));
     return null;
   }
 

@@ -223,6 +223,16 @@ export default class SheafPlugin extends Plugin {
     this.acp.cancel(docPath);
   }
 
+  /** Switch the agent's mode for `docPath`. */
+  setAcpMode(docPath: string, modeId: string): void {
+    this.acp.setMode(docPath, modeId);
+  }
+
+  /** Send a free-form follow-up into the doc's live agent session. */
+  interjectAcp(docPath: string, text: string): Promise<void> {
+    return this.acp.interject(docPath, text);
+  }
+
   async loadSettings(): Promise<void> {
     this.settings = Object.assign(
       {},
