@@ -2,7 +2,7 @@ import { App } from "obsidian";
 
 import { DocStore } from "./doc-store";
 import { spawnAcpAgent, type SpawnedAgent } from "./agent-host";
-import { getAcpAgent, type AcpEffort } from "./registry";
+import { DEFAULT_ACP_EFFORT, getAcpAgent, type AcpEffort } from "./registry";
 import { makeToVaultPath, obsidianVaultFs } from "./vault-fs";
 import { requestAcpPermission } from "../views/acp-permission-modal";
 import {
@@ -45,7 +45,7 @@ export class AcpController {
     agentId: string,
     vaultRoot: string,
     serverUrl: string,
-    effort: AcpEffort = "default",
+    effort: AcpEffort = DEFAULT_ACP_EFFORT,
   ): Promise<void> {
     const spec = getAcpAgent(agentId);
     if (!spec) throw new Error(`unknown ACP agent: ${agentId}`);

@@ -349,9 +349,7 @@ export class ThreadsView extends ItemView {
     effortSel.title = "Reasoning effort passed to the agent on connect";
     effortSel.disabled = acpLive;
     for (const e of ACP_EFFORTS) {
-      const opt = effortSel.createEl("option", {
-        text: e === "default" ? "Effort: default" : `Effort: ${e}`,
-      });
+      const opt = effortSel.createEl("option", { text: `Effort: ${e}` });
       opt.value = e;
       if (e === this.plugin.settings.acpEffort) opt.selected = true;
     }

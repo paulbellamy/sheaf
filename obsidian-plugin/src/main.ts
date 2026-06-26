@@ -23,6 +23,7 @@ import { ThreadsView, VIEW_TYPE_SHEAF_THREADS } from "./views/threads-view";
 import { buildPanelRequestMessage } from "./review";
 import { flashField, mountFlashStyles } from "./editor/flash";
 import { AcpController } from "./acp/controller";
+import { ACP_EFFORTS, DEFAULT_ACP_EFFORT } from "./acp/registry";
 
 export default class SheafPlugin extends Plugin {
   settings: SheafSettings = DEFAULT_SETTINGS;
@@ -217,6 +218,11 @@ export default class SheafPlugin extends Plugin {
       DEFAULT_SETTINGS,
       await this.loadData(),
     );
+    // Migrate an out-of-range stored effort (e.g. the old "default") to a valid
+    // mode so the dropdown and the spawn env both stay well-formed.
+    if (!ACP_EFFORTS.includes(this.settings.acpEffort)) {
+      this.settings.acpEffort = DEFAULT_ACP_EFFORT;
+    }
   }
 
   async saveSettings(): Promise<void> {

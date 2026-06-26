@@ -35,25 +35,25 @@ describe("ACP agent registry", () => {
 });
 
 describe("ACP effort → env mapping", () => {
-  it("exposes default/low/medium/high", () => {
-    expect([...ACP_EFFORTS]).toEqual(["default", "low", "medium", "high"]);
+  it("exposes Claude Code's real modes", () => {
+    expect([...ACP_EFFORTS]).toEqual(["low", "medium", "high", "xhigh", "max"]);
   });
 
-  it("default returns no env override for either agent", () => {
-    for (const a of ACP_AGENTS) {
-      expect(a.effortEnv?.("default")).toEqual({});
+  it("claude-code maps every mode to CLAUDE_CODE_EFFORT_LEVEL verbatim", () => {
+    const claude = getAcpAgent("claude-code")!;
+    for (const e of ACP_EFFORTS) {
+      expect(claude.effortEnv?.(e)).toEqual({ CLAUDE_CODE_EFFORT_LEVEL: e });
     }
   });
 
-  it("claude-code maps effort to CLAUDE_CODE_EFFORT_LEVEL", () => {
-    expect(getAcpAgent("claude-code")?.effortEnv?.("high")).toEqual({
-      CLAUDE_CODE_EFFORT_LEVEL: "high",
-    });
-  });
-
-  it("codex maps effort to CODEX_CONFIG json", () => {
-    expect(getAcpAgent("codex")?.effortEnv?.("medium")).toEqual({
-      CODEX_CONFIG: JSON.stringify({ model_reasoning_effort: "medium" }),
-    });
+  it("codex passes low/medium/high through and clamps xhigh/max to high", () => {
+    const codex = getAcpAgent("codex")!;
+    const effort = (e: (typeof ACP_EFFORTS)[number]) =>
+      JSON.parse(codex.effortEnv!(e).CODEX_CONFIG).model_reasoning_effort;
+    expect(effort("low")).toBe("low");
+    expect(effort("medium")).toBe("medium");
+    expect(effort("high")).toBe("high");
+    expect(effort("xhigh")).toBe("high");
+    expect(effort("max")).toBe("high");
   });
 });

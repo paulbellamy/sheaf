@@ -24,21 +24,28 @@ export interface AcpAgentSpec {
   installHint: string;
   /**
    * Map a reasoning-effort level to the env vars that apply it for this agent
-   * (both adapters take effort via env, not a flag). `"default"` returns no
-   * override, leaving the agent's own default. Absent → the agent ignores effort.
+   * (both adapters take effort via env, not a flag). An agent clamps levels it
+   * doesn't support. Absent → the agent ignores effort.
    */
   effortEnv?: (effort: AcpEffort) => Record<string, string>;
 }
 
-/** Reasoning-effort levels exposed in the UI. "default" = the agent's own. */
-export type AcpEffort = "default" | "low" | "medium" | "high";
+/**
+ * Claude Code's real reasoning-effort modes — the unified scale the UI shows.
+ * Other agents clamp levels they don't support (see each spec's `effortEnv`).
+ */
+export type AcpEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export const ACP_EFFORTS: readonly AcpEffort[] = [
-  "default",
   "low",
   "medium",
   "high",
+  "xhigh",
+  "max",
 ];
+
+/** Falls back here when no level is configured (Claude's own default). */
+export const DEFAULT_ACP_EFFORT: AcpEffort = "high";
 
 export const ACP_AGENTS: readonly AcpAgentSpec[] = [
   {
@@ -48,9 +55,11 @@ export const ACP_AGENTS: readonly AcpAgentSpec[] = [
     args: ["-y", "@agentclientprotocol/claude-agent-acp"],
     installHint: "npm install -g @agentclientprotocol/claude-agent-acp",
     // CLAUDE_CODE_EFFORT_LEVEL takes precedence over every other effort source
-    // and is inherited by the Claude Code process the adapter spawns.
-    effortEnv: (effort): Record<string, string> =>
-      effort === "default" ? {} : { CLAUDE_CODE_EFFORT_LEVEL: effort },
+    // and is inherited by the Claude Code process the adapter spawns. It accepts
+    // all five modes (max included — max works specifically via this env var).
+    effortEnv: (effort): Record<string, string> => ({
+      CLAUDE_CODE_EFFORT_LEVEL: effort,
+    }),
   },
   {
     id: "codex",
@@ -58,11 +67,15 @@ export const ACP_AGENTS: readonly AcpAgentSpec[] = [
     command: "npx",
     args: ["-y", "@agentclientprotocol/codex-acp"],
     installHint: "npm install -g @agentclientprotocol/codex-acp",
-    // codex-acp merges CODEX_CONFIG (JSON) into the Codex session config.
-    effortEnv: (effort): Record<string, string> =>
-      effort === "default"
-        ? {}
-        : { CODEX_CONFIG: JSON.stringify({ model_reasoning_effort: effort }) },
+    // codex-acp merges CODEX_CONFIG (JSON) into the Codex session config. Codex
+    // tops out at "high" (model_reasoning_effort has no xhigh/max), so clamp.
+    effortEnv: (effort): Record<string, string> => {
+      const codexEffort =
+        effort === "xhigh" || effort === "max" ? "high" : effort;
+      return {
+        CODEX_CONFIG: JSON.stringify({ model_reasoning_effort: codexEffort }),
+      };
+    },
   },
 ];
 

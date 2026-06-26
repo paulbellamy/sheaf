@@ -5,6 +5,7 @@ import {
   ACP_EFFORTS,
   type AcpEffort,
   DEFAULT_ACP_AGENT_ID,
+  DEFAULT_ACP_EFFORT,
 } from "./acp/registry";
 
 /**
@@ -82,7 +83,7 @@ export const DEFAULT_SETTINGS: SheafSettings = {
   showResolved: true,
   runServer: true,
   acpAgentId: DEFAULT_ACP_AGENT_ID,
-  acpEffort: "default",
+  acpEffort: DEFAULT_ACP_EFFORT,
   personas: DEFAULT_PERSONAS,
 };
 
@@ -187,7 +188,7 @@ export class SheafSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Reasoning effort")
       .setDesc(
-        "Effort level passed to the agent on connect. “Default” leaves the agent's own default. Applies on the next connect.",
+        "Claude Code reasoning effort passed to the agent on connect (Codex clamps xhigh/max to high). Applies on the next connect.",
       )
       .addDropdown((d) => {
         for (const e of ACP_EFFORTS) {
