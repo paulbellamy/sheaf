@@ -1,5 +1,6 @@
 import { App, PluginSettingTab, Setting, TextComponent } from "obsidian";
 import type SheafPlugin from "./main";
+import { ACP_AGENTS, DEFAULT_ACP_AGENT_ID } from "./acp/registry";
 
 /**
  * A reviewer role the agent channels during a panel review. `id` is the slug
@@ -20,6 +21,8 @@ export type SheafSettings = {
   showResolved: boolean;
   /** Run the sheaf server (backend + MCP + API) inside Obsidian itself. */
   runServer: boolean;
+  /** Which ACP adapter "Connect ACP agent" spawns (id from the registry). */
+  acpAgentId: string;
   personas: ReviewPersona[];
 };
 
@@ -71,6 +74,7 @@ export const DEFAULT_SETTINGS: SheafSettings = {
   defaultAuthor: "user",
   showResolved: true,
   runServer: true,
+  acpAgentId: DEFAULT_ACP_AGENT_ID,
   personas: DEFAULT_PERSONAS,
 };
 
@@ -153,10 +157,24 @@ export class SheafSettingTab extends PluginSettingTab {
     // Surface the connect command so it's copy-pasteable from settings too.
     const mcpUrl = `${this.plugin.settings.serverUrl.replace(/\/$/, "")}/api/mcp`;
     new Setting(containerEl)
-      .setName("Connect an agent")
+      .setName("Connect an agent (manual MCP)")
       .setDesc(
         `In a terminal: claude mcp add --transport http sheaf ${mcpUrl} — then run \`claude\` and say "use the sheaf MCP and watch for events; action and resolve each thread as it appears, and keep handling new ones until I stop you".`,
       );
+
+    new Setting(containerEl)
+      .setName("ACP agent")
+      .setDesc(
+        'Which agent the "Sheaf: Connect ACP agent" command spawns. The plugin runs it as a subprocess and hands it the sheaf MCP scoped per doc — no terminal, no manual setup.',
+      )
+      .addDropdown((d) => {
+        for (const a of ACP_AGENTS) d.addOption(a.id, a.displayName);
+        d.setValue(this.plugin.settings.acpAgentId);
+        d.onChange(async (v) => {
+          this.plugin.settings.acpAgentId = v;
+          await this.plugin.saveSettings();
+        });
+      });
 
     this.renderPersonas(containerEl);
   }

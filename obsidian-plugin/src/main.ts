@@ -13,6 +13,7 @@ import { ReviewModal } from "./views/review-modal";
 import { ThreadsView, VIEW_TYPE_SHEAF_THREADS } from "./views/threads-view";
 import { buildPanelRequestMessage } from "./review";
 import { flashField, mountFlashStyles } from "./editor/flash";
+import { AcpController } from "./acp/controller";
 
 export default class SheafPlugin extends Plugin {
   settings: SheafSettings = DEFAULT_SETTINGS;
@@ -21,6 +22,7 @@ export default class SheafPlugin extends Plugin {
   private events!: SheafEventStream;
   private statusBar: HTMLElement | null = null;
   private host = new SheafServerHost();
+  private acp!: AcpController;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -29,6 +31,10 @@ export default class SheafPlugin extends Plugin {
       this.settings.serverUrl,
       (e) => this.dispatchEvent(e),
     );
+    this.acp = new AcpController({
+      app: this.app,
+      onStatus: (t) => this.flashStatus(t),
+    });
 
     this.registerView(
       VIEW_TYPE_SHEAF_THREADS,
@@ -74,6 +80,21 @@ export default class SheafPlugin extends Plugin {
           this.openReviewModalForPath(this.vaultPathToSheafPath(view.file.path));
         }
         return true;
+      },
+    });
+
+    this.addCommand({
+      id: "sheaf-acp-connect",
+      name: "Connect ACP agent",
+      callback: () => void this.connectAcpAgent(),
+    });
+
+    this.addCommand({
+      id: "sheaf-acp-disconnect",
+      name: "Disconnect ACP agent",
+      callback: () => {
+        this.acp.disconnect();
+        new Notice("Sheaf: ACP agent disconnected");
       },
     });
 
@@ -128,7 +149,35 @@ export default class SheafPlugin extends Plugin {
 
   async onunload(): Promise<void> {
     this.events?.stop();
+    this.acp?.disconnect();
     await this.host.stop();
+  }
+
+  /**
+   * Spawn the configured ACP agent as a subprocess and bring up the connection.
+   * Replaces the manual `claude mcp add` + terminal flow: the plugin hands the
+   * agent the sheaf MCP (scoped per doc) over session/new, services its file
+   * I/O through the ydoc, and gates writes via a permission modal.
+   */
+  private async connectAcpAgent(): Promise<void> {
+    const root = this.vaultRoot();
+    if (!root) {
+      new Notice("Sheaf: ACP needs a local-filesystem vault.");
+      return;
+    }
+    try {
+      new Notice("Sheaf: starting ACP agent…");
+      await this.acp.connect(
+        this.settings.acpAgentId,
+        root,
+        this.settings.serverUrl,
+      );
+      new Notice("Sheaf: ACP agent connected.");
+    } catch (err) {
+      console.error("sheaf: ACP connect failed", err);
+      const msg = err instanceof Error ? err.message : String(err);
+      new Notice(`Sheaf: ACP connect failed — ${msg}`, 8000);
+    }
   }
 
   async loadSettings(): Promise<void> {
@@ -306,6 +355,9 @@ export default class SheafPlugin extends Plugin {
           ? "Doc-level comment posted; agent will pick it up"
           : "Comment posted; agent will pick it up",
       );
+      // If an ACP agent is connected, point it at the new thread directly
+      // (no-op otherwise — the manual-MCP watch flow still applies).
+      void this.acp.promptForThread(docPath, message);
     }).open();
   }
 
@@ -316,8 +368,10 @@ export default class SheafPlugin extends Plugin {
    * selection needed — the panel reads the whole doc.
    */
   openReviewModalForPath(docPath: string): void {
-    if (!this.agentConnected) {
-      new Notice("No agent connected — start a Claude Code session first");
+    if (!this.agentConnected && !this.acp.connected) {
+      new Notice(
+        "No agent connected — run “Sheaf: Connect ACP agent” or start a Claude Code session first",
+      );
       return;
     }
 
@@ -337,6 +391,7 @@ export default class SheafPlugin extends Plugin {
       new Notice(
         `Panel review requested (${selected.length} role${selected.length === 1 ? "" : "s"}); comments will appear as the agent posts them`,
       );
+      void this.acp.promptForThread(docPath, message);
     }).open();
   }
 
