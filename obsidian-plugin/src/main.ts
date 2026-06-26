@@ -20,6 +20,7 @@ import {
 import { CommentModal } from "./views/comment-modal";
 import { ReviewModal } from "./views/review-modal";
 import { ThreadsView, VIEW_TYPE_SHEAF_THREADS } from "./views/threads-view";
+import { ActivityView, VIEW_TYPE_SHEAF_ACTIVITY } from "./views/activity-view";
 import { buildPanelRequestMessage } from "./review";
 import { flashField, mountFlashStyles } from "./editor/flash";
 import { AcpController } from "./acp/controller";
@@ -52,6 +53,10 @@ export default class SheafPlugin extends Plugin {
       VIEW_TYPE_SHEAF_THREADS,
       (leaf) => new ThreadsView(leaf, this),
     );
+    this.registerView(
+      VIEW_TYPE_SHEAF_ACTIVITY,
+      (leaf) => new ActivityView(leaf, this),
+    );
 
     // Backs the transient highlight when a thread card is clicked (flash.ts).
     // updateOptions() flushes the field into any editor already open when the
@@ -65,10 +70,20 @@ export default class SheafPlugin extends Plugin {
       void this.activateThreadsView();
     });
 
+    this.addRibbonIcon("activity", "Sheaf activity", () => {
+      void this.activateActivityView();
+    });
+
     this.addCommand({
       id: "sheaf-open-threads-panel",
       name: "Open threads panel",
       callback: () => void this.activateThreadsView(),
+    });
+
+    this.addCommand({
+      id: "sheaf-open-activity",
+      name: "Open activity view",
+      callback: () => void this.activateActivityView(),
     });
 
     this.addCommand({
@@ -367,6 +382,22 @@ export default class SheafPlugin extends Plugin {
     if (!right) return;
     await right.setViewState({
       type: VIEW_TYPE_SHEAF_THREADS,
+      active: true,
+    });
+    workspace.revealLeaf(right);
+  }
+
+  private async activateActivityView(): Promise<void> {
+    const { workspace } = this.app;
+    const existing = workspace.getLeavesOfType(VIEW_TYPE_SHEAF_ACTIVITY);
+    if (existing.length > 0) {
+      workspace.revealLeaf(existing[0]);
+      return;
+    }
+    const right = workspace.getRightLeaf(false);
+    if (!right) return;
+    await right.setViewState({
+      type: VIEW_TYPE_SHEAF_ACTIVITY,
       active: true,
     });
     workspace.revealLeaf(right);
