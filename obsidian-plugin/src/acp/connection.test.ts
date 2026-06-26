@@ -60,6 +60,7 @@ function harness(opts?: {
           type: "http",
           name: "sheaf",
           url: `http://localhost:31415/api/mcp?doc=${encodeURIComponent(docPath)}`,
+          headers: [{ name: "X-Sheaf-Doc", value: docPath }],
         },
       ],
       toVaultPath: (abs) =>
@@ -103,10 +104,14 @@ describe("AcpConnection — driving the agent", () => {
     expect(res).toEqual({ stopReason: "end_turn" });
 
     expect(newSessionParams).toMatchObject({ cwd: "/vault" });
-    // The sheaf MCP is registered scoped to this doc.
-    expect(newSessionParams.mcpServers[0].url).toContain(
-      "doc=notes%2Fa.md",
-    );
+    // The sheaf MCP is registered scoped to this doc, with the schema-required
+    // `headers` array present (not a map, not omitted).
+    expect(newSessionParams.mcpServers[0]).toEqual({
+      type: "http",
+      name: "sheaf",
+      url: expect.stringContaining("doc=notes%2Fa.md"),
+      headers: [{ name: "X-Sheaf-Doc", value: "notes/a.md" }],
+    });
     expect(promptParams).toEqual({
       sessionId: "sess_a",
       prompt: [{ type: "text", text: "rewrite the intro" }],

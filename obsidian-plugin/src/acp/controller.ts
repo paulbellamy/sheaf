@@ -63,6 +63,10 @@ export class AcpController {
             type: "http",
             name: "sheaf",
             url: `${base}/api/mcp?doc=${encodeURIComponent(docPath)}`,
+            // `headers` is required by the ACP schema (array of {name,value}).
+            // Also carry the doc scope as a header so it survives any client
+            // that strips the query string.
+            headers: [{ name: "X-Sheaf-Doc", value: docPath }],
           },
         ],
         onExit: (code) => {

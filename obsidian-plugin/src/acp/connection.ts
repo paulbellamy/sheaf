@@ -87,7 +87,16 @@ export class AcpConnection {
         fs: { readTextFile: true, writeTextFile: true },
       },
     };
-    return this.peer.request<InitializeResult>(ACP_METHOD.initialize, params);
+    const result = await this.peer.request<InitializeResult>(
+      ACP_METHOD.initialize,
+      params,
+    );
+    if (result.protocolVersion !== ACP_PROTOCOL_VERSION) {
+      console.warn(
+        `acp: agent negotiated protocol v${result.protocolVersion}, client speaks v${ACP_PROTOCOL_VERSION}`,
+      );
+    }
+    return result;
   }
 
   /** Send a prompt on the doc's session, creating the session on first use. */

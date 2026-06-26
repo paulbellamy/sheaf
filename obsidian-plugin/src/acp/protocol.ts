@@ -30,7 +30,7 @@ export const ACP_METHOD = {
 
 export type ContentBlock =
   | { type: "text"; text: string }
-  | { type: "resource_link"; uri: string; name?: string }
+  | { type: "resource_link"; uri: string; name: string }
   | { type: "resource"; resource: unknown }
   | { type: "image"; mimeType: string; data: string }
   | { type: "audio"; mimeType: string; data: string };
@@ -60,9 +60,20 @@ export interface InitializeResult {
 
 /* ----------------------------------------------------- mcp servers -- */
 
+/** ACP wire shapes for MCP env vars / HTTP headers: arrays of {name,value},
+ *  both required per the v1 schema (not maps, not optional). */
+export interface EnvVariable {
+  name: string;
+  value: string;
+}
+export interface HttpHeader {
+  name: string;
+  value: string;
+}
+
 export type McpServerConfig =
-  | { name: string; command: string; args: string[]; env?: Record<string, string> }
-  | { type: "http"; name: string; url: string; headers?: Record<string, string> };
+  | { name: string; command: string; args: string[]; env: EnvVariable[] }
+  | { type: "http"; name: string; url: string; headers: HttpHeader[] };
 
 /* ----------------------------------------------------- session.new -- */
 
