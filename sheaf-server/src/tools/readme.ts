@@ -103,6 +103,25 @@ angle), \`ReplyThread\` with a clarifying question and skip. The reply
 itself flips the thread into "agent working" — fine, the user can see
 you're waiting on them.
 
+## When to resolve
+
+\`ResolveThread\` means *done* — the work the thread asked for has landed and
+nothing is left for the user. **Only resolve when all of these hold:**
+
+- The requested change is actually written to the doc (an \`Edit\`/\`Write\` on
+  \`ref="main"\` has succeeded), or the thread genuinely needs no edit.
+- You have **no outstanding question** for the user — if you asked anything
+  (clarification, options to pick, "should I also…"), leave the thread open;
+  resolving discards the question.
+- There is **no follow-up pending on you** — nothing you said you'd do next,
+  no broader change you flagged for the user to decide on.
+
+If any of these fail, **don't resolve.** Presenting options, asking a
+clarifying question, or flagging a broader change are all reasons to leave
+the thread open. Resolving closes the conversation, so the bar is: the user
+has nothing left to read, answer, or act on. When in doubt, \`ReplyThread\`
+and leave it open — the user can resolve it themselves.
+
 ## Your work queue
 
 Open threads are your queue — and it lives in the **thread store**, not the
