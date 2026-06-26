@@ -38,10 +38,28 @@ describe("ydoc sync — render / reconcile", () => {
     ["content to empty", "had text", ""],
     ["repeated chars grow", "aa", "aaa"],
     ["repeated chars shrink", "aaa", "aa"],
+    // Astral / surrogate-pair cases: neighbouring emoji share a high surrogate,
+    // so a naive code-unit boundary splits the pair (regression guard).
+    ["swap one emoji for a neighbour", "x😀y", "x😁y"],
+    ["edit between two astral chars", "😀x😀", "😀y😀"],
+    ["astral math alphanumeric swap", "𝕏=1", "𝕐=1"],
+    ["insert an emoji next to one", "a😀b", "a😀😁b"],
+    ["delete one of adjacent emoji", "a😀😁b", "a😁b"],
+    ["empty to emoji", "", "😀"],
+    ["emoji to empty", "😀", ""],
   ])("reconciles (%s): render === newMd", (_label, oldMd, newMd) => {
     const doc = markdownToYDoc(oldMd);
     applyMarkdown(doc, newMd);
     expect(renderYDoc(doc)).toBe(newMd);
+  });
+
+  it("keeps an anchor intact when an adjacent emoji is swapped", () => {
+    const doc = markdownToYDoc("😀 TARGET");
+    const anchor = createAnchor(doc, renderYDoc(doc).indexOf("TARGET"));
+    applyMarkdown(doc, "😁 TARGET"); // edit the emoji before the anchor
+    const resolved = resolveAnchor(doc, anchor);
+    expect(resolved).not.toBeNull();
+    expect(renderYDoc(doc).slice(resolved!)).toBe("TARGET");
   });
 
   it("touches only the differing span (prefix/suffix items are reused)", () => {

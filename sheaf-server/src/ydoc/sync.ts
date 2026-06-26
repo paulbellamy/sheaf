@@ -16,6 +16,9 @@ import * as Y from "yjs";
 
 const TEXT_KEY = "content";
 
+const isHighSurrogate = (c: number): boolean => c >= 0xd800 && c <= 0xdbff;
+const isLowSurrogate = (c: number): boolean => c >= 0xdc00 && c <= 0xdfff;
+
 /**
  * The CRDT document handle. Re-exported so consumers (e.g. the plugin) can type
  * against it without taking a direct `yjs` dependency — Yjs stays an internal
@@ -70,6 +73,29 @@ export function applyMarkdown(
     oldMd[oldMd.length - 1 - suffix] === newMd[newMd.length - 1 - suffix]
   ) {
     suffix++;
+  }
+
+  // Keep surrogate pairs whole. The scan above compares UTF-16 code units and
+  // can stop *between* a high and low surrogate; yjs also indexes by code unit,
+  // so splitting a pair orphans half of it and corrupts the character (any
+  // emoji / astral char — they share high surrogates, so swapping one for a
+  // neighbour trips this). Nudge each boundary outward so a whole pair always
+  // lands inside the changed span.
+  if (
+    prefix > 0 &&
+    prefix < oldMd.length &&
+    isHighSurrogate(oldMd.charCodeAt(prefix - 1)) &&
+    isLowSurrogate(oldMd.charCodeAt(prefix))
+  ) {
+    prefix--;
+  }
+  if (
+    suffix > 0 &&
+    oldMd.length - suffix - 1 >= prefix &&
+    isLowSurrogate(oldMd.charCodeAt(oldMd.length - suffix)) &&
+    isHighSurrogate(oldMd.charCodeAt(oldMd.length - suffix - 1))
+  ) {
+    suffix--;
   }
 
   const deleteLen = oldMd.length - prefix - suffix;
