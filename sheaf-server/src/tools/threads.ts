@@ -12,16 +12,40 @@ import {
   threadDraftSchema,
   threadIdArg,
 } from "../schemas";
-import { toToolError } from "../errors";
+import { err, toToolError } from "../errors";
+
+/**
+ * When the connection is scoped to a doc, throw unless `threadId` targets it.
+ * A multi-target (cross-cutting) thread matches if ANY of its targets is the
+ * scope doc — the same membership rule `ListThreads` uses. No scope => no-op.
+ * Propagates `thread_not_found` if the id doesn't exist.
+ */
+async function assertThreadInScope(
+  backend: Backend,
+  threadId: string,
+  docScope: string | undefined,
+): Promise<void> {
+  if (!docScope) return;
+  const thread = await backend.readThread(threadId);
+  if (!thread.targets.some((t) => t.path === docScope)) {
+    throw err.outOfScope(`thread ${threadId}`, docScope);
+  }
+}
 
 /**
  * Thread tools. Threads are first-class in sheaf: conversation + optional
  * attached drafts, anchored to char ranges in one or more docs. The server
  * computes `rel_pos` and `content_hash` from the submitted char_range.
+ *
+ * `docScope`, when set, clamps every thread tool to a single doc (a
+ * per-connection scope; see docs/sheaf-acp-v0.1.md §3.1): `ListThreads` is
+ * forced to that path, and the id-keyed tools reject threads that don't target
+ * it. Undefined leaves the global behavior untouched.
  */
 export function registerThreadTools(
   server: McpServer,
   backend: Backend,
+  docScope?: string,
 ): void {
   server.registerTool(
     "ListThreads",
@@ -39,7 +63,9 @@ export function registerThreadTools(
     async ({ path: p, thread_id, ref }) => {
       try {
         const threads = await backend.listThreads({
-          path: p,
+          // Scoped connections are clamped to their doc — a wider `path` from
+          // the agent is ignored so the queue can't leak other docs' threads.
+          path: docScope ?? p,
           thread_id,
           ref,
         });
@@ -76,6 +102,9 @@ export function registerThreadTools(
     async ({ thread_id }) => {
       try {
         const thread = await backend.readThread(thread_id);
+        if (docScope && !thread.targets.some((t) => t.path === docScope)) {
+          throw err.outOfScope(`thread ${thread_id}`, docScope);
+        }
         return {
           content: [
             { type: "text", text: formatThread(thread) },
@@ -109,6 +138,16 @@ export function registerThreadTools(
     },
     async ({ targets, message, author, draft, ref }) => {
       try {
+        if (docScope) {
+          const outside = [
+            ...new Set(
+              targets.map((t) => t.path).filter((p) => p !== docScope),
+            ),
+          ];
+          if (outside.length > 0) {
+            throw err.outOfScope(`target path(s) ${outside.join(", ")}`, docScope);
+          }
+        }
         const id = await backend.addThread({
           targets,
           message,
@@ -143,6 +182,7 @@ export function registerThreadTools(
     },
     async ({ thread_id, message, author, draft }) => {
       try {
+        await assertThreadInScope(backend, thread_id, docScope);
         await backend.replyThread(thread_id, message, {
           author,
           draft,
@@ -182,6 +222,7 @@ export function registerThreadTools(
     },
     async ({ thread_id, message, draft, draft_options, author }) => {
       try {
+        await assertThreadInScope(backend, thread_id, docScope);
         await backend.attachDraftPayload(thread_id, {
           message,
           draft,
@@ -212,6 +253,7 @@ export function registerThreadTools(
     },
     async ({ thread_id }) => {
       try {
+        await assertThreadInScope(backend, thread_id, docScope);
         await backend.resolveThread(thread_id, "agent");
         return {
           content: [{ type: "text", text: `resolved ${thread_id}` }],

@@ -129,6 +129,12 @@ one embedded server still serves every doc — the scope rides per request, so
 each session's connection is independently clamped. the `ReadMe` loop loses its
 "load the whole queue" step; "your queue" becomes "this doc's open threads."
 
+**Implemented** server-side: `buildServer`/`buildSheafApp` take `docScope`, the
+`/api/mcp` route reads it from `?doc=` (precedence) or the `X-Sheaf-Doc` header,
+and the thread tools clamp accordingly (`out_of_scope` error on violation). The
+ACP client that sets `?doc` per session is the next phase; the `ReadMe` rewrite
+lands with it.
+
 a **cross-cutting** thread (targets X *and* Y) surfaces in both sessions' queues
 (any target matches the scope). that's correct, but it breaks serial-within-doc
 across the two — folded into the deferred multi-target edge below.

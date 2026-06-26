@@ -4,6 +4,9 @@ import * as path from "node:path";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+
 import { StubBackend } from "./backend/stub";
 import { buildSheafApp } from "./app";
 
@@ -135,5 +138,87 @@ describe("buildSheafApp request hardening", () => {
       headers: { host: "localhost:31415", origin: "https://evil.example" },
     });
     expect(evil.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+});
+
+/**
+ * End-to-end doc-scoping over the real MCP HTTP transport (the agent's actual
+ * path): the per-connection scope arrives as `?doc=` or the `X-Sheaf-Doc`
+ * header and clamps the thread queue. See docs/sheaf-acp-v0.1.md §3.1.
+ */
+describe("MCP doc-scoping over HTTP", () => {
+  const A = "workspaces/ws/docs/a.md";
+  const B = "workspaces/ws/docs/b.md";
+  let root: string;
+  let app: ReturnType<typeof buildSheafApp>;
+  let base: string;
+  let idA: string;
+  let idB: string;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-mcpscope-"));
+    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
+      recursive: true,
+    });
+    await fs.writeFile(path.join(root, A), "alpha document body");
+    await fs.writeFile(path.join(root, B), "beta document body");
+    const backend = new StubBackend(root);
+    idA = await backend.addThread({
+      targets: [{ path: A, char_range: { from: 0, to: 5 } }],
+      message: "on a",
+      origin: "agent",
+    });
+    idB = await backend.addThread({
+      targets: [{ path: B, char_range: { from: 0, to: 5 } }],
+      message: "on b",
+      origin: "agent",
+    });
+    app = buildSheafApp(backend);
+    await app.listen({ port: 0, host: "127.0.0.1" });
+    const addr = app.server.address() as AddressInfo;
+    base = `http://127.0.0.1:${addr.port}`;
+  });
+
+  afterEach(async () => {
+    await app.close();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  async function listThreadIds(scope?: {
+    query?: string;
+    header?: string;
+  }): Promise<string[]> {
+    const url = new URL(`${base}/api/mcp`);
+    if (scope?.query) url.searchParams.set("doc", scope.query);
+    const transport = new StreamableHTTPClientTransport(
+      url,
+      scope?.header
+        ? { requestInit: { headers: { "x-sheaf-doc": scope.header } } }
+        : undefined,
+    );
+    const client = new Client({ name: "scope-http-test", version: "0.0.0" });
+    await client.connect(transport);
+    try {
+      const res = (await client.callTool({
+        name: "ListThreads",
+        arguments: { ref: "main" },
+      })) as { structuredContent?: { threads: { id: string }[] } };
+      return (res.structuredContent?.threads ?? []).map((t) => t.id).sort();
+    } finally {
+      await client.close();
+    }
+  }
+
+  it("unscoped connection sees every doc's threads", async () => {
+    expect(await listThreadIds()).toEqual([idA, idB].sort());
+  });
+
+  it("?doc= scopes the queue to that doc", async () => {
+    expect(await listThreadIds({ query: A })).toEqual([idA]);
+    expect(await listThreadIds({ query: B })).toEqual([idB]);
+  });
+
+  it("X-Sheaf-Doc header scopes the queue to that doc", async () => {
+    expect(await listThreadIds({ header: A })).toEqual([idA]);
   });
 });

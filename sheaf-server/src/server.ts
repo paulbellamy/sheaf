@@ -31,6 +31,13 @@ export type ToolSurface = "full" | "thread-only";
 
 export interface BuildServerOptions {
   tools?: ToolSurface;
+  /**
+   * Clamp the thread tools to a single doc path (a per-connection scope). When
+   * set, `ListThreads` only returns that doc's threads and the id-keyed thread
+   * tools reject threads that don't target it. Undefined (default) = no scope,
+   * global behavior unchanged. See docs/sheaf-acp-v0.1.md §3.1.
+   */
+  docScope?: string;
 }
 
 /**
@@ -47,7 +54,7 @@ export function buildServer(
   backend: Backend = getBackend(),
   opts: BuildServerOptions = {},
 ): McpServer {
-  const { tools = "full" } = opts;
+  const { tools = "full", docScope } = opts;
   const server = new McpServer(
     {
       name: "sheaf",
@@ -75,7 +82,7 @@ export function buildServer(
   }
   registerListDocs(server, backend);
   registerWorkspaceTools(server, backend);
-  registerThreadTools(server, backend);
+  registerThreadTools(server, backend, docScope);
 
   return server;
 }

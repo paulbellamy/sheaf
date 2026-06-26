@@ -9,6 +9,7 @@ export type SheafErrorCode =
   | "invalid_ref"
   | "invalid_thread_id"
   | "invalid_payload"
+  | "out_of_scope"
   | "draft_not_submitted"
   | "draft_already_submitted"
   | "merge_conflict"
@@ -105,6 +106,11 @@ export const err = {
     ),
   invalidPayload: (reason: string) =>
     new SheafError("invalid_payload", reason),
+  outOfScope: (subject: string, scope: string) =>
+    new SheafError(
+      "out_of_scope",
+      `${subject} is outside this connection's doc scope (${scope})`,
+    ),
   draftNotSubmitted: (id: string, state: string) =>
     new SheafError(
       "draft_not_submitted",
@@ -177,6 +183,8 @@ export function statusForCode(code: SheafErrorCode): number {
     case "edit_ambiguous":
     case "payload_too_large":
       return 400;
+    case "out_of_scope":
+      return 403;
     case "write_to_main_forbidden":
     case "draft_not_submitted":
     case "draft_already_submitted":

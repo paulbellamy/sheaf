@@ -277,7 +277,14 @@ export function buildSheafApp(
         sessionIdGenerator: undefined,
         enableJsonResponse: true,
       });
-      const server = buildServer(backend, { tools: opts.tools });
+      // Per-connection doc scope (ACP per-session MCP registration, §3.1):
+      // `?doc=` takes precedence over the `X-Sheaf-Doc` header; empty => none.
+      const headerScope = req.headers["x-sheaf-doc"];
+      const docScope =
+        (q(req, "doc") ??
+          (typeof headerScope === "string" ? headerScope : undefined)) ||
+        undefined;
+      const server = buildServer(backend, { tools: opts.tools, docScope });
       await server.connect(transport);
       reply.raw.on("close", () => {
         void server.close().catch(() => {});
