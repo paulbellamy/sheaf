@@ -43,6 +43,7 @@ export default class SheafPlugin extends Plugin {
     this.acp = new AcpController({
       app: this.app,
       onStatus: (t) => this.flashStatus(t),
+      onConnectionChange: () => this.refreshAgentPresence(),
     });
 
     this.registerView(
@@ -485,13 +486,24 @@ export default class SheafPlugin extends Plugin {
         break;
       case "agent_presence":
         this.agentConnected = event.connected;
-        view?.setAgentPresence(event.connected);
-        this.updateStatusBar(event.connected);
+        this.refreshAgentPresence();
         break;
       default:
         // draft_* events: prototype doesn't show drafts in UX. Ignore.
         break;
     }
+  }
+
+  /**
+   * Reflect agent presence from *either* signal — a manual MCP agent (SSE
+   * `agent_presence`) or a spawned ACP agent — in the status bar and the
+   * threads panel. The two are independent, so an SSE "no agent" must not hide
+   * a live ACP connection (and vice versa).
+   */
+  private refreshAgentPresence(): void {
+    const present = this.agentConnected || this.acp?.connected === true;
+    this.getThreadsView()?.setAgentPresence(present);
+    this.updateStatusBar(present);
   }
 
   private getThreadsView(): ThreadsView | null {

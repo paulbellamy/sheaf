@@ -24,6 +24,8 @@ import {
 export interface AcpControllerDeps {
   app: App;
   onStatus(text: string): void;
+  /** Fired on every connect/disconnect/exit so the UI can reflect ACP presence. */
+  onConnectionChange?(connected: boolean): void;
 }
 
 export class AcpController {
@@ -77,6 +79,7 @@ export class AcpController {
           if (this.generation !== myGen) return; // a superseded agent — ignore
           this.agent = null;
           this.deps.onStatus(`ACP agent exited (${code ?? "?"})`);
+          this.deps.onConnectionChange?.(false);
         },
       },
     );
@@ -93,13 +96,16 @@ export class AcpController {
       );
     }
     this.deps.onStatus(`ACP agent connected (${spec.displayName})`);
+    this.deps.onConnectionChange?.(true);
   }
 
   /** Kill the subprocess and drop the connection. Idempotent. */
   disconnect(): void {
+    const wasConnected = this.agent !== null;
     this.agent?.dispose();
     this.agent = null;
     this.generation++; // invalidate the old agent's pending exit handler
+    if (wasConnected) this.deps.onConnectionChange?.(false);
   }
 
   /**
