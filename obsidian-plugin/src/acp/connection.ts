@@ -131,7 +131,8 @@ export class AcpConnection {
     p: ReadTextFileParams,
   ): Promise<ReadTextFileResult> {
     const rel = this.requireVaultPath(p.path);
-    return { content: await this.docs.read(rel) };
+    const content = await this.docs.read(rel);
+    return { content: sliceLines(content, p.line, p.limit) };
   }
 
   private async onWriteTextFile(p: WriteTextFileParams): Promise<null> {
@@ -155,6 +156,28 @@ export class AcpConnection {
     if (rel === null) {
       throw new Error(`path is outside the vault: ${absPath}`);
     }
+    // Block sheaf/Obsidian infra (dot-prefixed segments): the agent must not
+    // reach the .sheaf/ycrdt snapshot mirror, .obsidian config, or .git via the
+    // fs path (the sheaf MCP already rejects these; the fs path must too).
+    if (rel.split("/").some((seg) => seg.startsWith("."))) {
+      throw new Error(`path is infra (dot-prefixed), not editable: ${rel}`);
+    }
     return rel;
   }
+}
+
+/**
+ * Apply ACP's optional 1-based `line` window and `limit` (max lines) to file
+ * content. No window args → the whole file. Out-of-range line → empty.
+ */
+function sliceLines(
+  content: string,
+  line?: number,
+  limit?: number,
+): string {
+  if (line === undefined && limit === undefined) return content;
+  const lines = content.split("\n");
+  const start = line && line > 0 ? line - 1 : 0;
+  const end = limit !== undefined ? start + Math.max(0, limit) : lines.length;
+  return lines.slice(start, end).join("\n");
 }

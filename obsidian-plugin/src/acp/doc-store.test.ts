@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { decodeYDoc, renderYDoc } from "sheaf-server/ydoc";
+
 import { DocStore, type VaultFs } from "./doc-store";
 
 /** In-memory VaultFs for tests, with the backing maps exposed for assertions. */
@@ -101,5 +103,47 @@ describe("DocStore — client-write path", () => {
     await store.write(A, "first draft of the section");
     await store.write(A, "first draft of the chapter");
     expect(await store.read(A)).toBe("first draft of the chapter");
+  });
+
+  it("serializes overlapping writes to one doc (md and snapshot stay consistent)", async () => {
+    const log: string[] = [];
+    const texts = new Map<string, string>();
+    const bins = new Map<string, Uint8Array>();
+    const delay = () => new Promise<void>((r) => setTimeout(r, 0));
+    const fs: VaultFs = {
+      async exists(p) {
+        return texts.has(p) || bins.has(p);
+      },
+      async readText(p) {
+        const v = texts.get(p);
+        if (v === undefined) throw new Error(`ENOENT ${p}`);
+        return v;
+      },
+      async writeText(p, d) {
+        await delay();
+        log.push(`text:${d}`);
+        texts.set(p, d);
+      },
+      async readBinary(p) {
+        const v = bins.get(p);
+        if (!v) throw new Error(`ENOENT ${p}`);
+        return v;
+      },
+      async writeBinary(p, d) {
+        await delay();
+        log.push("bin");
+        bins.set(p, d);
+      },
+    };
+    const store = new DocStore(fs);
+
+    // Fire two writes without awaiting the first — they must still run in order.
+    await Promise.all([store.write(A, "first"), store.write(A, "second")]);
+
+    // A's text+bin both land before B's (no interleave).
+    expect(log).toEqual(["text:first", "bin", "text:second", "bin"]);
+    // Disk is internally consistent: .md === render(snapshot), latest write wins.
+    expect(texts.get(A)).toBe("second");
+    expect(renderYDoc(decodeYDoc(bins.get(YCRDT_A)!))).toBe("second");
   });
 });

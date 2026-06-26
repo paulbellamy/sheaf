@@ -43,7 +43,12 @@ const defaultYcrdtPathFor = (docPath: string): string =>
   `.sheaf/ycrdt/${docPath}.ycrdt`;
 
 export class DocStore {
-  private readonly docs = new Map<string, YDoc>();
+  // Cache the load *promise*, not the doc, so concurrent first-access callers
+  // share one ydoc instance instead of each building their own.
+  private readonly docs = new Map<string, Promise<YDoc>>();
+  // Per-path serialization for writes: apply+persist of one write completes
+  // before the next to that path begins, so .md and .ycrdt never diverge.
+  private readonly writeChains = new Map<string, Promise<unknown>>();
   private readonly ycrdtPathFor: (docPath: string) => string;
 
   constructor(
@@ -61,12 +66,25 @@ export class DocStore {
   /**
    * Reconcile a doc to `content` through its ydoc (minimal ops → anchors
    * survive), then persist the rendered markdown and the ycrdt snapshot.
+   * Serialized per path so overlapping writes can't interleave their persists.
    */
-  async write(docPath: string, content: string): Promise<void> {
-    const doc = await this.load(docPath);
-    applyMarkdown(doc, content, "acp-fs");
-    await this.fs.writeText(docPath, renderYDoc(doc));
-    await this.fs.writeBinary(this.ycrdtPathFor(docPath), encodeYDoc(doc));
+  write(docPath: string, content: string): Promise<void> {
+    return this.serializeWrite(docPath, async () => {
+      const doc = await this.load(docPath);
+      try {
+        applyMarkdown(doc, content, "acp-fs");
+      } catch (e) {
+        // Reconcile failed mid-flight — the cached ydoc may be inconsistent;
+        // evict it so the next access reloads a clean copy from disk.
+        this.docs.delete(docPath);
+        throw e;
+      }
+      // .md first, then the snapshot: a crash between them leaves .md ahead of
+      // .ycrdt, which the drift-reconcile on next load repairs without loss
+      // (the reverse order could revert the doc to a stale .md).
+      await this.fs.writeText(docPath, renderYDoc(doc));
+      await this.fs.writeBinary(this.ycrdtPathFor(docPath), encodeYDoc(doc));
+    });
   }
 
   /** Drop the in-memory ydoc for a doc (e.g. on session teardown). */
@@ -74,30 +92,59 @@ export class DocStore {
     this.docs.delete(docPath);
   }
 
-  private async load(docPath: string): Promise<YDoc> {
-    const cached = this.docs.get(docPath);
-    if (cached) return cached;
-    const doc = await this.loadFromDisk(docPath);
-    this.docs.set(docPath, doc);
-    return doc;
+  private load(docPath: string): Promise<YDoc> {
+    let pending = this.docs.get(docPath);
+    if (!pending) {
+      // Don't cache a rejected load — let the next access retry.
+      pending = this.loadFromDisk(docPath).catch((e) => {
+        this.docs.delete(docPath);
+        throw e;
+      });
+      this.docs.set(docPath, pending);
+    }
+    return pending;
+  }
+
+  private serializeWrite<T>(
+    docPath: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const prev = this.writeChains.get(docPath) ?? Promise.resolve();
+    // Run fn after the prior write settles (success or failure).
+    const next = prev.then(fn, fn);
+    // The stored tail swallows rejections so one failed write doesn't wedge the
+    // chain; the caller still sees its own result/rejection via `next`.
+    this.writeChains.set(
+      docPath,
+      next.then(
+        () => undefined,
+        () => undefined,
+      ),
+    );
+    return next;
   }
 
   private async loadFromDisk(docPath: string): Promise<YDoc> {
     const ycrdtPath = this.ycrdtPathFor(docPath);
+    let doc: YDoc | null = null;
     // Prefer the ycrdt snapshot — the merge-truth carrying anchor history.
     if (await this.fs.exists(ycrdtPath)) {
       try {
-        const doc = decodeYDoc(await this.fs.readBinary(ycrdtPath));
-        // If the .md was edited out-of-band (user typed in Obsidian) the
-        // snapshot is stale; reconcile so render === md before serving.
-        if (await this.fs.exists(docPath)) {
-          const md = await this.fs.readText(docPath);
-          if (renderYDoc(doc) !== md) applyMarkdown(doc, md, "disk-drift");
-        }
-        return doc;
+        doc = decodeYDoc(await this.fs.readBinary(ycrdtPath));
       } catch {
-        // Corrupt snapshot — fall through and rebuild from markdown (§4.4).
+        doc = null; // corrupt snapshot — rebuild from markdown (§4.4)
       }
+    }
+    if (doc) {
+      // If the .md was edited out-of-band (user typed in Obsidian) the snapshot
+      // is stale; reconcile so render === md before serving. Done OUTSIDE the
+      // decode catch so a reconcile failure surfaces rather than silently
+      // rebuilding and tombstoning every anchor.
+      if (await this.fs.exists(docPath)) {
+        const md = await this.fs.readText(docPath);
+        if (renderYDoc(doc) !== md) applyMarkdown(doc, md, "disk-drift");
+      }
+      return doc;
     }
     const md = (await this.fs.exists(docPath))
       ? await this.fs.readText(docPath)

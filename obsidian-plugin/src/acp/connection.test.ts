@@ -163,6 +163,40 @@ describe("AcpConnection — serving the agent's calls (client-write path)", () =
     ).rejects.toThrow(/outside the vault/);
   });
 
+  it("rejects fs reads/writes to infra (dot-prefixed) paths", async () => {
+    const { agent } = harness();
+    await expect(
+      agent.request("fs/write_text_file", {
+        sessionId: "s",
+        path: "/vault/.obsidian/app.json",
+        content: "x",
+      }),
+    ).rejects.toThrow(/infra/);
+    await expect(
+      agent.request("fs/read_text_file", {
+        sessionId: "s",
+        path: "/vault/.sheaf/ycrdt/notes/a.md.ycrdt",
+      }),
+    ).rejects.toThrow(/infra/);
+  });
+
+  it("honors fs/read_text_file line and limit windows", async () => {
+    const { agent } = harness({ fs: fakeFs({ "notes/a.md": "l1\nl2\nl3\nl4\nl5" }) });
+    const read = async (extra: Record<string, unknown>) =>
+      (
+        (await agent.request("fs/read_text_file", {
+          sessionId: "s",
+          path: "/vault/notes/a.md",
+          ...extra,
+        })) as { content: string }
+      ).content;
+
+    expect(await read({})).toBe("l1\nl2\nl3\nl4\nl5");
+    expect(await read({ line: 2, limit: 2 })).toBe("l2\nl3");
+    expect(await read({ line: 4 })).toBe("l4\nl5");
+    expect(await read({ line: 99 })).toBe(""); // past EOF → empty
+  });
+
   it("resolves a permission request via the callback, routed to its doc", async () => {
     const onPermission = vi.fn<AcpCallbacks["onPermission"]>(async () => ({
       outcome: { outcome: "selected", optionId: "allow_once" },
