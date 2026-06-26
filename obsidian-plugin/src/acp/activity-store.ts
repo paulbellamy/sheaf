@@ -1,9 +1,11 @@
 import type {
   ContentBlock,
+  PermissionOption,
   PlanEntry,
   SessionUpdate,
   StopReason,
-  ToolCall,
+  ToolCallLocation,
+  ToolCallStatus,
 } from "./protocol";
 
 /**
@@ -11,9 +13,9 @@ import type {
  *
  * ACP already streams all of this (session/update + the turn's stop reason +
  * the permission asks + the fs ops we mediate); the old code collapsed it into
- * a 2-second status flash. This store ingests the raw stream keyed by doc and
- * exposes a derived snapshot for the UI. Liveness (ACP has no heartbeat) is
- * synthesized from the time since the last update.
+ * a 2-second status flash. This store ingests the raw stream keyed by doc into
+ * an ordered **timeline** (the transcript) plus derived snapshot state, and
+ * synthesizes liveness (ACP has no heartbeat) from the time since last update.
  *
  * Pure + clock-injectable so it's unit-tested without Obsidian.
  */
@@ -28,16 +30,57 @@ export type TurnState =
 
 /** How long a turn can go quiet (no updates) before we flag it stalled. */
 export const STALL_MS = 45_000;
+/** Per-doc timeline cap (ring buffer) to bound memory. */
+const TIMELINE_CAP = 600;
+
+export type ActivityEvent =
+  | { id: number; ts: number; kind: "turn_start" }
+  | { id: number; ts: number; kind: "message"; text: string }
+  | { id: number; ts: number; kind: "thought"; text: string }
+  | {
+      id: number;
+      ts: number;
+      kind: "tool";
+      toolCallId: string;
+      title: string;
+      toolKind?: string;
+      status: ToolCallStatus;
+      content?: unknown[];
+      locations?: ToolCallLocation[];
+    }
+  | { id: number; ts: number; kind: "fs"; op: "read" | "write"; path: string }
+  | {
+      id: number;
+      ts: number;
+      kind: "permission";
+      permId: number;
+      title: string;
+      options: PermissionOption[];
+      resolved?: string; // chosen optionId, or "cancelled"
+    }
+  | { id: number; ts: number; kind: "turn_end"; stopReason: StopReason }
+  | { id: number; ts: number; kind: "crash"; message: string };
+
+/** A new event minus the fields the store stamps. Distributive so each union
+ *  variant keeps its own discriminant-specific fields. */
+type DistributiveOmit<T, K extends keyof T> = T extends unknown
+  ? Omit<T, K>
+  : never;
+type NewEvent = DistributiveOmit<ActivityEvent, "id" | "ts">;
+
+export interface AgentMode {
+  current: string | null;
+  available: Array<{ id: string; name: string }>;
+}
 
 interface DocActivity {
-  active: boolean; // a prompt turn is in flight
+  active: boolean;
   plan: PlanEntry[];
-  toolCalls: ToolCall[];
-  message: string; // accumulated agent_message_chunk text
-  thought: string; // accumulated agent_thought_chunk text
+  mode: AgentMode;
+  commands: string[];
+  timeline: ActivityEvent[];
   stopReason: StopReason | null;
-  waitingPermission: boolean;
-  dead: string | null; // crash message, or null
+  dead: string | null;
   startedAt: number | null;
   lastUpdateAt: number;
 }
@@ -45,26 +88,26 @@ interface DocActivity {
 export interface ActivitySnapshot {
   state: TurnState;
   plan: PlanEntry[];
-  toolCalls: ToolCall[];
-  message: string;
-  thought: string;
+  mode: AgentMode;
+  commands: string[];
+  timeline: ActivityEvent[];
   stopReason: StopReason | null;
   dead: string | null;
-  /** ms since the turn started, if one has. */
   elapsedMs: number;
-  /** ms since the last update (drives the stalled hint). */
   quietMs: number;
-  /** title of the in-progress tool call, if any. */
+  /** in-progress tool title, if any. */
   currentTool: string | null;
+  /** unresolved permission events (the "waiting for you" cards). */
+  pendingPermissions: Extract<ActivityEvent, { kind: "permission" }>[];
 }
 
 export class ActivityStore {
   private readonly docs = new Map<string, DocActivity>();
   private readonly listeners = new Set<() => void>();
+  private nextId = 1;
 
   constructor(private readonly now: () => number = () => Date.now()) {}
 
-  /** Subscribe to changes; returns an unsubscribe fn. */
   subscribe(fn: () => void): () => void {
     this.listeners.add(fn);
     return () => {
@@ -72,37 +115,42 @@ export class ActivityStore {
     };
   }
 
-  /** Derived render view for a doc, or null if it has no activity yet. */
   snapshot(docPath: string): ActivitySnapshot | null {
     const a = this.docs.get(docPath);
     if (!a) return null;
     const now = this.now();
-    const inProgress = a.toolCalls.find((t) => t.status === "in_progress");
+
+    const inProgress = lastInProgressTool(a.timeline);
+    const pendingPermissions = a.timeline.filter(
+      (e): e is Extract<ActivityEvent, { kind: "permission" }> =>
+        e.kind === "permission" && e.resolved === undefined,
+    );
 
     let state: TurnState;
     if (a.dead) state = "dead";
-    else if (a.waitingPermission) state = "waiting";
+    else if (pendingPermissions.length > 0) state = "waiting";
     else if (!a.active) state = "idle";
     else if (now - a.lastUpdateAt > STALL_MS) state = "stalled";
     else if (inProgress) state = "working";
-    else if (a.thought || a.message) state = "thinking";
-    else state = "working";
+    else state = "thinking";
 
     return {
       state,
       plan: a.plan,
-      toolCalls: a.toolCalls,
-      message: a.message,
-      thought: a.thought,
+      mode: a.mode,
+      commands: a.commands,
+      timeline: a.timeline,
       stopReason: a.stopReason,
       dead: a.dead,
       elapsedMs: a.startedAt ? now - a.startedAt : 0,
       quietMs: now - a.lastUpdateAt,
       currentTool: inProgress?.title ?? null,
+      pendingPermissions,
     };
   }
 
-  /** Begin a turn: clears the previous turn's transient state. */
+  /* ------------------------------------------------------ lifecycle -- */
+
   turnStarted(docPath: string): void {
     const a = this.ensure(docPath);
     a.active = true;
@@ -110,107 +158,168 @@ export class ActivityStore {
     a.stopReason = null;
     a.dead = null;
     a.plan = [];
-    a.toolCalls = [];
-    a.message = "";
-    a.thought = "";
-    this.bump(a);
+    this.push(a, { kind: "turn_start" });
   }
 
-  /** End a turn with its stop reason. */
   turnEnded(docPath: string, stopReason: StopReason): void {
     const a = this.ensure(docPath);
     a.active = false;
     a.stopReason = stopReason;
-    a.waitingPermission = false;
-    this.bump(a);
+    this.push(a, { kind: "turn_end", stopReason });
   }
 
-  /** A turn ended without a clean stop reason (e.g. the prompt rejected). */
   turnAborted(docPath: string): void {
     const a = this.ensure(docPath);
     a.active = false;
-    a.waitingPermission = false;
     this.bump(a);
   }
 
-  /** The subprocess exited — mark every doc with an in-flight turn dead. */
+  markDead(docPath: string, message: string): void {
+    const a = this.ensure(docPath);
+    a.dead = message;
+    a.active = false;
+    this.push(a, { kind: "crash", message });
+  }
+
   agentExited(message: string): void {
     let changed = false;
     for (const a of this.docs.values()) {
       if (a.active && !a.dead) {
         a.dead = message;
         a.active = false;
-        a.waitingPermission = false;
-        a.lastUpdateAt = this.now();
+        this.pushNoEmit(a, { kind: "crash", message });
         changed = true;
       }
     }
     if (changed) this.emit();
   }
 
-  /** Mark a permission request open/closed (the "waiting for you" state). */
-  setPermission(docPath: string, open: boolean): void {
-    const a = this.ensure(docPath);
-    a.waitingPermission = open;
-    this.bump(a);
-  }
-
-  /** The agent crashed mid-turn. */
-  markDead(docPath: string, message: string): void {
-    const a = this.ensure(docPath);
-    a.dead = message;
-    a.active = false;
-    a.waitingPermission = false;
-    this.bump(a);
-  }
-
-  /** Drop a doc's activity (session teardown). */
   forget(docPath: string): void {
     if (this.docs.delete(docPath)) this.emit();
   }
 
-  /** Fold one session/update into the doc's activity. */
+  /* ----------------------------------------------- client-side events -- */
+
+  /** Record an fs op the client serviced for the agent. */
+  fileOp(docPath: string, op: "read" | "write", path: string): void {
+    this.push(this.ensure(docPath), { kind: "fs", op, path });
+  }
+
+  /** Record a permission ask; returns its id for {@link resolvePermission}. */
+  recordPermission(
+    docPath: string,
+    title: string,
+    options: PermissionOption[],
+  ): number {
+    const a = this.ensure(docPath);
+    const permId = this.nextId; // event id doubles as the perm id
+    this.push(a, { kind: "permission", permId, title, options });
+    return permId;
+  }
+
+  resolvePermission(docPath: string, permId: number, outcome: string): void {
+    const a = this.docs.get(docPath);
+    if (!a) return;
+    const ev = a.timeline.find(
+      (e) => e.kind === "permission" && e.permId === permId,
+    );
+    if (ev && ev.kind === "permission") ev.resolved = outcome;
+    this.bump(a);
+  }
+
+  /* ------------------------------------------------- session/update -- */
+
+  setMode(docPath: string, current: string | null): void {
+    const a = this.ensure(docPath);
+    a.mode.current = current;
+    this.bump(a);
+  }
+
+  setAvailableModes(
+    docPath: string,
+    available: AgentMode["available"],
+    current: string | null,
+  ): void {
+    const a = this.ensure(docPath);
+    a.mode = { current, available };
+    this.bump(a);
+  }
+
   ingest(docPath: string, update: SessionUpdate): void {
     const a = this.ensure(docPath);
     switch (update.sessionUpdate) {
       case "plan":
         a.plan = update.entries;
+        this.bump(a);
         break;
       case "tool_call":
-        a.toolCalls.push({
+        this.push(a, {
+          kind: "tool",
           toolCallId: update.toolCallId,
           title: update.title,
-          kind: update.kind,
+          toolKind: update.kind,
           status: update.status ?? "pending",
           content: update.content,
+          locations: update.locations,
         });
         break;
       case "tool_call_update": {
-        const tc = a.toolCalls.find((t) => t.toolCallId === update.toolCallId);
-        if (tc) {
-          if (update.title !== undefined) tc.title = update.title;
-          if (update.kind !== undefined) tc.kind = update.kind;
-          if (update.status !== undefined) tc.status = update.status;
-          if (update.content !== undefined) tc.content = update.content;
+        const ev = lastToolEvent(a.timeline, update.toolCallId);
+        if (ev) {
+          if (update.title !== undefined) ev.title = update.title;
+          if (update.kind !== undefined) ev.toolKind = update.kind;
+          if (update.status !== undefined) ev.status = update.status;
+          if (update.content !== undefined) ev.content = update.content;
+          if (update.locations !== undefined) ev.locations = update.locations;
+          this.bump(a);
         } else {
-          a.toolCalls.push({
+          this.push(a, {
+            kind: "tool",
             toolCallId: update.toolCallId,
             title: update.title ?? update.toolCallId,
             status: update.status ?? "in_progress",
+            locations: update.locations,
           });
         }
         break;
       }
       case "agent_message_chunk":
-        a.message += textOf(update.content);
+        this.appendChunk(a, "message", textOf(update.content));
         break;
       case "agent_thought_chunk":
-        a.thought += textOf(update.content);
+        this.appendChunk(a, "thought", textOf(update.content));
         break;
-      // user_message_chunk / available_commands_update / current_mode_update:
-      // not surfaced in the MVP harness.
+      case "current_mode_update":
+        a.mode.current = update.currentModeId;
+        this.bump(a);
+        break;
+      case "available_commands_update":
+        a.commands = parseCommandNames(update.availableCommands);
+        this.bump(a);
+        break;
+      // user_message_chunk: not surfaced.
     }
-    this.bump(a);
+  }
+
+  /* ----------------------------------------------------- internals -- */
+
+  /** Coalesce consecutive same-kind chunks into the trailing timeline entry. */
+  private appendChunk(
+    a: DocActivity,
+    kind: "message" | "thought",
+    text: string,
+  ): void {
+    if (text.length === 0) {
+      this.bump(a);
+      return;
+    }
+    const last = a.timeline[a.timeline.length - 1];
+    if (last && last.kind === kind) {
+      last.text += text;
+      this.bump(a);
+    } else {
+      this.push(a, { kind, text });
+    }
   }
 
   private ensure(docPath: string): DocActivity {
@@ -219,11 +328,10 @@ export class ActivityStore {
       a = {
         active: false,
         plan: [],
-        toolCalls: [],
-        message: "",
-        thought: "",
+        mode: { current: null, available: [] },
+        commands: [],
+        timeline: [],
         stopReason: null,
-        waitingPermission: false,
         dead: null,
         startedAt: null,
         lastUpdateAt: this.now(),
@@ -231,6 +339,19 @@ export class ActivityStore {
       this.docs.set(docPath, a);
     }
     return a;
+  }
+
+  private push(a: DocActivity, ev: NewEvent): void {
+    this.pushNoEmit(a, ev);
+    this.emit();
+  }
+
+  private pushNoEmit(a: DocActivity, ev: NewEvent): void {
+    a.timeline.push({ id: this.nextId++, ts: this.now(), ...ev } as ActivityEvent);
+    if (a.timeline.length > TIMELINE_CAP) {
+      a.timeline.splice(0, a.timeline.length - TIMELINE_CAP);
+    }
+    a.lastUpdateAt = this.now();
   }
 
   private bump(a: DocActivity): void {
@@ -243,6 +364,42 @@ export class ActivityStore {
   }
 }
 
+function lastToolEvent(
+  timeline: ActivityEvent[],
+  toolCallId: string,
+): Extract<ActivityEvent, { kind: "tool" }> | undefined {
+  for (let i = timeline.length - 1; i >= 0; i--) {
+    const e = timeline[i];
+    if (e.kind === "tool" && e.toolCallId === toolCallId) return e;
+  }
+  return undefined;
+}
+
+function lastInProgressTool(
+  timeline: ActivityEvent[],
+): Extract<ActivityEvent, { kind: "tool" }> | undefined {
+  // Most-recent tool whose latest known status is in_progress.
+  const seen = new Set<string>();
+  for (let i = timeline.length - 1; i >= 0; i--) {
+    const e = timeline[i];
+    if (e.kind !== "tool" || seen.has(e.toolCallId)) continue;
+    seen.add(e.toolCallId);
+    if (e.status === "in_progress" || e.status === "pending") return e;
+  }
+  return undefined;
+}
+
 function textOf(content: ContentBlock | undefined): string {
   return content && content.type === "text" ? content.text : "";
+}
+
+function parseCommandNames(commands: unknown[]): string[] {
+  if (!Array.isArray(commands)) return [];
+  return commands
+    .map((c) =>
+      c && typeof c === "object" && typeof (c as { name?: unknown }).name === "string"
+        ? (c as { name: string }).name
+        : null,
+    )
+    .filter((n): n is string => n !== null);
 }

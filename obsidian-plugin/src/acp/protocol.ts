@@ -140,12 +140,26 @@ export interface PlanEntry {
 
 export type ToolCallStatus = "pending" | "in_progress" | "completed" | "failed";
 
+/** A doc location a tool call touches — used for follow-along highlighting. */
+export interface ToolCallLocation {
+  path: string;
+  line?: number;
+}
+
 export interface ToolCall {
   toolCallId: string;
   title: string;
   kind?: string;
   status?: ToolCallStatus;
   content?: unknown[];
+  locations?: ToolCallLocation[];
+}
+
+/* --------------------------------------------------------- set_mode -- */
+
+export interface SetModeParams {
+  sessionId: string;
+  modeId: string;
 }
 
 /* --------------------------------------------------- permission -- */

@@ -18,7 +18,7 @@ import {
   reviewPersonaId,
 } from "../review";
 import { ACP_AGENTS, ACP_EFFORTS, type AcpEffort } from "../acp/registry";
-import type { ActivitySnapshot } from "../acp/activity-store";
+import type { ActivityEvent, ActivitySnapshot } from "../acp/activity-store";
 
 export const VIEW_TYPE_SHEAF_THREADS = "sheaf-threads";
 
@@ -259,11 +259,14 @@ export class ThreadsView extends ItemView {
     if (!docPath) return;
     const snap = this.plugin.acpActivity().snapshot(docPath);
     if (!snap) return;
+    const tools = snap.timeline.filter(
+      (e): e is Extract<ActivityEvent, { kind: "tool" }> => e.kind === "tool",
+    );
     // Nothing worth showing for an untouched/idle doc.
     if (
       snap.state === "idle" &&
       snap.plan.length === 0 &&
-      snap.toolCalls.length === 0 &&
+      tools.length === 0 &&
       !snap.stopReason
     ) {
       return;
@@ -316,12 +319,12 @@ export class ThreadsView extends ItemView {
       }
     }
 
-    if (snap.toolCalls.length > 0) {
+    if (tools.length > 0) {
       const toolsEl = el.createDiv();
       toolsEl.style.marginTop = "0.4em";
       toolsEl.style.opacity = "0.85";
-      // Last few — a full timeline is the maximalist view.
-      for (const t of snap.toolCalls.slice(-6)) {
+      // Last few — the full transcript lives in the Activity view.
+      for (const t of tools.slice(-6)) {
         const row = toolsEl.createDiv();
         const icon =
           t.status === "completed"

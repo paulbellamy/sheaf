@@ -63,11 +63,23 @@ export class AcpController {
       spec,
       docs,
       {
-        onPermission: (req, docPath) => {
-          if (docPath) this.activity.setPermission(docPath, true);
-          return requestAcpPermission(this.deps.app, req).finally(() => {
-            if (docPath) this.activity.setPermission(docPath, false);
-          });
+        onPermission: async (req, docPath) => {
+          const permId = docPath
+            ? this.activity.recordPermission(
+                docPath,
+                req.toolCall.title ?? "Permission requested",
+                req.options,
+              )
+            : -1;
+          const result = await requestAcpPermission(this.deps.app, req);
+          if (docPath) {
+            const outcome =
+              result.outcome.outcome === "selected"
+                ? result.outcome.optionId
+                : "cancelled";
+            this.activity.resolvePermission(docPath, permId, outcome);
+          }
+          return result;
         },
         onUpdate: (n, docPath) => {
           if (docPath) this.activity.ingest(docPath, n.update);
