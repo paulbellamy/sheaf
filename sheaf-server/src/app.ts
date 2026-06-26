@@ -25,6 +25,7 @@ import {
   listThreadsForDoc,
   putStyleConfig,
   readDoc,
+  renameDoc,
   reopenThread,
   replyThread,
   resolveThread,
@@ -148,6 +149,10 @@ export function buildSheafApp(
         ref: q(req, "ref") ?? "main",
       }),
     ),
+  );
+
+  app.post("/api/ui/rename", (req, reply) =>
+    run(reply, () => renameDoc(backend, { body: req.body })),
   );
 
   app.get("/api/ui/doc-versions/*", (req, reply) =>
