@@ -4,6 +4,7 @@ import { AcpConnection, type AcpCallbacks, type AcpConnectionOptions } from "./c
 import { DocStore } from "./doc-store";
 import { JsonRpcPeer } from "./jsonrpc";
 import type { AcpAgentSpec } from "./registry";
+import { resolveCommand, spawnEnv } from "./spawn-env";
 
 /**
  * Spawn an ACP adapter subprocess and bring up an {@link AcpConnection} over its
@@ -33,10 +34,15 @@ export function spawnAcpAgent(
   callbacks: AcpCallbacks,
   opts: SpawnAgentOptions,
 ): SpawnedAgent {
-  const child = spawn(spec.command, spec.args, {
+  // Resolve the command on a recovered PATH (Electron's inherited PATH is
+  // minimal, so a bare `npx` would ENOENT). On Windows a resolved `.cmd` must be
+  // run via the shell (Node refuses to spawn .cmd/.bat directly).
+  const command = resolveCommand(spec.command);
+  const child = spawn(command, spec.args, {
     cwd: opts.cwd,
-    env: { ...process.env, ...spec.env },
+    env: spawnEnv(spec.env),
     stdio: ["pipe", "pipe", "pipe"],
+    shell: process.platform === "win32",
   });
 
   const peer = new JsonRpcPeer((line) => {
