@@ -21,6 +21,7 @@ export class ActivityView extends ItemView {
   private currentDocPath: string | null = null;
   private storeUnsub: (() => void) | null = null;
   private renderQueued = false;
+  private lastFlashedTool = -1;
 
   constructor(leaf: WorkspaceLeaf, plugin: SheafPlugin) {
     super(leaf);
@@ -100,12 +101,34 @@ export class ActivityView extends ItemView {
       return;
     }
 
+    this.followAlong(snap);
     this.renderHeader(el, docPath, snap);
     if (snap.plan.length > 0) this.renderPlan(el, snap);
     this.renderTimeline(el, snap);
     this.renderInterject(el, docPath);
 
     if (atBottom) el.scrollTop = el.scrollHeight;
+  }
+
+  /** Flash the line the current in-progress tool touches, once per tool. */
+  private followAlong(snap: ActivitySnapshot): void {
+    const doc = this.currentDocPath;
+    if (!doc) return;
+    const tool = [...snap.timeline]
+      .reverse()
+      .find(
+        (e): e is Extract<ActivityEvent, { kind: "tool" }> =>
+          e.kind === "tool" &&
+          e.status === "in_progress" &&
+          !!e.locations?.length,
+      );
+    if (!tool || tool.id === this.lastFlashedTool) return;
+    const loc = tool.locations?.find(
+      (l) => l.line != null && (!l.path || l.path === doc),
+    );
+    if (!loc || loc.line == null) return;
+    this.lastFlashedTool = tool.id;
+    this.plugin.flashDocLine(doc, loc.line);
   }
 
   private renderHeader(

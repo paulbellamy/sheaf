@@ -22,7 +22,8 @@ import { ReviewModal } from "./views/review-modal";
 import { ThreadsView, VIEW_TYPE_SHEAF_THREADS } from "./views/threads-view";
 import { ActivityView, VIEW_TYPE_SHEAF_ACTIVITY } from "./views/activity-view";
 import { buildPanelRequestMessage } from "./review";
-import { flashField, mountFlashStyles } from "./editor/flash";
+import { flashField, flashRange, mountFlashStyles } from "./editor/flash";
+import type { EditorView } from "@codemirror/view";
 import { AcpController } from "./acp/controller";
 import type { ActivityStore } from "./acp/activity-store";
 import { ACP_EFFORTS, DEFAULT_ACP_EFFORT } from "./acp/registry";
@@ -246,6 +247,21 @@ export default class SheafPlugin extends Plugin {
   /** Send a free-form follow-up into the doc's live agent session. */
   interjectAcp(docPath: string, text: string): Promise<void> {
     return this.acp.interject(docPath, text);
+  }
+
+  /** Follow-along: briefly highlight `line` (1-based) of `docPath`'s open editor. */
+  flashDocLine(docPath: string, line: number): void {
+    const editor = this.editorForPath(docPath);
+    if (!editor) return;
+    const lineIdx = line - 1; // ACP line numbers are 1-based
+    if (lineIdx < 0 || lineIdx >= editor.lineCount()) return;
+    const from = editor.posToOffset({ line: lineIdx, ch: 0 });
+    const to = editor.posToOffset({
+      line: lineIdx,
+      ch: editor.getLine(lineIdx).length,
+    });
+    const cm = (editor as unknown as { cm?: EditorView }).cm;
+    if (cm) flashRange(cm, from, to);
   }
 
   async loadSettings(): Promise<void> {

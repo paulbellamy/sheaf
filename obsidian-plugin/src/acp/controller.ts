@@ -1,4 +1,4 @@
-import { App } from "obsidian";
+import { App, Notice } from "obsidian";
 
 import { ActivityStore } from "./activity-store";
 import { DocStore } from "./doc-store";
@@ -85,6 +85,13 @@ export class AcpController {
         onUpdate: (n, docPath) => {
           if (docPath) this.activity.ingest(docPath, n.update);
           this.deps.onStatus(summarizeUpdate(n));
+          const u = n.update;
+          if (u.sessionUpdate === "tool_call_update" && u.status === "failed") {
+            new Notice(
+              `Sheaf: agent tool failed${u.title ? ` — ${u.title}` : ""}`,
+              6000,
+            );
+          }
         },
         onFileOp: (op, path, docPath) => {
           if (docPath) this.activity.fileOp(docPath, op, path);
@@ -112,6 +119,7 @@ export class AcpController {
           this.agent = null;
           this.activity.agentExited(`agent exited (code ${code ?? "?"})`);
           this.deps.onStatus(`ACP agent exited (${code ?? "?"})`);
+          new Notice(`Sheaf: ACP agent exited (code ${code ?? "?"})`, 8000);
           this.deps.onConnectionChange?.(false);
         },
       },
@@ -183,6 +191,9 @@ export class AcpController {
     try {
       const res = await agent.connection.prompt(docPath, blocks);
       this.activity.turnEnded(docPath, res.stopReason);
+      if (res.stopReason !== "end_turn") {
+        new Notice(`Sheaf: agent stopped — ${res.stopReason}`, 6000);
+      }
     } catch (e) {
       // Don't let a prompt/session-creation failure vanish (callers fire this
       // with `void`); surface it. (A crash also marks the doc dead via onExit,
