@@ -40,7 +40,13 @@ function toArrayBuffer(d: Uint8Array): ArrayBuffer {
 /**
  * Build the absolute→vault-relative mapper for {@link AcpConnection}. ACP paths
  * are absolute (cwd = vault root); sheaf paths are vault-relative with forward
- * slashes. Returns null for anything outside the vault.
+ * slashes. Returns null for anything outside the vault (and for the root itself
+ * and `..` traversal).
+ *
+ * NOTE: this is a lexical check — it does not resolve symlinks, so an in-vault
+ * symlink pointing outside the vault would not be caught here. Acceptable for
+ * the local, user-launched prototype (Obsidian itself follows such links); a
+ * hardened version would `fs.realpath` before comparing.
  */
 export function makeToVaultPath(
   vaultRoot: string,

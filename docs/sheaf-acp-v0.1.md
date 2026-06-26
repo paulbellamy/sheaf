@@ -286,4 +286,15 @@ acp is agent-agnostic, so this also un-locks sheaf from claude code.
 - **resume fidelity.** `session/load` restores agent context, but the thread
   store is the source of truth — on resume, reconcile the agent's remembered
   state against the current open threads (the store wins).
+- **dual driver.** posting a comment nudges the ACP agent *and* a manual-MCP
+  watcher (if both are connected), so both could act on the same thread. v0 has
+  no guard — assume one driver at a time; a "drive via" toggle (or suppressing
+  the manual watcher when ACP is connected) is the real fix.
+- **mcp transport capability.** we register the sheaf MCP as http without first
+  checking the agent's `mcpCapabilities.http` from `initialize`. The shipped
+  adapters support http; gate on the capability (and fall back to stdio) before
+  relying on it with other agents.
+- **symlink containment.** the absolute→vault path mapper is lexical; an in-vault
+  symlink pointing outside isn't caught. A hardened build would `realpath` before
+  comparing.
 ```
