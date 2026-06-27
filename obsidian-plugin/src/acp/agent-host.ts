@@ -26,6 +26,8 @@ export interface SpawnedAgent {
 export interface SpawnAgentOptions extends AcpConnectionOptions {
   /** Called when the subprocess exits (so the plugin can update presence). */
   onExit?: (code: number | null) => void;
+  /** Called on any subprocess output (stdout/stderr) — a liveness heartbeat. */
+  onOutput?: () => void;
   /** Extra env merged over the spec's (e.g. the effort-level vars). */
   env?: Record<string, string>;
 }
@@ -63,6 +65,7 @@ export function spawnAcpAgent(
   let buf = "";
   child.stdout.setEncoding("utf8");
   child.stdout.on("data", (chunk: string) => {
+    opts.onOutput?.(); // liveness: the process is producing output
     buf += chunk;
     let nl: number;
     while ((nl = buf.indexOf("\n")) !== -1) {
@@ -74,6 +77,7 @@ export function spawnAcpAgent(
 
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk: string) => {
+    opts.onOutput?.(); // stderr logs count as liveness even with no protocol update
     console.error(`[acp:${spec.id}] ${chunk.trimEnd()}`);
   });
 

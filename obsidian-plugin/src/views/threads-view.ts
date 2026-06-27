@@ -18,6 +18,7 @@ import {
   reviewPersonaId,
 } from "../review";
 import { ACP_AGENTS, ACP_EFFORTS, type AcpEffort } from "../acp/registry";
+import { STALL_MS } from "../acp/activity-store";
 import type { ActivityEvent, ActivitySnapshot } from "../acp/activity-store";
 
 export const VIEW_TYPE_SHEAF_THREADS = "sheaf-threads";
@@ -351,10 +352,19 @@ export class ThreadsView extends ItemView {
       case "thinking":
         return { text: `Thinking… (${secs}s)`, color: "var(--text-muted)" };
       case "working":
-        return {
-          text: `⟳ ${snap.currentTool ?? "Working"}… (${secs}s)`,
-          color: "var(--text-normal)",
-        };
+        if (snap.currentTool) {
+          return {
+            text: `⟳ ${snap.currentTool}… (${secs}s)`,
+            color: "var(--text-normal)",
+          };
+        }
+        if (snap.quietMs > STALL_MS) {
+          return {
+            text: `⟳ Working — quiet for ${Math.round(snap.quietMs / 1000)}s`,
+            color: "var(--text-normal)",
+          };
+        }
+        return { text: `⟳ Working… (${secs}s)`, color: "var(--text-normal)" };
       case "waiting":
         return {
           text: "⏸ Waiting for your input",
@@ -362,7 +372,7 @@ export class ThreadsView extends ItemView {
         };
       case "stalled":
         return {
-          text: `⚠ Possibly stuck — quiet for ${secs}s`,
+          text: `⚠ No response for ${secs}s — possibly stuck`,
           color: "var(--text-warning)",
         };
       case "dead":

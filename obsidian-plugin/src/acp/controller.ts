@@ -114,6 +114,7 @@ export class AcpController {
           },
         ],
         env: effortEnv,
+        onOutput: () => this.activity.processOutput(),
         onExit: (code) => {
           if (this.generation !== myGen) return; // a superseded agent — ignore
           this.agent = null;

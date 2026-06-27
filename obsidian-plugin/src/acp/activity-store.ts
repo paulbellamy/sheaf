@@ -94,7 +94,10 @@ export interface ActivitySnapshot {
   stopReason: StopReason | null;
   dead: string | null;
   elapsedMs: number;
+  /** ms since the last protocol update (session/update / fs / permission). */
   quietMs: number;
+  /** ms since the subprocess last emitted any output (stdout/stderr). */
+  processQuietMs: number;
   /** in-progress tool title, if any. */
   currentTool: string | null;
   /** unresolved permission events (the "waiting for you" cards). */
@@ -105,6 +108,10 @@ export class ActivityStore {
   private readonly docs = new Map<string, DocActivity>();
   private readonly listeners = new Set<() => void>();
   private nextId = 1;
+  /** Process-wide: when the subprocess last emitted ANY output. The agent
+   *  serves all docs over one process, so this is a coarse liveness signal —
+   *  "the process isn't frozen" — distinct from per-doc protocol updates. */
+  private lastProcessOutputAt = 0;
 
   constructor(private readonly now: () => number = () => Date.now()) {}
 
@@ -126,12 +133,20 @@ export class ActivityStore {
         e.kind === "permission" && e.resolved === undefined,
     );
 
+    const protocolQuietMs = now - a.lastUpdateAt;
+    const processQuietMs = now - this.lastProcessOutputAt;
+
     let state: TurnState;
     if (a.dead) state = "dead";
     else if (pendingPermissions.length > 0) state = "waiting";
     else if (!a.active) state = "idle";
-    else if (now - a.lastUpdateAt > STALL_MS) state = "stalled";
+    // "stalled" only on TRUE silence — quiet on the protocol AND no subprocess
+    // output. If the process is still emitting (even stderr logs) or a tool is
+    // mid-flight with recent output, it's working, not stuck.
+    else if (protocolQuietMs > STALL_MS && processQuietMs > STALL_MS)
+      state = "stalled";
     else if (inProgress) state = "working";
+    else if (protocolQuietMs > STALL_MS) state = "working"; // alive, just quiet
     else state = "thinking";
 
     return {
@@ -143,7 +158,8 @@ export class ActivityStore {
       stopReason: a.stopReason,
       dead: a.dead,
       elapsedMs: a.startedAt ? now - a.startedAt : 0,
-      quietMs: now - a.lastUpdateAt,
+      quietMs: protocolQuietMs,
+      processQuietMs,
       currentTool: inProgress?.title ?? null,
       pendingPermissions,
     };
@@ -196,6 +212,15 @@ export class ActivityStore {
 
   forget(docPath: string): void {
     if (this.docs.delete(docPath)) this.emit();
+  }
+
+  /**
+   * The subprocess emitted output (stdout/stderr) — a coarse liveness ping.
+   * Emit-free: it only feeds the stall derivation, and the UI's periodic tick
+   * recomputes state, so a chatty stderr stream doesn't trigger re-render storms.
+   */
+  processOutput(): void {
+    this.lastProcessOutputAt = this.now();
   }
 
   /* ----------------------------------------------- client-side events -- */

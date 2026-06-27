@@ -1,6 +1,7 @@
 import { ItemView, type TFile, type WorkspaceLeaf } from "obsidian";
 
 import type SheafPlugin from "../main";
+import { STALL_MS } from "../acp/activity-store";
 import type {
   ActivityEvent,
   ActivitySnapshot,
@@ -348,15 +349,26 @@ function describeState(snap: ActivitySnapshot): {
     case "thinking":
       return { text: `Thinking… (${secs}s)`, color: "var(--text-muted)" };
     case "working":
-      return {
-        text: `⟳ ${snap.currentTool ?? "Working"}… (${secs}s)`,
-        color: "var(--text-normal)",
-      };
+      if (snap.currentTool) {
+        return {
+          text: `⟳ ${snap.currentTool}… (${secs}s)`,
+          color: "var(--text-normal)",
+        };
+      }
+      // Working but quiet on the protocol — the process is still alive (else
+      // we'd be "stalled"), it's just not narrating.
+      if (snap.quietMs > STALL_MS) {
+        return {
+          text: `⟳ Working — quiet for ${Math.round(snap.quietMs / 1000)}s`,
+          color: "var(--text-normal)",
+        };
+      }
+      return { text: `⟳ Working… (${secs}s)`, color: "var(--text-normal)" };
     case "waiting":
       return { text: "⏸ Waiting for your input", color: "var(--text-warning)" };
     case "stalled":
       return {
-        text: `⚠ Possibly stuck — quiet for ${secs}s`,
+        text: `⚠ No response for ${secs}s — possibly stuck`,
         color: "var(--text-warning)",
       };
     case "dead":

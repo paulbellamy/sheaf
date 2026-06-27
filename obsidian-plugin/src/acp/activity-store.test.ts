@@ -77,17 +77,30 @@ describe("ActivityStore — state derivation", () => {
     expect(s.timeline.filter((e) => e.kind === "tool")).toHaveLength(1);
   });
 
-  it("goes stalled after STALL_MS of quiet while active", () => {
+  it("goes stalled only when quiet on BOTH protocol and process", () => {
     const { store, advance } = makeStore();
     store.turnStarted(A);
-    store.ingest(A, {
-      sessionUpdate: "tool_call",
-      toolCallId: "t1",
-      title: "grep",
-      status: "in_progress",
-    });
-    expect(store.snapshot(A)!.state).toBe("working");
     advance(STALL_MS + 1);
+    // No process output → both channels quiet → stalled.
+    expect(store.snapshot(A)!.state).toBe("stalled");
+  });
+
+  it("stays working when the process is still emitting, even if quiet on the protocol", () => {
+    const { store, advance } = makeStore();
+    store.turnStarted(A);
+    advance(STALL_MS + 1); // protocol quiet
+    store.processOutput(); // …but the subprocess just logged something
+    const s = store.snapshot(A)!;
+    expect(s.state).toBe("working"); // alive, just not narrating
+    expect(s.quietMs).toBeGreaterThan(STALL_MS);
+    expect(s.processQuietMs).toBe(0);
+  });
+
+  it("escalates to stalled once process output also goes quiet", () => {
+    const { store, advance } = makeStore();
+    store.turnStarted(A);
+    store.processOutput();
+    advance(STALL_MS + 1); // now both protocol and process are quiet
     expect(store.snapshot(A)!.state).toBe("stalled");
   });
 
