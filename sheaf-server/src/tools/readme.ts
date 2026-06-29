@@ -41,7 +41,8 @@ mark the thread resolved. The user sees your edits land in their editor live.
    a. \`ReadThread(thread_id)\` to get the brief, the targets, and the message.
       If the message starts with \`[sheaf:panel-review]\`, this is a review
       request, not an edit brief — follow **Panel review** below instead of
-      steps b–d.
+      steps b–d. If it starts with \`[sheaf:build-voice-guide]\`, follow
+      **Writing in the user's voice → Bootstrapping** instead.
    b. **Acknowledge immediately**: \`ReplyThread(thread_id, "on it")\` (or a
       short paraphrase of what you're about to do). This is the signal the
       plugin shows as "agent working" — without it the user has no feedback
@@ -206,6 +207,18 @@ and can be ignored.
 - \`ReplyThread(thread_id, message)\` — add a message to the thread. Use for clarifying questions.
 - \`ResolveThread(thread_id)\` — mark thread done. Call this once your edit has landed.
 - \`Glob(pattern)\` / \`Grep({pattern, ...})\` — search the vault.
+- \`GetStyle({topic?})\` — the user's writing voice for a prose task: compact
+  guide + metrics + preferences + relevant exemplars. Call before drafting prose.
+- \`StyleCheck({text})\` — deterministic lint of a draft against the measured
+  profile (verdict + 0..1 \`style_distance\`), **plus the voice guide** so you can
+  judge its written rules too.
+- \`StyleJudge({candidate, blind?})\` — stronger review: your draft beside real
+  passages (critic pass), or \`blind: true\` for a shuffled, unlabeled packet to
+  hand a fresh sub-agent for a blind discrimination test.
+- \`StyleSamples()\` — vault metrics + sample passages to bootstrap the guide;
+  save the guide by \`Write\`-ing \`Sheaf/Voice Guide.md\`.
+- \`AnalyzeSamples({samples})\` — measure writing you supply (fetched site/files)
+  and compare it to the saved profile (see **Writing in the user's voice**).
 
 ## Range vs doc-level
 
@@ -219,6 +232,79 @@ to disambiguate.
 the doc as a whole (e.g. *"rewrite this for tone"*, *"add a conclusion"*). Read
 the doc first, then make the change with \`Write\` (full rewrite) or several
 \`Edit\` calls. There is no anchored text to use as \`old_string\`.
+
+## Writing in the user's voice
+
+When a thread has you **draft or rewrite prose** (not a mechanical fix like a
+rename or typo), match how *this user* writes. Their vault is a growing corpus
+of their own writing, and sheaf distills it for you — you don't read the whole
+vault, you ask for a compact profile.
+
+The flow on a prose task:
+
+1. \`GetStyle({ topic: "<a few keywords from the brief>" })\`. You get back a
+   short **voice guide**, a **metrics digest** (sentence length, punctuation
+   habits, vocabulary), and **2-4 exemplar passages** from their own writing on
+   (or near) the topic. The guide is where punctuation and word-choice rules
+   live ("never uses em-dashes", "avoids 'delve'") — read and honor them. This
+   is bounded to ~1.5k tokens, cheap to call on every prose thread.
+2. Draft in that voice — imitate the rhythm and diction of the exemplars, follow
+   the guide's rules, and avoid the AI tells it calls out.
+3. Before you land the edit (or attach an option), run a **bounded
+   check-and-revise loop** (at most ~3 passes):
+   a. \`StyleCheck({ text })\` — a deterministic lint against the *measured*
+      profile (a \`verdict\`, a 0..1 \`style_distance\`, and suggestions: AI-tell
+      phrasing, sentence-length drift, em-dash overuse) **plus the voice guide
+      itself**. The mechanical lint does not cover the guide's written rules —
+      read the passage against the returned guide and fix anything that breaks
+      them.
+   b. If the verdict isn't \`close\` (or \`style_distance\` ≥ ~0.15), or a guide
+      rule is broken, revise and re-check. Stop once it's \`close\` and the guide
+      is satisfied, or after ~3 passes — **don't chase the number into stilted
+      prose**; a low distance is necessary, not sufficient, and clarity wins.
+   c. For a higher-stakes rewrite, escalate to \`StyleJudge({ candidate })\` — it
+      sets your draft beside real passages of the user's writing for a critic
+      pass. For the strongest, *blind* check, call \`StyleJudge({ candidate,
+      blind: true })\`: it returns a shuffled, unlabeled packet (your draft hidden
+      among real passages) plus an answer key for you. Hand the packet to a
+      **fresh sub-agent** (e.g. the Task tool) to name the odd-one-out, then
+      compare its pick to the key — if it fingers your draft, it's
+      distinguishable, so revise. (Sheaf can't spawn the sub-agent; that's yours
+      to run, and don't leak the answer key to it.)
+   Then land the edit. All of this is advisory — your judgment wins.
+
+If \`GetStyle\` reports \`low_corpus\` or has no guide yet, just write in a clear,
+neutral voice — don't invent a style from too little signal.
+
+### Bootstrapping / refreshing the voice guide
+
+\`GetStyle\` tells you \`guide_stale: true\` when there's no distilled guide yet, or
+the corpus has grown enough to warrant a refresh. The user can also trigger this
+explicitly: a thread whose first message starts with \`[sheaf:build-voice-guide]\`.
+Either way:
+
+1. \`StyleSamples()\` — returns the full metrics plus a diverse set of sample
+   passages and the existing guide (if any).
+2. Read them and write a **compact** (≤400 word) prose style guide: how they
+   build sentences, their diction and punctuation habits, how they structure a
+   piece, and what to avoid. Turn what the metrics reveal into concrete rules —
+   em-dash and contraction tendencies, Oxford-comma habit, words to avoid — since
+   the guide is the *only* place these live now. Refine the existing guide rather
+   than replace it.
+3. Save it by writing the doc \`Sheaf/Voice Guide.md\` with \`Write\` — that
+   visible, user-editable doc *is* the guide (there's no separate save tool).
+   Then, if this was a \`[sheaf:build-voice-guide]\` request thread,
+   \`ReplyThread\` with a one-line summary and \`ResolveThread\`.
+
+Do this once when stale; don't redo it per edit.
+
+**Extra sources.** The user may ask you to learn from writing outside the vault
+— their personal site, a published essay, files elsewhere on disk. Gather the
+text with **your own** tools (\`WebFetch\` / your filesystem \`Read\`; crawl or
+follow links as they ask — sheaf's \`Read\` is vault-only), then call
+\`AnalyzeSamples({ samples: [{ label, content }] })\` to measure it and compare
+it to their saved profile. Fold what's distinctive into the guide and write it
+back to \`Sheaf/Voice Guide.md\`.
 
 ## Panel review
 

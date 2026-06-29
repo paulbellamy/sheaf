@@ -2,6 +2,13 @@ import { z } from "zod";
 
 import type { Backend, ThreadDraftBody, ThreadMessage } from "./backend/index";
 import { assertDraftId, assertThreadId } from "./paths";
+import { loadOrRefreshProfile } from "./style/corpus";
+import {
+  VOICE_GUIDE_PATH,
+  VOICE_GUIDE_PLACEHOLDER,
+  buildVoiceGuideRequestMessage,
+} from "./style/profile";
+import { styleConfigSchema } from "./style/schemas";
 
 /**
  * UI route logic, framework-agnostic. Each handler takes the backend plus the
@@ -473,4 +480,63 @@ export async function declineDraft(
   assertDraftId(opts.id);
   await backend.declineDraft(opts.id);
   return { status: 200, json: { ok: true } };
+}
+
+/* ------------------------------------------------------------- style/voice -- */
+
+export async function getStyleConfig(backend: Backend): Promise<HandlerResult> {
+  const config = await backend.readStyleConfig();
+  return { status: 200, json: { config } };
+}
+
+export async function putStyleConfig(
+  backend: Backend,
+  opts: { body: unknown },
+): Promise<HandlerResult> {
+  const parsed = styleConfigSchema.safeParse(opts.body);
+  if (!parsed.success) return invalidBody(parsed.error);
+  await backend.writeStyleConfig(parsed.data);
+  return { status: 200, json: { ok: true, config: parsed.data } };
+}
+
+/**
+ * Kick off a voice-guide build: recompute the deterministic metrics now (so the
+ * UI can report "analyzed N notes" immediately), ensure the visible guide doc
+ * exists, and post a `[sheaf:build-voice-guide]` request thread for the
+ * connected agent to pick up. The agent does the distillation; if none is
+ * connected the thread simply waits, and the metrics are cached regardless.
+ */
+export async function buildStyleGuide(backend: Backend): Promise<HandlerResult> {
+  const config = await backend.readStyleConfig();
+  const load = await loadOrRefreshProfile(backend, config);
+
+  try {
+    await backend.readDoc(VOICE_GUIDE_PATH, "main");
+  } catch {
+    await backend.writeDoc(
+      VOICE_GUIDE_PATH,
+      "main",
+      VOICE_GUIDE_PLACEHOLDER,
+      undefined,
+      "ui",
+    );
+  }
+
+  const threadId = await backend.addThread({
+    ref: "main",
+    author: "user",
+    message: buildVoiceGuideRequestMessage(),
+    targets: [{ path: VOICE_GUIDE_PATH, scope: "doc" }],
+    origin: "ui",
+  });
+
+  return {
+    status: 200,
+    json: {
+      thread_id: threadId,
+      doc_count: load.profile.fingerprint.doc_count,
+      word_count: load.profile.metrics.word_count,
+      low_corpus: load.low_corpus,
+    },
+  };
 }

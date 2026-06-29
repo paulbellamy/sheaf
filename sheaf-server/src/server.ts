@@ -13,6 +13,7 @@ import { registerMerge } from "./tools/merge";
 import { registerPropose } from "./tools/propose";
 import { registerRead } from "./tools/read";
 import { registerReadMe } from "./tools/readme";
+import { registerStyleTools } from "./tools/style";
 import { registerThreadTools } from "./tools/threads";
 import { registerWorkspaceTools } from "./tools/workspaces";
 import { registerWrite } from "./tools/write";
@@ -83,6 +84,7 @@ export function buildServer(
   registerListDocs(server, backend);
   registerWorkspaceTools(server, backend);
   registerThreadTools(server, backend, docScope);
+  registerStyleTools(server, backend);
 
   return server;
 }

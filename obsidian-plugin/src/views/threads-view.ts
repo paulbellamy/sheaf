@@ -10,6 +10,7 @@ import type { EditorView } from "@codemirror/view";
 import { remapRenamedPath } from "sheaf-server/types";
 import type SheafPlugin from "../main";
 import type { Thread, ThreadDraftBody } from "../sheaf-client";
+import { renderCommandRow } from "../command-row";
 import { flashRange } from "../editor/flash";
 import {
   REVIEW_AUTHOR_PREFIX,
@@ -711,7 +712,7 @@ export class ThreadsView extends ItemView {
     lead.style.marginBottom = "0.5em";
     lead.setText("In a terminal, register the MCP server, then run the agent:");
 
-    this.renderCommandRow(
+    renderCommandRow(
       panel,
       `claude mcp add --transport http sheaf ${url}/api/mcp`,
     );
@@ -721,40 +722,10 @@ export class ThreadsView extends ItemView {
     then.style.margin = "0.5em 0 0.3em";
     then.setText("Run claude, then paste this to put it to work:");
 
-    this.renderCommandRow(
+    renderCommandRow(
       panel,
       "use the sheaf MCP and watch for events; action and resolve each thread as it appears, and keep handling new ones until I stop you",
     );
-  }
-
-  /** A monospace command box with a Copy button. */
-  private renderCommandRow(parent: HTMLElement, command: string): void {
-    const row = parent.createDiv();
-    row.style.display = "flex";
-    row.style.gap = "0.4em";
-    row.style.alignItems = "stretch";
-
-    const code = row.createEl("code");
-    code.setText(command);
-    code.style.flex = "1";
-    code.style.userSelect = "all";
-    code.style.fontSize = "0.8em";
-    code.style.padding = "0.35em 0.5em";
-    code.style.background = "var(--background-primary)";
-    code.style.border = "1px solid var(--background-modifier-border)";
-    code.style.borderRadius = "4px";
-    code.style.whiteSpace = "pre-wrap";
-    code.style.wordBreak = "break-all";
-
-    const copy = row.createEl("button", { text: "Copy" });
-    copy.style.fontSize = "0.8em";
-    copy.style.flexShrink = "0";
-    copy.addEventListener("click", () => {
-      void navigator.clipboard.writeText(command).then(
-        () => new Notice("Copied"),
-        () => new Notice("Copy failed"),
-      );
-    });
   }
 
   private renderThread(parent: HTMLElement, thread: Thread): void {

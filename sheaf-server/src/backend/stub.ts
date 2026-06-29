@@ -26,6 +26,7 @@ import {
   type WriteResult,
 } from "./index";
 import { McpError, err, type MergeConflictDetail } from "../errors";
+import { globToRegex } from "../glob";
 import {
   DRAFT_ID_RE,
   PLUGIN_PATH_PREFIX,
@@ -42,6 +43,13 @@ import {
   opLogSchema,
   threadOnDiskSchema,
 } from "../persistence-schemas";
+import {
+  type CorpusFile,
+  type StyleConfig,
+  type StyleProfile,
+  defaultStyleConfig,
+} from "../style/profile";
+import { styleConfigSchema, styleProfileSchema } from "../style/schemas";
 
 /**
  * Filesystem-backed stub backend for the prototype.
@@ -117,37 +125,6 @@ function titleFromMd(md: string, fallback: string): string {
 
 function sha(text: string): string {
   return createHash("sha256").update(text).digest("hex");
-}
-
-function globToRegex(glob: string): RegExp {
-  let re = "^";
-  let i = 0;
-  while (i < glob.length) {
-    const c = glob[i];
-    if (c === "*" && glob[i + 1] === "*") {
-      if (glob[i + 2] === "/") {
-        re += "(?:.*/)?";
-        i += 3;
-      } else {
-        re += ".*";
-        i += 2;
-      }
-    } else if (c === "*") {
-      re += "[^/]*";
-      i += 1;
-    } else if (c === "?") {
-      re += "[^/]";
-      i += 1;
-    } else if (".+^$()|[]{}\\".includes(c)) {
-      re += `\\${c}`;
-      i += 1;
-    } else {
-      re += c;
-      i += 1;
-    }
-  }
-  re += "$";
-  return new RegExp(re);
 }
 
 async function walk(root: string): Promise<string[]> {
@@ -253,6 +230,9 @@ export class StubBackend implements Backend {
    */
   private pluginRoot: string;
   private opLogPath: string;
+  /** Hidden cache for the style profile + bridged config (see `.sheaf/`). */
+  private styleProfilePath: string;
+  private styleConfigPath: string;
   private opLogCache: OpLog | null = null;
   private lockChain: Promise<unknown> = Promise.resolve();
   private subscribers = new Set<(event: BackendEvent) => void>();
@@ -282,6 +262,8 @@ export class StubBackend implements Backend {
     this.root = root;
     this.pluginRoot = pluginRoot ?? path.resolve(root, "..");
     this.opLogPath = path.join(root, ".op_log.json");
+    this.styleProfilePath = path.join(root, ".sheaf", "style-profile.json");
+    this.styleConfigPath = path.join(root, ".sheaf", "config.json");
   }
 
   subscribe(
@@ -1605,6 +1587,97 @@ export class StubBackend implements Backend {
           target_paths: thread.targets.map((t) => t.path),
         },
         opts.origin,
+      );
+    });
+  }
+
+  // --- Style / voice matching -------------------------------------------
+
+  /**
+   * Every visible `*.md` doc with mtime + size, no content read. `walk` skips
+   * dot-dirs, so `.sheaf/` and `.drafts/` are excluded automatically. This is
+   * the cheap primitive `style/corpus.ts` fingerprints the corpus from.
+   */
+  async statCorpus(): Promise<CorpusFile[]> {
+    const files = await walk(this.root);
+    const out: CorpusFile[] = [];
+    for (const f of files) {
+      if (!f.endsWith(".md")) continue;
+      try {
+        const st = await fs.lstat(f);
+        if (!st.isFile()) continue;
+        out.push({
+          path: path.relative(this.root, f).replace(/\\/g, "/"),
+          mtime_ms: st.mtimeMs,
+          size: st.size,
+        });
+      } catch {
+        continue;
+      }
+    }
+    return out.sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  async readStyleConfig(): Promise<StyleConfig> {
+    let raw: string;
+    try {
+      raw = await readFileNoFollow(this.styleConfigPath);
+    } catch {
+      return defaultStyleConfig();
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return defaultStyleConfig();
+    }
+    const validated = styleConfigSchema.safeParse(parsed);
+    if (!validated.success) {
+      console.error("[stub] style config failed schema validation; using defaults");
+      return defaultStyleConfig();
+    }
+    return validated.data as StyleConfig;
+  }
+
+  writeStyleConfig(config: StyleConfig): Promise<void> {
+    return this.withLock(async () => {
+      const validated = styleConfigSchema.parse(config);
+      await this.ensureDir(path.dirname(this.styleConfigPath));
+      await writeFileNoFollow(
+        this.styleConfigPath,
+        JSON.stringify(validated, null, 2),
+      );
+    });
+  }
+
+  async readStyleProfile(): Promise<StyleProfile | null> {
+    let raw: string;
+    try {
+      raw = await readFileNoFollow(this.styleProfilePath);
+    } catch {
+      return null;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+    const validated = styleProfileSchema.safeParse(parsed);
+    if (!validated.success) {
+      console.error("[stub] style profile failed schema validation; ignoring");
+      return null;
+    }
+    return validated.data as StyleProfile;
+  }
+
+  writeStyleProfile(profile: StyleProfile): Promise<void> {
+    return this.withLock(async () => {
+      const validated = styleProfileSchema.parse(profile);
+      await this.ensureDir(path.dirname(this.styleProfilePath));
+      await writeFileNoFollow(
+        this.styleProfilePath,
+        JSON.stringify(validated, null, 2),
       );
     });
   }
