@@ -3,7 +3,11 @@ import { App, Notice } from "obsidian";
 import { ActivityStore } from "./activity-store";
 import { DocStore } from "./doc-store";
 import { spawnAcpAgent, type SpawnedAgent } from "./agent-host";
-import { DEFAULT_ACP_EFFORT, getAcpAgent, type AcpEffort } from "./registry";
+import {
+  DEFAULT_ACP_EFFORT,
+  type AcpAgentSpec,
+  type AcpEffort,
+} from "./registry";
 import { makeToVaultPath, obsidianVaultFs } from "./vault-fs";
 import { requestAcpPermission } from "../views/acp-permission-modal";
 import {
@@ -44,15 +48,13 @@ export class AcpController {
     return this.agent !== null;
   }
 
-  /** Spawn `agentId` rooted at `vaultRoot`, scoping the sheaf MCP at `serverUrl`. */
+  /** Spawn `spec` rooted at `vaultRoot`, scoping the sheaf MCP at `serverUrl`. */
   async connect(
-    agentId: string,
+    spec: AcpAgentSpec,
     vaultRoot: string,
     serverUrl: string,
     effort: AcpEffort = DEFAULT_ACP_EFFORT,
   ): Promise<void> {
-    const spec = getAcpAgent(agentId);
-    if (!spec) throw new Error(`unknown ACP agent: ${agentId}`);
     this.disconnect();
     const myGen = this.generation;
     const effortEnv = spec.effortEnv?.(effort) ?? {};

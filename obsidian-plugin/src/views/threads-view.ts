@@ -17,7 +17,7 @@ import {
   prettyPersona,
   reviewPersonaId,
 } from "../review";
-import { ACP_AGENTS, ACP_EFFORTS, type AcpEffort } from "../acp/registry";
+import { ACP_EFFORTS, type AcpEffort } from "../acp/registry";
 import { STALL_MS } from "../acp/activity-store";
 import type { ActivityEvent, ActivitySnapshot } from "../acp/activity-store";
 
@@ -509,7 +509,7 @@ export class ThreadsView extends ItemView {
     const agentSel = configRow.createEl("select");
     agentSel.title = "Which ACP agent to spawn";
     agentSel.disabled = acpLive;
-    for (const a of ACP_AGENTS) {
+    for (const a of this.plugin.acpAgents()) {
       const opt = agentSel.createEl("option", { text: a.displayName });
       opt.value = a.id;
       if (a.id === this.plugin.settings.acpAgentId) opt.selected = true;

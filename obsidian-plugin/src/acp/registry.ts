@@ -94,7 +94,55 @@ export const ACP_AGENTS: readonly AcpAgentSpec[] = [
 
 export const DEFAULT_ACP_AGENT_ID = ACP_AGENTS[0].id;
 
-/** Look up an agent spec by id, or undefined if unknown. */
+/** Look up a *built-in* agent spec by id, or undefined if unknown. */
 export function getAcpAgent(id: string): AcpAgentSpec | undefined {
   return ACP_AGENTS.find((a) => a.id === id);
+}
+
+/**
+ * A user-defined ACP agent (serializable, stored in settings). It's the
+ * escape hatch for any ACP agent not built in — "spawn this command". No
+ * effortEnv: custom agents don't get the effort dropdown wired.
+ */
+export interface CustomAcpAgent {
+  id: string;
+  displayName: string;
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
+  installHint?: string;
+}
+
+function customToSpec(c: CustomAcpAgent): AcpAgentSpec {
+  return {
+    id: c.id,
+    displayName: c.displayName || c.id,
+    command: c.command,
+    args: c.args,
+    env: c.env,
+    installHint:
+      c.installHint && c.installHint.length > 0
+        ? c.installHint
+        : `Couldn't launch "${c.command}". Check it's installed and on your PATH.`,
+  };
+}
+
+/**
+ * Built-in agents plus the user's custom ones. A custom entry whose id matches a
+ * built-in shadows it. Custom entries missing an id or command are dropped.
+ */
+export function listAcpAgents(custom: CustomAcpAgent[] = []): AcpAgentSpec[] {
+  const customSpecs = custom
+    .filter((c) => c.id && c.command)
+    .map(customToSpec);
+  const shadowed = new Set(customSpecs.map((c) => c.id));
+  return [...ACP_AGENTS.filter((a) => !shadowed.has(a.id)), ...customSpecs];
+}
+
+/** Resolve an agent id against the built-ins + custom list. */
+export function resolveAcpAgent(
+  id: string,
+  custom: CustomAcpAgent[] = [],
+): AcpAgentSpec | undefined {
+  return listAcpAgents(custom).find((a) => a.id === id);
 }

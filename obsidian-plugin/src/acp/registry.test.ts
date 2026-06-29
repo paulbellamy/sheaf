@@ -5,6 +5,9 @@ import {
   ACP_EFFORTS,
   DEFAULT_ACP_AGENT_ID,
   getAcpAgent,
+  listAcpAgents,
+  resolveAcpAgent,
+  type CustomAcpAgent,
 } from "./registry";
 
 describe("ACP agent registry", () => {
@@ -39,6 +42,53 @@ describe("ACP agent registry", () => {
     expect(omp!.command).toBe("omp");
     expect(omp!.args).toEqual(["acp"]);
     expect(omp!.effortEnv).toBeUndefined(); // omp ignores the effort setting
+  });
+});
+
+describe("custom ACP agents", () => {
+  const custom: CustomAcpAgent[] = [
+    { id: "mine", displayName: "My agent", command: "my-acp", args: ["--stdio"] },
+  ];
+
+  it("merges custom agents after the built-ins", () => {
+    const all = listAcpAgents(custom);
+    expect(all.map((a) => a.id)).toEqual([
+      ...ACP_AGENTS.map((a) => a.id),
+      "mine",
+    ]);
+  });
+
+  it("resolves a custom agent and synthesizes an install hint", () => {
+    const spec = resolveAcpAgent("mine", custom);
+    expect(spec).toBeDefined();
+    expect(spec!.command).toBe("my-acp");
+    expect(spec!.args).toEqual(["--stdio"]);
+    expect(spec!.installHint.length).toBeGreaterThan(0);
+    expect(spec!.effortEnv).toBeUndefined();
+  });
+
+  it("drops entries missing an id or command", () => {
+    const all = listAcpAgents([
+      { id: "", displayName: "x", command: "y", args: [] },
+      { id: "z", displayName: "z", command: "", args: [] },
+    ]);
+    expect(all.map((a) => a.id)).toEqual(ACP_AGENTS.map((a) => a.id));
+  });
+
+  it("a custom id shadows a built-in of the same id", () => {
+    const all = listAcpAgents([
+      { id: "codex", displayName: "My Codex", command: "x", args: [] },
+    ]);
+    expect(all.filter((a) => a.id === "codex")).toHaveLength(1);
+    expect(resolveAcpAgent("codex", [
+      { id: "codex", displayName: "My Codex", command: "x", args: [] },
+    ])!.displayName).toBe("My Codex");
+  });
+
+  it("no custom agents → just the built-ins", () => {
+    expect(listAcpAgents().map((a) => a.id)).toEqual(
+      ACP_AGENTS.map((a) => a.id),
+    );
   });
 });
 

@@ -26,7 +26,14 @@ import { flashField, flashRange, mountFlashStyles } from "./editor/flash";
 import type { EditorView } from "@codemirror/view";
 import { AcpController } from "./acp/controller";
 import type { ActivityStore } from "./acp/activity-store";
-import { ACP_EFFORTS, DEFAULT_ACP_EFFORT } from "./acp/registry";
+import {
+  ACP_EFFORTS,
+  DEFAULT_ACP_AGENT_ID,
+  DEFAULT_ACP_EFFORT,
+  listAcpAgents,
+  resolveAcpAgent,
+  type AcpAgentSpec,
+} from "./acp/registry";
 
 export default class SheafPlugin extends Plugin {
   settings: SheafSettings = DEFAULT_SETTINGS;
@@ -202,10 +209,18 @@ export default class SheafPlugin extends Plugin {
       new Notice("Sheaf: ACP needs a local-filesystem vault.");
       return;
     }
+    const spec = resolveAcpAgent(
+      this.settings.acpAgentId,
+      this.settings.customAcpAgents,
+    );
+    if (!spec) {
+      new Notice(`Sheaf: unknown ACP agent "${this.settings.acpAgentId}".`);
+      return;
+    }
     try {
       new Notice("Sheaf: starting ACP agent…");
       await this.acp.connect(
-        this.settings.acpAgentId,
+        spec,
         root,
         this.settings.serverUrl,
         this.settings.acpEffort,
@@ -227,6 +242,11 @@ export default class SheafPlugin extends Plugin {
   /** True when the plugin has a live ACP agent (distinct from a manual MCP one). */
   acpConnected(): boolean {
     return this.acp?.connected === true;
+  }
+
+  /** Built-in + user-defined ACP agents (for the pickers). */
+  acpAgents(): AcpAgentSpec[] {
+    return listAcpAgents(this.settings.customAcpAgents);
   }
 
   /** The per-doc activity model the threads panel renders. */
@@ -274,6 +294,13 @@ export default class SheafPlugin extends Plugin {
     // mode so the dropdown and the spawn env both stay well-formed.
     if (!ACP_EFFORTS.includes(this.settings.acpEffort)) {
       this.settings.acpEffort = DEFAULT_ACP_EFFORT;
+    }
+    if (!Array.isArray(this.settings.customAcpAgents)) {
+      this.settings.customAcpAgents = [];
+    }
+    // A selected agent that no longer resolves (deleted custom) → reset.
+    if (!resolveAcpAgent(this.settings.acpAgentId, this.settings.customAcpAgents)) {
+      this.settings.acpAgentId = DEFAULT_ACP_AGENT_ID;
     }
   }
 
