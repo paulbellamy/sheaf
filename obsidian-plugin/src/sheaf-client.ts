@@ -1,5 +1,16 @@
 import { requestUrl } from "obsidian";
 
+import type { StyleConfig } from "sheaf-server/types";
+
+export type { StyleConfig } from "sheaf-server/types";
+
+export type BuildStyleResult = {
+  thread_id: string;
+  doc_count: number;
+  word_count: number;
+  low_corpus: boolean;
+};
+
 export type ThreadTarget =
   | { path: string; scope: "doc" }
   | {
@@ -156,6 +167,45 @@ export class SheafClient {
     if (res.status >= 400) {
       throw new SheafApiError(describeError(res.status, res.json), res.status, res.json);
     }
+  }
+
+  async getStyleConfig(): Promise<StyleConfig> {
+    const url = `${this.baseUrl}/api/ui/style/config`;
+    const res = await requestUrl({ url, method: "GET", throw: false });
+    if (res.status >= 400) {
+      throw new SheafApiError(describeError(res.status, res.json), res.status, res.json);
+    }
+    return (res.json as { config: StyleConfig }).config;
+  }
+
+  async putStyleConfig(config: StyleConfig): Promise<void> {
+    const url = `${this.baseUrl}/api/ui/style/config`;
+    const res = await requestUrl({
+      url,
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(config),
+      throw: false,
+    });
+    if (res.status >= 400) {
+      throw new SheafApiError(describeError(res.status, res.json), res.status, res.json);
+    }
+  }
+
+  /** Kick off a voice-guide build (compute metrics now + ask the agent to
+   *  write the guide). Returns corpus stats for immediate UI feedback. */
+  async buildStyleGuide(): Promise<BuildStyleResult> {
+    const url = `${this.baseUrl}/api/ui/style/build`;
+    const res = await requestUrl({
+      url,
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      throw: false,
+    });
+    if (res.status >= 400) {
+      throw new SheafApiError(describeError(res.status, res.json), res.status, res.json);
+    }
+    return res.json as BuildStyleResult;
   }
 
   /**

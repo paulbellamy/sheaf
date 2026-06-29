@@ -1,5 +1,19 @@
-import { App, PluginSettingTab, Setting, TextComponent } from "obsidian";
+import {
+  App,
+  ButtonComponent,
+  PluginSettingTab,
+  Setting,
+  TextComponent,
+} from "obsidian";
+import { defaultStyleConfig, type StyleConfig } from "sheaf-server/types";
 import type SheafPlugin from "./main";
+import { renderCommandRow } from "./command-row";
+
+/** The prompt the user pastes into a fresh `claude` session. */
+const AGENT_PROMPT =
+  "use the sheaf MCP and watch for events; action and resolve each thread as it appears, and keep handling new ones until I stop you";
+
+export type { StyleConfig } from "sheaf-server/types";
 
 /**
  * A reviewer role the agent channels during a panel review. `id` is the slug
@@ -21,7 +35,25 @@ export type SheafSettings = {
   /** Run the sheaf server (backend + MCP + API) inside Obsidian itself. */
   runServer: boolean;
   personas: ReviewPersona[];
+  /** Voice matching: how the agent learns to write like the user. Mirrored to
+   *  the vault's `.sheaf/config.json` (the server's source of truth). */
+  style: StyleConfig;
 };
+
+/**
+ * Reconcile a persisted (possibly partial / older) style config against the
+ * canonical defaults, returning a fresh object so the UI never mutates the
+ * shared default in place.
+ */
+export function mergeStyle(loaded?: Partial<StyleConfig>): StyleConfig {
+  const base = defaultStyleConfig();
+  if (!loaded) return base;
+  return {
+    ...base,
+    ...loaded,
+    exclude_globs: loaded.exclude_globs ?? base.exclude_globs,
+  };
+}
 
 /**
  * Role-based default panel. Deliberately roles, not named people — safe in a
@@ -72,6 +104,7 @@ export const DEFAULT_SETTINGS: SheafSettings = {
   showResolved: true,
   runServer: true,
   personas: DEFAULT_PERSONAS,
+  style: defaultStyleConfig(),
 };
 
 /** Slugify a free-text name into a `review:<id>`-safe id. */
@@ -84,11 +117,43 @@ export function slugifyPersonaId(raw: string): string {
 }
 
 export class SheafSettingTab extends PluginSettingTab {
+  /** Held so agent-presence changes can toggle the Generate button live. */
+  private generateBtn: ButtonComponent | null = null;
+  private generateHint: HTMLElement | null = null;
+
   constructor(
     app: App,
     private plugin: SheafPlugin,
   ) {
     super(app, plugin);
+  }
+
+  /** Called by the plugin when agent presence flips while settings is open.
+   *  Surgical — only the button/hint update, so a textarea being edited isn't
+   *  clobbered by a full re-render. */
+  onAgentPresenceChanged(): void {
+    this.updateGenerateAvailability();
+  }
+
+  hide(): void {
+    this.generateBtn = null;
+    this.generateHint = null;
+  }
+
+  private updateGenerateAvailability(): void {
+    const connected = this.plugin.agentConnected;
+    this.generateBtn?.setDisabled(!connected);
+    this.generateBtn?.setTooltip(
+      connected ? "" : "Connect a Claude agent first",
+    );
+    if (this.generateHint) {
+      this.generateHint.setText(
+        connected
+          ? ""
+          : "Connect a Claude agent to enable — see “Connect an agent” above.",
+      );
+      this.generateHint.style.display = connected ? "none" : "block";
+    }
   }
 
   display(): void {
@@ -150,15 +215,114 @@ export class SheafSettingTab extends PluginSettingTab {
         }),
       );
 
-    // Surface the connect command so it's copy-pasteable from settings too.
-    const mcpUrl = `${this.plugin.settings.serverUrl.replace(/\/$/, "")}/api/mcp`;
+    // Connect-an-agent commands, copy-ready (mirrors the threads sidebar).
+    const url = this.plugin.settings.serverUrl.replace(/\/$/, "");
     new Setting(containerEl)
       .setName("Connect an agent")
       .setDesc(
-        `In a terminal: claude mcp add --transport http sheaf ${mcpUrl} — then run \`claude\` and say "use the sheaf MCP and watch for events; action and resolve each thread as it appears, and keep handling new ones until I stop you".`,
+        "In a terminal, register the MCP server; then run claude and paste the prompt to put it to work:",
+      );
+    const cmds = containerEl.createDiv();
+    cmds.style.display = "flex";
+    cmds.style.flexDirection = "column";
+    cmds.style.gap = "0.4em";
+    cmds.style.margin = "0 0 0.75em";
+    renderCommandRow(cmds, `claude mcp add --transport http sheaf ${url}/api/mcp`);
+    renderCommandRow(cmds, AGENT_PROMPT);
+
+    this.renderVoiceMatching(containerEl);
+    this.renderPersonas(containerEl);
+  }
+
+  /**
+   * Voice matching. The agent learns the user's writing voice from the vault
+   * and writes in it. Edits here are saved to plugin data *and* pushed to the
+   * server's `.sheaf/config.json` so the agent's GetStyle/StyleCheck honor them.
+   */
+  private renderVoiceMatching(containerEl: HTMLElement): void {
+    new Setting(containerEl).setName("Voice matching").setHeading();
+
+    const intro = containerEl.createDiv();
+    intro.style.fontSize = "0.85em";
+    intro.style.opacity = "0.7";
+    intro.style.marginBottom = "0.75em";
+    intro.setText(
+      "The agent studies how you write — across your notes — and matches your voice when it drafts prose. Generate a voice guide once, then it's used automatically.",
+    );
+
+    const style = this.plugin.settings.style;
+    const save = () => void this.plugin.saveAndPushStyle();
+
+    new Setting(containerEl)
+      .setName("Enable voice matching")
+      .setDesc("When on, the agent consults your voice profile before writing prose.")
+      .addToggle((t) =>
+        t.setValue(style.enabled).onChange((v) => {
+          style.enabled = v;
+          save();
+        }),
       );
 
-    this.renderPersonas(containerEl);
+    const genSetting = new Setting(containerEl)
+      .setName("Generate / refresh voice guide")
+      .setDesc(
+        "Analyze your notes now and ask the connected agent to (re)write your voice guide. Needs a connected agent (it does the writing).",
+      )
+      .addButton((b) => {
+        this.generateBtn = b;
+        b.setButtonText("Generate")
+          .setCta()
+          .onClick(() => void this.plugin.buildVoiceGuide());
+      });
+    this.generateHint = genSetting.descEl.createDiv();
+    this.generateHint.style.marginTop = "0.35em";
+    this.generateHint.style.fontSize = "0.9em";
+    this.generateHint.style.color = "var(--text-muted)";
+    this.updateGenerateAvailability();
+
+    new Setting(containerEl)
+      .setName("Exclude from corpus")
+      .setDesc(
+        "Glob patterns (one per line) for notes that are NOT your own writing — templates, clippings, daily notes. Everything else under the vault counts.",
+      )
+      .then((s) => {
+        const ta = s.controlEl.createEl("textarea");
+        ta.value = style.exclude_globs.join("\n");
+        ta.rows = 4;
+        ta.style.width = "100%";
+        ta.style.fontSize = "0.85em";
+        ta.placeholder = "**/Templates/**\n**/Clippings/**";
+        ta.addEventListener("change", () => {
+          style.exclude_globs = ta.value
+            .split("\n")
+            .map((l) => l.trim())
+            .filter((l) => l.length > 0);
+          save();
+        });
+        s.settingEl.style.display = "block";
+      });
+
+    const guideNote = containerEl.createDiv();
+    guideNote.style.fontSize = "0.85em";
+    guideNote.style.opacity = "0.7";
+    guideNote.style.margin = "0.25em 0 0.75em";
+    guideNote.setText(
+      "Punctuation and word-choice rules (em-dashes, contractions, words to avoid) live in your voice guide — edit Sheaf/Voice Guide.md, or just tell the agent.",
+    );
+
+    new Setting(containerEl)
+      .setName("Exemplars per draft")
+      .setDesc("How many of your own passages the agent sees as voice references.")
+      .addSlider((sl) =>
+        sl
+          .setLimits(1, 4, 1)
+          .setValue(Math.max(1, Math.min(4, style.exemplar_count)))
+          .setDynamicTooltip()
+          .onChange((v) => {
+            style.exemplar_count = v;
+            save();
+          }),
+      );
   }
 
   /**

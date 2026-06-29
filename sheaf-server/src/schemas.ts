@@ -27,6 +27,12 @@ export const LIMITS = {
    *  itself is still bounded. */
   grepPattern: 1_024,
   glob: 256,
+  /** StyleCheck input — a passage to lint, not a whole book. */
+  styleText: 50_000,
+  /** AnalyzeSamples per-sample content — a fetched page/file, bounded. */
+  analyzeContent: 200_000,
+  /** Topic hint for exemplar selection — a phrase, not prose. */
+  topic: 256,
 } as const;
 
 export const pathArg = z
@@ -162,3 +168,11 @@ export const nameArg = z
   .max(LIMITS.name)
   .optional()
   .describe("Draft name / label (bounded).");
+
+export const topicArg = z
+  .string()
+  .max(LIMITS.topic)
+  .optional()
+  .describe(
+    "Optional topic/keywords from the brief, used to bias exemplar selection toward on-topic samples of your writing.",
+  );
