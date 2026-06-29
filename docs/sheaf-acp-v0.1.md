@@ -233,12 +233,16 @@ shape:
 { id, displayName, command, args, env?, installHint }
 ```
 
-ship two entries, surfaced as a settings dropdown, optionally auto-detecting
-whether the binary is on PATH and showing `installHint` if not:
+ship the entries below, surfaced as a settings dropdown, optionally auto-detecting
+whether the binary is on PATH and showing `installHint` if not. Most adapters are
+standalone packages run via `npx`; some agents speak ACP through a subcommand of
+their own CLI, spawned directly:
 
-- **claude code** — [`@zed-industries/claude-code-acp`][cc] (wraps the claude
-  code sdk). alt: [`@zed-industries/claude-agent-acp`][ca] (claude agent sdk).
-- **codex** — [`@zed-industries/codex-acp`][cx] (also `@agentclientprotocol/codex-acp`).
+- **claude code** — `npx @agentclientprotocol/claude-agent-acp` ([cc]).
+- **codex** — `npx @agentclientprotocol/codex-acp` ([cx]).
+- **omp (Oh My Pi)** — `omp acp`, a subcommand of the [`omp`][omp] CLI
+  (`@oh-my-pi/pi-coding-agent`), spawned directly rather than via npx; effort is
+  agent-controlled (no effort env).
 
 auth is not the plugin's problem: each adapter reuses its cli's existing login
 and exposes acp `authenticate` / `logout` if a session needs it, so the plugin
@@ -247,9 +251,9 @@ hatch can come later for any other acp agent.
 
 acp is agent-agnostic, so this also un-locks sheaf from claude code.
 
-[cc]: https://www.npmjs.com/package/@zed-industries/claude-code-acp
-[ca]: https://www.npmjs.com/package/@zed-industries/claude-agent-acp
-[cx]: https://www.npmjs.com/package/@zed-industries/codex-acp
+[cc]: https://www.npmjs.com/package/@agentclientprotocol/claude-agent-acp
+[cx]: https://www.npmjs.com/package/@agentclientprotocol/codex-acp
+[omp]: https://omp.sh/docs/acp
 
 ---
 

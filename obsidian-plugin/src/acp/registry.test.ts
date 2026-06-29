@@ -32,6 +32,14 @@ describe("ACP agent registry", () => {
     expect(getAcpAgent("claude-code")?.displayName).toBe("Claude Code");
     expect(getAcpAgent("nope")).toBeUndefined();
   });
+
+  it("includes omp, spawned directly (omp acp) with no effort env", () => {
+    const omp = getAcpAgent("omp");
+    expect(omp).toBeDefined();
+    expect(omp!.command).toBe("omp");
+    expect(omp!.args).toEqual(["acp"]);
+    expect(omp!.effortEnv).toBeUndefined(); // omp ignores the effort setting
+  });
 });
 
 describe("ACP effort → env mapping", () => {

@@ -77,6 +77,19 @@ export const ACP_AGENTS: readonly AcpAgentSpec[] = [
       };
     },
   },
+  {
+    id: "omp",
+    displayName: "omp (Oh My Pi)",
+    // omp's ACP mode is `omp acp`, a subcommand of its own CLI (not a standalone
+    // adapter package), so we spawn the installed binary directly rather than via
+    // npx. spawn-env resolves `omp` on the recovered PATH; ENOENT surfaces the
+    // install hint.
+    command: "omp",
+    args: ["acp"],
+    installHint: "bun install -g @oh-my-pi/pi-coding-agent",
+    // No effort env var — omp selects models at runtime (/model, --smol/--slow),
+    // so effort is left to the agent (the dropdown is a no-op for omp).
+  },
 ];
 
 export const DEFAULT_ACP_AGENT_ID = ACP_AGENTS[0].id;
