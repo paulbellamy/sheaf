@@ -150,6 +150,70 @@ describe("inline RFM thread storage", () => {
     );
   });
 
+  it("does not leak markup when a thread anchors inside a code fence", async () => {
+    const doc = "Example:\n```\nconst x = 1;\n```\nDone.\n";
+    await backend.writeDoc("code.md", "main", doc);
+    const from = doc.indexOf("const x = 1;");
+    const id = await backend.addThread({
+      ref: "main",
+      author: "user",
+      message: "explain this",
+      targets: [
+        { path: "code.md", scope: "range", char_range: { from, to: from + 12 } },
+      ],
+    });
+    // The inline marker is skipped inside the fence (strip honors fences), so
+    // the clean prose is unchanged; the thread lives in the endmatter.
+    expect((await backend.readDoc("code.md", "main")).md).toBe(doc);
+    expect(
+      (await backend.listThreads({ path: "code.md", ref: "main" })).map((t) => t.id),
+    ).toContain(id);
+  });
+
+  it("preserves literal CriticMarkup in a doc that has no threads", async () => {
+    const lit = "Use {==this==} and {~~a~>b~~} literally.\n";
+    await backend.writeDoc("lit.md", "main", lit);
+    expect((await backend.readDoc("lit.md", "main")).md).toBe(lit);
+    await backend.editDoc("lit.md", "main", "literally", "verbatim", false);
+    expect((await backend.readDoc("lit.md", "main")).md).toBe(
+      "Use {==this==} and {~~a~>b~~} verbatim.\n",
+    );
+  });
+
+  it("keeps draft_id in canonical JSON key order", async () => {
+    const mainId = await backend.addThread({
+      ref: "main",
+      author: "user",
+      message: "on main",
+      targets: [{ path: "doc.md", scope: "doc" }],
+    });
+    expect(Object.keys(await backend.readThread(mainId))).toEqual([
+      "id",
+      "created",
+      "status",
+      "targets",
+      "messages",
+    ]);
+
+    const [draftId] = await backend.fork("doc.md", 1);
+    const draftThreadId = await backend.addThread({
+      ref: draftId,
+      author: "user",
+      message: "on draft",
+      targets: [{ path: "doc.md", scope: "doc" }],
+    });
+    const draftThread = await backend.readThread(draftThreadId);
+    expect(Object.keys(draftThread)).toEqual([
+      "id",
+      "created",
+      "status",
+      "draft_id",
+      "targets",
+      "messages",
+    ]);
+    expect(draftThread.draft_id).toBe(draftId);
+  });
+
   it("lands a draft's clean prose on main without its review markup", async () => {
     const [draftId] = await backend.fork("doc.md", 1);
     await backend.writeDoc("doc.md", draftId, "The swift brown fox.\n");

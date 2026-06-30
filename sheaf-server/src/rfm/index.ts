@@ -63,6 +63,50 @@ function matchInlineCodeSpan(md: string, offset: number): number | null {
   return closing === -1 ? null : closing + length;
 }
 
+/**
+ * Byte ranges of fenced code blocks and inline code spans. `stripInlineMarkup`
+ * leaves CriticMarkup literal inside these regions, so `renderInlineMarkers`
+ * must not inject markers into them — otherwise the injected markup would
+ * survive the strip and leak into the clean prose `readDoc` returns.
+ */
+function codeRanges(md: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  let offset = 0;
+  let fence: FenceState | null = null;
+  let fenceStart = 0;
+  const n = md.length;
+  while (offset < n) {
+    if (isLineStart(md, offset)) {
+      const fm = matchFence(md, offset, fence);
+      if (fm) {
+        const end = nextLineOffset(md, offset);
+        if (fence) {
+          ranges.push([fenceStart, end]);
+          fence = null;
+        } else {
+          fence = fm.fence;
+          fenceStart = offset;
+        }
+        offset = end;
+        continue;
+      }
+    }
+    if (fence) {
+      offset = nextLineOffset(md, offset);
+      continue;
+    }
+    const cs = matchInlineCodeSpan(md, offset);
+    if (cs !== null) {
+      ranges.push([offset, cs]);
+      offset = cs;
+      continue;
+    }
+    offset += 1;
+  }
+  if (fence) ranges.push([fenceStart, n]);
+  return ranges;
+}
+
 const ID_REF_RE = /^\{#[A-Za-z][A-Za-z0-9_-]*\}/;
 
 function matchIdRef(md: string, offset: number): number | null {
@@ -166,6 +210,85 @@ export function stripInlineMarkup(body: string): string {
   return out;
 }
 
+/**
+ * Map a byte offset in a marked-up document to the corresponding offset in the
+ * clean prose `stripInlineMarkup` produces. Used to translate an editor
+ * selection made against the on-disk markup into the clean-prose coordinates
+ * the server anchors against — correctly, even when the offset lands inside a
+ * marker (it maps through the marker's kept text, or snaps past a dropped one).
+ */
+export function cleanOffset(rawMd: string, rawOffset: number): number {
+  const body = splitEndmatter(rawMd).body;
+  const target = Math.max(0, Math.min(rawOffset, body.length));
+  let offset = 0;
+  let clean = 0;
+  let fence: FenceState | null = null;
+  const n = body.length;
+  // Each step covers raw [offset, rawEnd) and emits body[keptStart, keptEnd) of
+  // clean text (empty for dropped markers). Resolve `target` the moment it
+  // falls within a step; otherwise advance past it.
+  const step = (rawEnd: number, keptStart: number, keptEnd: number): number | null => {
+    if (target >= rawEnd) {
+      clean += keptEnd - keptStart;
+      offset = rawEnd;
+      return null;
+    }
+    if (target <= keptStart) return clean;
+    if (target >= keptEnd) return clean + (keptEnd - keptStart);
+    return clean + (target - keptStart);
+  };
+  while (offset < n) {
+    if (isLineStart(body, offset)) {
+      const fm = matchFence(body, offset, fence);
+      if (fm) {
+        fence = fence ? null : fm.fence;
+        const r = step(nextLineOffset(body, offset), offset, nextLineOffset(body, offset));
+        if (r !== null) return r;
+        continue;
+      }
+    }
+    if (fence) {
+      const r = step(nextLineOffset(body, offset), offset, nextLineOffset(body, offset));
+      if (r !== null) return r;
+      continue;
+    }
+    const cs = matchInlineCodeSpan(body, offset);
+    if (cs !== null) {
+      const r = step(cs, offset, cs);
+      if (r !== null) return r;
+      continue;
+    }
+    let handled: number | null | undefined;
+    if (body.startsWith("{==", offset)) {
+      const end = body.indexOf("==}", offset + 3);
+      if (end !== -1) handled = step(end + 3, offset + 3, end);
+    } else if (body.startsWith("{>>", offset)) {
+      const end = body.indexOf("<<}", offset + 3);
+      if (end !== -1) handled = step(end + 3, offset, offset);
+    } else if (body.startsWith("{++", offset)) {
+      const end = body.indexOf("++}", offset + 3);
+      if (end !== -1) handled = step(end + 3, offset, offset);
+    } else if (body.startsWith("{--", offset)) {
+      const end = body.indexOf("--}", offset + 3);
+      if (end !== -1) handled = step(end + 3, offset + 3, end);
+    } else if (body.startsWith("{~~", offset)) {
+      const sep = body.indexOf("~>", offset + 3);
+      const end = sep === -1 ? -1 : body.indexOf("~~}", sep + 2);
+      if (sep !== -1 && end !== -1) handled = step(end + 3, offset + 3, sep);
+    } else {
+      const idEnd = matchIdRef(body, offset);
+      if (idEnd !== null) handled = step(idEnd, offset, offset);
+    }
+    if (handled !== undefined) {
+      if (handled !== null) return handled;
+      continue;
+    }
+    const r = step(offset + 1, offset, offset + 1);
+    if (r !== null) return r;
+  }
+  return clean;
+}
+
 /* ---------------------------------------------------------------- endmatter -- */
 
 export type Endmatter = Record<string, unknown>;
@@ -181,16 +304,32 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return Boolean(v) && typeof v === "object" && !Array.isArray(v);
 }
 
+/** True when a `comments:`/`suggestions:` bucket holds at least one sheaf
+ *  thread record — an object with a `messages` array. This is the provenance
+ *  signal that tells a real sheaf endmatter apart from a prose section that
+ *  merely happens to end with a `comments:`/`suggestions:` YAML mapping (a
+ *  config tutorial, or a doc documenting the RFM format itself). */
+function hasThreadRecord(bucket: unknown): boolean {
+  if (!isPlainObject(bucket)) return false;
+  return Object.values(bucket).some(
+    (v) => isPlainObject(v) && Array.isArray(v.messages),
+  );
+}
+
 /** True when a parsed trailing block is a sheaf/RFM review endmatter (vs. an
  *  ordinary `---` section that merely happens to be the last one). */
 function looksLikeEndmatter(parsed: unknown): parsed is Endmatter {
-  return isPlainObject(parsed) && ("comments" in parsed || "suggestions" in parsed);
+  return (
+    isPlainObject(parsed) &&
+    (hasThreadRecord(parsed.comments) || hasThreadRecord(parsed.suggestions))
+  );
 }
 
 /**
  * Split off the final RFM endmatter. The endmatter is the *last* `\n---\n`
- * whose YAML body parses to an object carrying `comments:`/`suggestions:`. Any
- * other trailing `---` block is treated as document content.
+ * whose YAML body parses to an object whose `comments:`/`suggestions:` maps
+ * carry at least one sheaf thread record (an entry with a `messages` array).
+ * Any other trailing `---` block is treated as document content.
  */
 export function splitEndmatter(md: string): SplitDoc {
   const matches = [...md.matchAll(/\n---[ \t]*\r?\n/g)];
@@ -214,11 +353,13 @@ export function splitEndmatter(md: string): SplitDoc {
 
 /**
  * Full clean projection: strip the RFM endmatter and all inline CriticMarkup,
- * leaving the canonical prose. This is what `readDoc` returns and what grep,
- * the style corpus, and the diff/merge paths see.
+ * leaving the canonical prose. Only a doc with a real review endmatter carries
+ * sheaf-injected markup; any other doc is returned untouched so prose that
+ * legitimately contains CriticMarkup-like text is preserved verbatim.
  */
 export function stripReviewMarkup(md: string): string {
-  return stripInlineMarkup(splitEndmatter(md).body);
+  const split = splitEndmatter(md);
+  return split.endmatter ? stripInlineMarkup(split.body) : md;
 }
 
 /**
@@ -309,6 +450,7 @@ export function renderInlineMarkers(
 ): string {
   type Placed = { from: number; to: number; text: string; m: InlineMarker };
   const placed: Placed[] = [];
+  const code = codeRanges(prose);
   for (const m of markers) {
     let from = m.from;
     let to = m.to;
@@ -321,6 +463,11 @@ export function renderInlineMarkers(
       to = at + m.anchoredText.length;
     }
     if (!anchorIsWrappable(m.anchoredText, m.kind)) continue;
+    // A backtick in the anchor (or an anchor overlapping a code region) would
+    // make `stripInlineMarkup` treat the injected markup as code and leave it
+    // literal — breaking the round-trip. Leave such threads endmatter-only.
+    if (m.anchoredText.includes("`")) continue;
+    if (code.some(([s, e]) => from < e && s < to)) continue;
     placed.push({ from, to, text: m.anchoredText, m });
   }
   // Insert right-to-left so earlier offsets stay valid; drop any overlap with a

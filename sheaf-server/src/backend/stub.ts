@@ -165,9 +165,11 @@ async function walk(root: string): Promise<string[]> {
  * the final path component fails with ELOOP instead of being silently
  * dereferenced into (e.g.) `/etc/passwd`.
  */
-/** Largest file we're willing to read into memory. See MAX_DISK_BYTES in
- *  persistence-schemas.ts for the matching "structured" cap. */
-const MAX_FILE_BYTES = 4 * 1024 * 1024;
+/** Largest file we're willing to read into memory. Inline review state now
+ *  lives in the doc itself, so a doc with many threads (each carrying up to a
+ *  1MB draft) is larger than clean prose alone — the cap is sized to hold a
+ *  realistic annotated doc while still bounding a pathological read. */
+const MAX_FILE_BYTES = 16 * 1024 * 1024;
 
 async function readFileNoFollow(abs: string): Promise<string> {
   const fh = await fs.open(
@@ -357,12 +359,29 @@ export class StubBackend implements Backend {
     await fs.mkdir(p, { recursive: true });
   }
 
-  /** Read a file's raw bytes, or null when it doesn't exist. */
+  /** Read a file's raw bytes, or null on any read failure. For discovery /
+   *  listing paths, where one bad doc must not abort the whole operation. */
   private async readRawMaybe(abs: string): Promise<string | null> {
     try {
       return await readFileNoFollow(abs);
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * Read a doc we're about to rewrite. Returns null only when the file is
+   * genuinely absent (ENOENT) — a safe "no existing threads" signal. Any other
+   * failure (e.g. the file exceeds the read cap) is rethrown rather than
+   * swallowed, so a rewrite never silently overwrites a doc's threads with an
+   * empty endmatter because its bytes couldn't be read.
+   */
+  private async readRawForRewrite(abs: string): Promise<string | null> {
+    try {
+      return await readFileNoFollow(abs);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException)?.code === "ENOENT") return null;
+      throw e;
     }
   }
 
@@ -383,7 +402,7 @@ export class StubBackend implements Backend {
     homePath: DocPath,
     draftId?: DraftId,
   ): Promise<void> {
-    const raw = await this.readRawMaybe(abs);
+    const raw = await this.readRawForRewrite(abs);
     const existing = raw ? parseReviewDoc(raw, draftId).threads : [];
     await this.ensureDir(path.dirname(abs));
     await writeFileNoFollow(abs, serializeReviewDoc(prose, existing, homePath));
@@ -529,12 +548,19 @@ export class StubBackend implements Backend {
     const results: DocSummary[] = [];
     for (const f of files) {
       if (!f.endsWith(".md")) continue;
+      // Skip an unreadable/oversized doc rather than aborting the whole listing.
+      const raw = await this.readRawMaybe(f);
+      if (raw === null) continue;
+      let stat: import("node:fs").Stats;
+      try {
+        stat = await fs.lstat(f);
+      } catch {
+        continue;
+      }
       const rel = path.relative(this.root, f).replace(/\\/g, "/");
-      const stat = await fs.lstat(f);
-      const md = await readFileNoFollow(f);
       results.push({
         path: rel,
-        title: titleFromMd(md, path.basename(f, ".md")),
+        title: titleFromMd(cleanProse(raw), path.basename(f, ".md")),
         updated_at: stat.mtimeMs,
       });
     }
@@ -562,12 +588,18 @@ export class StubBackend implements Backend {
     const overridden = new Map<DocPath, DocSummary>();
     for (const f of draftFiles) {
       if (!f.endsWith(".md")) continue;
+      const raw = await this.readRawMaybe(f);
+      if (raw === null) continue;
+      let stat: import("node:fs").Stats;
+      try {
+        stat = await fs.lstat(f);
+      } catch {
+        continue;
+      }
       const rel = path.relative(draftBase, f).replace(/\\/g, "/");
-      const stat = await fs.lstat(f);
-      const md = await readFileNoFollow(f);
       overridden.set(rel, {
         path: rel,
-        title: titleFromMd(md, path.basename(f, ".md")),
+        title: titleFromMd(cleanProse(raw), path.basename(f, ".md")),
         updated_at: stat.mtimeMs,
       });
     }
@@ -1343,7 +1375,7 @@ export class StubBackend implements Backend {
     assertVaultPath(homePath);
     assertThreadId(t.id);
     const abs = this.homeAbs(homePath, t.draft_id);
-    const raw = await this.readRawMaybe(abs);
+    const raw = await this.readRawForRewrite(abs);
     let prose: string;
     let threads: Thread[];
     if (raw !== null) {

@@ -27,9 +27,15 @@ import {
 import { threadOnDiskSchema } from "../persistence-schemas";
 import type { DocPath, DraftId, Thread, ThreadDraftBody } from "./index";
 
-/** Clean canonical prose: strip the endmatter and all inline review markup. */
+/**
+ * Clean canonical prose. Only a doc that carries a real review endmatter has
+ * sheaf-injected inline markup; for any other doc we return the bytes untouched,
+ * so prose that legitimately contains CriticMarkup-like text (a tutorial, this
+ * repo's own RFM docs) round-trips intact instead of being silently stripped.
+ */
 export function cleanProse(rawMd: string): string {
-  return stripInlineMarkup(splitEndmatter(rawMd).body);
+  const split = splitEndmatter(rawMd);
+  return split.endmatter ? stripInlineMarkup(split.body) : rawMd;
 }
 
 /** Parse a doc's raw markdown into its clean prose plus the threads it homes. */
@@ -39,7 +45,7 @@ export function parseReviewDoc(
 ): { prose: string; threads: Thread[] } {
   const split = splitEndmatter(rawMd);
   return {
-    prose: stripInlineMarkup(split.body),
+    prose: split.endmatter ? stripInlineMarkup(split.body) : rawMd,
     threads: endmatterThreads(split.endmatter, draftId),
   };
 }
@@ -54,16 +60,22 @@ function endmatterThreads(
     const map = endmatter[bucket];
     if (!map || typeof map !== "object" || Array.isArray(map)) continue;
     for (const [id, value] of Object.entries(map as Record<string, unknown>)) {
-      // The map key is the authoritative id; ignore any id inside the value.
+      // The map key is the authoritative id, and the file's location (not any
+      // stored value) is authoritative for draft scoping. Inject both into the
+      // candidate before parsing so Zod emits them in canonical schema order —
+      // keeping the Thread JSON byte-identical to the pre-migration shape
+      // (`draft_id` as the 4th key, present only for draft-scoped threads).
       const candidate =
         value && typeof value === "object" && !Array.isArray(value)
-          ? { ...(value as Record<string, unknown>), id }
+          ? {
+              ...(value as Record<string, unknown>),
+              id,
+              ...(draftId !== undefined ? { draft_id: draftId } : {}),
+            }
           : value;
       const parsed = threadOnDiskSchema.safeParse(candidate);
       if (!parsed.success) continue; // skip drifted/corrupt record
-      const t = parsed.data as Thread;
-      t.draft_id = draftId; // location is authoritative for draft scoping
-      out.push(t);
+      out.push(parsed.data as Thread);
     }
   }
   return out.sort((a, b) => a.created - b.created);
