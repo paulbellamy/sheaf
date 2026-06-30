@@ -9,6 +9,8 @@ import {
   TFolder,
 } from "obsidian";
 
+import { stripReviewMarkup } from "sheaf-server/types";
+
 import { SheafApiError, SheafClient } from "./sheaf-client";
 import { SheafEventStream, type BackendEvent } from "./sheaf-events";
 import { SheafServerHost } from "./sheaf-server-host";
@@ -473,8 +475,18 @@ export default class SheafPlugin extends Plugin {
     const fromOff = editor.posToOffset(editor.getCursor("from"));
     const toOff = editor.posToOffset(editor.getCursor("to"));
     if (Number.isNaN(fromOff) || Number.isNaN(toOff)) return null;
-    if (toOff < fromOff) return { from: toOff, to: fromOff };
-    return { from: fromOff, to: toOff };
+    const lo = Math.min(fromOff, toOff);
+    const hi = Math.max(fromOff, toOff);
+    // Once a note has threads its on-disk `.md` carries inline review markup,
+    // but the server anchors against the clean prose `readDoc` returns. Map the
+    // editor's marked-up offsets into clean-prose offsets (the length of the
+    // stripped prefix) so the char_range lines up. A note with no threads yet
+    // has no markup, so this is a no-op for the common first-comment case.
+    const buf = editor.getValue();
+    return {
+      from: stripReviewMarkup(buf.slice(0, lo)).length,
+      to: stripReviewMarkup(buf.slice(0, hi)).length,
+    };
   }
 
   private dispatchEvent(event: BackendEvent): void {
