@@ -191,6 +191,8 @@ comments:
 
 **cross-cutting.** `targets` is a list; a thread can span arbitrary docs across workspaces. it is stored once, in its home doc's endmatter, and listed wherever its targets point. resolving "all threads on doc X" scans each doc's endmatter for a target whose path is X — there is no derived index file to keep coherent across merges (the previous `thread-index.yml` is gone: the source of truth is the docs themselves). this trades an index lookup for a tree walk, which is cheap at v0 scale and removes a whole class of merge-conflict / rebuild machinery.
 
+**strip rules + a known limitation.** the clean projection only strips when a doc actually carries a review endmatter, and it never injects (nor strips) markup inside fenced/inline code, so prose and code that legitimately *contain* CriticMarkup round-trip untouched. the one residual: a doc that has *both* live threads *and* literal CriticMarkup in its prose outside code — the strip can't tell a sheaf-injected `{==…==}` from a hand-typed one and will drop the literal one on read. it's narrow (code examples are protected, and a doc with no threads is returned verbatim) and inherent to keeping review state in the same byte stream as the prose; the production path would disambiguate by tagging injected spans with their `{#id}`.
+
 ---
 
 ## 6. branch / draft model
