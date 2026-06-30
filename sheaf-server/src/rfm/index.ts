@@ -170,7 +170,7 @@ export function stripInlineMarkup(body: string): string {
 
 export type Endmatter = Record<string, unknown>;
 
-export interface SplitDoc {
+interface SplitDoc {
   /** Document body with inline markup still present, endmatter removed. */
   body: string;
   /** Parsed endmatter object, or null when the doc has no RFM endmatter. */
@@ -251,7 +251,7 @@ export function composeDoc(body: string, endmatter: Endmatter | null): string {
 
 /* --------------------------------------------------------- inline projection -- */
 
-export type InlineMarkerKind = "comment" | "substitution";
+type InlineMarkerKind = "comment" | "substitution";
 
 export interface InlineMarker {
   id: string;

@@ -33,8 +33,6 @@ export const draftMetaSchema = z.object({
   note: z.string().max(2048).optional(),
 });
 
-export type DraftMetaOnDisk = z.infer<typeof draftMetaSchema>;
-
 /**
  * Stored thread target. Discriminated by `scope`:
  *   - `range` carries an anchor (rel_pos + anchored_text).
@@ -44,7 +42,7 @@ export type DraftMetaOnDisk = z.infer<typeof draftMetaSchema>;
  * existed) is migrated in `threadOnDiskSchema` below: a target with an
  * `anchor` and no `scope` is treated as `scope=range`.
  */
-export const threadAnchorSchema = z.discriminatedUnion("scope", [
+const threadAnchorSchema = z.discriminatedUnion("scope", [
   z.object({
     scope: z.literal("doc"),
     path: z.string().min(1).max(512),
@@ -68,7 +66,7 @@ const threadDraftBodySchema = z.object({
   description: z.string().max(1_000).optional(),
 });
 
-export const threadMessageSchema = z.object({
+const threadMessageSchema = z.object({
   author: z.string().max(64),
   ts: z.number().int(),
   body: z.string().max(10_000),
@@ -113,8 +111,6 @@ export const threadOnDiskSchema = z.preprocess(
   }),
 );
 
-export type ThreadOnDisk = z.infer<typeof threadOnDiskSchema>;
-
 /**
  * Op log is a map of op_id to WriteResult. Shape is open-ended (backend may
  * evolve WriteResult), so we only assert the outer container.
@@ -125,5 +121,3 @@ export const opLogSchema = z.record(
     version_token: z.string().max(128),
   }),
 );
-
-export type OpLogOnDisk = z.infer<typeof opLogSchema>;
