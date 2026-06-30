@@ -117,8 +117,9 @@ export default class SheafPlugin extends Plugin {
       }),
     );
 
-    // A vault rename moves the `.md` but leaves sheaf's sidecars (threads,
-    // version history, drafts) pinned to the old path. Reconcile them on the
+    // A vault rename moves the `.md` (threads travel inline with it), but the
+    // target paths recorded in its endmatter, the version history, and the
+    // hidden draft overrides stay pinned to the old path. Reconcile them on the
     // server — which also wakes the connected agent — and follow the rename in
     // the open threads panel so it doesn't go blank on the now-stale path.
     this.registerEvent(

@@ -23,50 +23,40 @@ scope of this doc: storage model + md↔ycrdt sync algorithm + comment anchoring
 ```
 .sheaf/
   config.yml              # org-level config
-  thread-index.yml        # derived: target_path -> [{thread_id, home_dir}]
-  threads-archive/        # orphaned threads (last target deleted)
 workspaces/
   infra/
     docs/
-      proposal.md         # canonical rendered markdown
+      proposal.md         # canonical prose + inline RFM review markup
       proposal.ycrdt      # yjs state snapshot (binary)
-      proposal.threads/   # sidecar: threads whose HOME is this doc
-        thrd_9fe2.yml
-        thrd_a1b3.yml
       adr-012.md
       adr-012.ycrdt
-      adr-012.threads/
-        thrd_c5d6.yml
   product/
     docs/
       q3-roadmap.md
       q3-roadmap.ycrdt
-      q3-roadmap.threads/
-        thrd_e7f8.yml
 ```
 
-every doc is self-contained: `<name>.md` + `<name>.ycrdt` + `<name>.threads/`. listing the doc's parent dir surfaces everything relevant to that doc.
+every doc is self-contained: `<name>.md` (its prose **and** its review state) + `<name>.ycrdt`. there are no `.threads/` sidecars — comments, proposed changes, and threads live inline in the markdown, roughdraft style (see `roughdraft-review-markup.md`): CriticMarkup spans (`{==anchor==}{>>comment<<}{#id}`, `{~~old~>new~~}{#id}`, …) for the anchored comment / change, plus a YAML **endmatter** block (`comments:` / `suggestions:` maps keyed by thread id) that authoritatively stores the thread records homed in that doc.
 
-- `.md` = canonical rendered markdown. what humans read, what agents grep, what diff viewers render.
+- `.md` = canonical prose **with** an inline review layer. readers that want clean prose — the editor, what agents grep, the style corpus, what diff viewers render — get a *stripped projection*: the inline markers and endmatter removed. the review layer is read separately by parsing the endmatter.
 - `.ycrdt` = yjs state snapshot (binary). **the merge-truth.** source of authority for concurrent-edit semantics.
-- `.threads/` = sidecar dir holding threads whose *home* is this doc (created here, or migrated here after a cascade).
+- a thread's *home* doc is `targets[0].path`; its record lives in that doc's endmatter (created there, or re-homed after a cascade).
 
-**cross-cutting threads** live in exactly one sidecar (their home) but list multiple targets in their yaml. the derived index at `.sheaf/thread-index.yml` maps foreign target paths → home locations, so resolving "all threads on doc X" is two reads (home sidecar + index lookup). index entries exist only for threads with >1 target; single-target threads don't need indexing.
+**cross-cutting threads** list multiple targets in their record but are stored once, in the home doc's endmatter. resolving "all threads on doc X" scans each doc's endmatter for a target matching X — no separate index file to keep coherent.
 
 **cascade rules:**
-- doc deleted w/ home threads → move threads to next remaining target's sidecar. no remaining targets → `.sheaf/threads-archive/`. never silently delete.
-- doc renamed → sidecar renamed with it (git sees as rename; blame preserved). cross-refs in thread files mentioning the old path get rewritten in the same commit. index updated.
-- misplaced thread file → worker tree-walks and reconciles on next pass; anomaly logged.
+- doc renamed → its `.md` (review state and all) moves with it; the target paths recorded inside every doc's endmatter that point at the old path are rewritten in the same commit.
+- doc deleted w/ home threads → re-home the records to the next remaining target's doc; no remaining targets → archive. never silently delete.
 
-**invariant 1 (consistency at rest):** at every commit on every branch, `render(doc.ycrdt) === doc.md`. no exceptions.
+**invariant 1 (consistency at rest):** at every commit on every branch, `render(doc.ycrdt) === strip(doc.md)` — the ycrdt is the canonical prose; the review layer is the endmatter carried alongside it in the same `.md`.
 
-**invariant 1.5 (thread locality):** every thread file lives in exactly one sidecar dir corresponding to one of its targets. the index is fully derivable from a tree walk.
+**invariant 1.5 (thread locality):** every thread record lives in exactly one doc's endmatter — its home doc (`targets[0]`).
 
 ---
 
 ## 3. invariants
 
-1. **consistency at rest** — render(ycrdt) === md at every committed state
+1. **consistency at rest** — render(ycrdt) === strip(md) at every committed state (the clean prose; the inline review layer rides in the doc's endmatter)
 2. **crdt merge commutes** — two branches merge via yjs update-merge; result is deterministic regardless of op order
 3. **anchor survival** — comment anchors (yjs relative positions) survive any edit to the underlying ytext, provided the ycrdt history is intact
 4. **no silent annihilation** — if a ycrdt is reconstructed from md (history lost), anchors fall back to content-based fuzzy matching; orphans surface in ui, never vanish
@@ -157,79 +147,49 @@ this is the worst-case fallback. mitigations:
 
 ---
 
-## 5. comment anchors: two tiers
+## 5. comment anchors: inline markup + content tiers
 
-threads live in a **per-doc sidecar dir** (`<doc>.threads/<id>.yml`) — one sidecar per doc, one *home* per thread. threads are first-class versioned entities that *point at* docs; a thread can point at multiple docs (cross-cutting proposals) but its file lives in exactly one sidecar (see §2 for cascade rules).
+threads live **inline in the doc markdown** — roughdraft-flavored review markup (see `roughdraft-review-markup.md`), not a sidecar file. a doc's YAML endmatter authoritatively stores every thread record homed in it (`comments:` for plain threads, `suggestions:` for threads carrying a proposed change), keyed by thread id; the inline CriticMarkup spans are a regenerated projection of those records over the prose. threads are first-class entities that *point at* docs; a thread can point at multiple docs (cross-cutting) but its record lives in exactly one doc's endmatter — its home (`targets[0]`; see §2 for cascade rules).
 
-```yaml
-id: thrd_9fe2
-created: 2026-04-17T10:23:00Z
-status: open
-targets:
-  - path: workspaces/infra/docs/proposal.md
-    anchor:
-      rel_pos: <base64 yjs RelativePosition>          # tier 1: exact
-      content_hash: <sha256 of ±64 surrounding chars> # tier 2: fast fuzzy
-      anchored_text: "the proposed api should return" # tier 3: slow fuzzy
-      context_before: "...previous sentence..."
-      context_after: "...next sentence..."
-  - path: workspaces/infra/docs/adr-012.md
-    anchor: { ... }
-messages:
-  - author: alice
-    ts: 2026-04-17T10:23:00Z
-    body: "does this account for the rate limit?"
-  - author: bob
-    ts: 2026-04-17T11:02:00Z
-    body: "yeah see §3.2"
+a doc with one range-anchored comment looks like:
+
+```markdown
+the proposed api {==should return==}{>>does this account for the rate limit?<<}{#thrd_9fe2} a 429.
+
+---
+comments:
+  thrd_9fe2:
+    by: alice
+    at: "2026-04-17T10:23:00.000Z"
+    status: open
+    created: 1776414180000
+    targets:
+      - path: workspaces/infra/docs/proposal.md
+        scope: range
+        anchor:
+          rel_pos: <base64 {from,to}>                      # tier 1: exact offsets
+          content_hash: <sha256 of ±64 surrounding chars>  # tier 2: fast fuzzy
+          anchored_text: "should return"                   # tier 3: slow fuzzy
+          context_before: "the proposed api "
+          context_after: " a 429."
+    messages:
+      - author: alice
+        ts: 1776414180000
+        body: "does this account for the rate limit?"
+      - author: bob
+        ts: 1776417720000
+        body: "yeah see §3.2"
 ```
 
-**resolution order on read**:
+**reading.** `readDoc` returns the *stripped projection* — clean prose with the inline markup and endmatter removed. the review layer is read separately by parsing the endmatter into thread records. the inline `{#id}` span gives each anchored thread a position in the prose by construction; `rel_pos` / `content_hash` / `anchored_text` are computed against that clean prose.
 
-1. try `rel_pos` against current ycrdt. if it resolves to a valid position and the surrounding content matches `anchored_text` within a threshold, use it. done.
-2. if ycrdt was rebuilt (case 4) or rel_pos is stale: hash check — search for a byte-window whose hash matches `content_hash`. exact match → anchor there.
-3. fuzzy fallback: levenshtein or similar against `anchored_text` + `context_before`/`context_after`. above threshold → anchor there, flag "approximate."
-4. no match above threshold → mark **orphaned**. surface in an "unanchored threads" panel on the doc. user re-anchors or archives.
+**resolution order** (when re-locating an anchor after an edit, e.g. on re-projecting the inline span):
 
-cross-cutting: `targets` is a list. a thread can span arbitrary docs across arbitrary workspaces. this is how "this rfc spans three workspaces" reviews work — one thread, many targets, resolved independently per target.
+1. try `rel_pos` (the stored clean-prose offsets) — if the slice still equals `anchored_text`, use it. done.
+2. otherwise search for `anchored_text` verbatim in the current prose; the nearest occurrence wins. (`content_hash` / context are the fuzzier fallbacks the production backend layers on.)
+3. no match → the thread keeps its record in the endmatter but gets no inline span — **orphaned**. surface it in an "unanchored threads" panel; the user re-anchors or archives.
 
-### 5.1 thread-index.yml — schema + maintenance
-
-the index is a derived cache for cross-cutting threads. single file at `.sheaf/thread-index.yml`. stores **only** threads with >1 target — single-target threads are findable directly via their home sidecar, no entry needed.
-
-```yaml
-version: 1
-rebuilt_at: 2026-04-18T12:34:56Z
-entries:
-  workspaces/product/docs/q3.md:
-    - { thread_id: thrd_9fe2, home: workspaces/infra/docs/proposal.threads/ }
-    - { thread_id: thrd_5f77, home: workspaces/infra/docs/proposal.threads/ }
-  workspaces/infra/docs/adr-012.md:
-    - { thread_id: thrd_9fe2, home: workspaces/infra/docs/proposal.threads/ }
-```
-
-**maintenance:**
-- the sheaf worker writes. every thread mutation (create / target-add / target-remove / resolve / archive) updates the index + the thread file in the same git commit.
-- a thread's home doc is *not* listed in its own entry (redundant); only foreign targets appear.
-- keys sorted lexicographically, per-key entry lists sorted by `thread_id`. determinism → clean git diffs.
-
-**rebuild from scratch** (fully derivable, this is the point of invariant 1.5):
-- walk `workspaces/**/*.threads/*.yml` → parse each thread → for each target whose path ≠ home, emit an index entry
-- idempotent, cheap at v0 scale (sub-second for tens of thousands of threads)
-- runs on: worker cold start (sanity check), post-merge of any branch that touched threads (see below), on-demand via admin endpoint
-
-**merge semantics — this is the load-bearing bit:**
-- the index is a single file; naively it conflicts on every parallel branch that adds a thread. **do not try to git-merge it.** on any branch merge that touched threads, the worker discards the merged index and rebuilds from tree walk.
-- same pattern as ycrdt: *derived state is always rederived on merge, never text-merged.*
-- practical cost: index rebuild is on the hot path for thread-touching merges. fine at 10k threads; painful approaching 1m. mitigation when that bites → shard `thread-index.yml` by workspace, rebuild only the affected shard.
-
-**resolving "all threads on doc X":**
-1. read `<X>.threads/*.yml` → home threads, full content
-2. lookup `X.path` in thread-index → list of `{thread_id, home}` for foreign threads
-3. read foreign thread files from their homes
-4. merge, resolve anchors (§5 tiers), render
-
-two reads in the common (home-only) case; three in the cross-cutting case. foreign-thread resolution is parallelizable — all foreign reads fan out concurrently.
+**cross-cutting.** `targets` is a list; a thread can span arbitrary docs across workspaces. it is stored once, in its home doc's endmatter, and listed wherever its targets point. resolving "all threads on doc X" scans each doc's endmatter for a target whose path is X — there is no derived index file to keep coherent across merges (the previous `thread-index.yml` is gone: the source of truth is the docs themselves). this trades an index lookup for a tree walk, which is cheap at v0 scale and removes a whole class of merge-conflict / rebuild machinery.
 
 ---
 
@@ -314,8 +274,8 @@ all three talk to the same branch+merge substrate. no separate codepaths, no sep
 - **multi-agent collaboration on one draft** — crdt says yes, ux says idk. probably each agent gets its own fork by default; explicit opt-in for shared drafts.
 - **offline editing** — the DO is the canonical multiplayer surface, so pure-offline is out of scope for v0. clients can buffer ops and replay on reconnect. "really offline" is a v2 conversation.
 - **partial-merge of cross-cutting threads** — if a thread targets `a.md` (on main) and `b.md` (draft-only), and only the `a.md` changes merge (cherry-pick, or manual git surgery), the thread lands on main referencing a nonexistent `b.md`. handling: targets with missing paths get `status: missing` at **read** time; ui surfaces "drop target / re-anchor elsewhere." general invariant — *any path ref in `thread.targets` is validated at read time against the current ref*, never at write time. cross-branch reads of threads also surface this gracefully.
-- **index rebuild cost at scale** — tree-walking `workspaces/**/*.threads/*.yml` on every thread-touching merge is fine at 10k threads, meh at 100k, unacceptable approaching 1m. mitigations in order of effort: (a) shard `thread-index.yml` per workspace, (b) keep an incremental index that git-merges cleanly by construction (bloom-filter hybrid?), (c) offload to a DO with kv backing. defer until actual pain.
-- **orphan-home detection on merge** — invariant 1.5 says every thread sidecar corresponds to a doc target. if a merge lands a thread sidecar whose target doesn't exist on the merged branch (shouldn't happen, but), the index-rebuild pass must detect the orphan sidecar and cascade per §2 rules. worth writing an explicit test.
+- **cross-doc scan cost at scale** — "all threads on doc X" now scans every doc's endmatter rather than reading a derived index. fine at 10k docs, meh at 100k, slow approaching 1m. mitigations in order of effort: (a) a cheap per-workspace cache of `{doc → has-endmatter}` to skip clean docs, (b) reintroduce a rebuildable derived index *only* for cross-cutting (multi-target) threads, (c) offload to a DO with kv backing. defer until actual pain. note this trades the old `thread-index.yml` merge-conflict/rebuild machinery for a stateless walk.
+- **orphan-target detection on merge** — invariant 1.5 says every thread record lives in its home doc's endmatter. a record may list a target whose doc doesn't exist on the merged branch; per the "partial-merge" note above, any path in `thread.targets` is validated at **read** time and surfaced as `status: missing`, never silently dropped. worth an explicit test.
 
 ---
 

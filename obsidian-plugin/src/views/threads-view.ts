@@ -7,7 +7,7 @@ import {
   Notice,
 } from "obsidian";
 import type { EditorView } from "@codemirror/view";
-import { remapRenamedPath } from "sheaf-server/types";
+import { remapRenamedPath, stripReviewMarkup } from "sheaf-server/types";
 import type SheafPlugin from "../main";
 import type { Thread, ThreadDraftBody } from "../sheaf-client";
 import { renderCommandRow } from "../command-row";
@@ -267,7 +267,12 @@ export class ThreadsView extends ItemView {
   private async refreshDocText(): Promise<void> {
     if (!this.currentFile) return;
     try {
-      this.docText = await this.app.vault.cachedRead(this.currentFile);
+      // The on-disk note now carries inline review markup + a YAML endmatter
+      // (roughdraft style); strip it so drift detection matches `anchored_text`
+      // against the clean prose, not the markers or the stored anchor copies.
+      this.docText = stripReviewMarkup(
+        await this.app.vault.cachedRead(this.currentFile),
+      );
       this.render();
     } catch (err) {
       console.error("sheaf: read file failed", err);

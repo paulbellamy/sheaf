@@ -40,8 +40,8 @@ export type DraftMetaOnDisk = z.infer<typeof draftMetaSchema>;
  *   - `range` carries an anchor (rel_pos + anchored_text).
  *   - `doc`   carries no anchor — the comment is about the whole doc.
  *
- * Legacy on-disk thread files written before the discriminator was
- * introduced are migrated in `threadOnDiskSchema` below: a target with
+ * A target record without a `scope` (one written before the discriminator
+ * existed) is migrated in `threadOnDiskSchema` below: a target with an
  * `anchor` and no `scope` is treated as `scope=range`.
  */
 export const threadAnchorSchema = z.discriminatedUnion("scope", [
@@ -78,9 +78,14 @@ export const threadMessageSchema = z.object({
   draft_options: z.array(threadDraftBodySchema).min(1).max(8).optional(),
 });
 
+/**
+ * One stored thread record. On disk it is a value in a doc's review endmatter
+ * (`comments:` / `suggestions:` map, keyed by thread id); the `id` is carried
+ * in the value too so this schema validates an entry directly.
+ */
 export const threadOnDiskSchema = z.preprocess(
   (val) => {
-    // Migration: thread files written before the scope discriminator default
+    // Migration: records written before the scope discriminator default
     // to `scope=range` when an anchor is present, `scope=doc` otherwise.
     if (val && typeof val === "object" && val !== null) {
       const v = val as { targets?: unknown };

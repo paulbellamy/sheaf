@@ -49,13 +49,15 @@ describe("StubBackend.renameDoc", () => {
     const thread = await backend.readThread(id);
     expect(thread.targets[0].path).toBe("notes/new.md");
 
-    // The stale sidecar dir is gone; the new one holds the moved thread.
+    // The thread travelled inline with the doc's bytes; its stored target was
+    // remapped to the new path. No sidecar dirs exist either way.
     await expect(
       fs.stat(path.join(root, "notes", "old.threads")),
     ).rejects.toThrow();
-    await expect(
-      fs.stat(path.join(root, "notes", "new.threads", `${id}.yaml`)),
-    ).resolves.toBeTruthy();
+    const raw = await fs.readFile(path.join(root, "notes", "new.md"), "utf8");
+    expect(raw).toContain(id);
+    expect(raw).toContain("notes/new.md");
+    expect(raw).not.toContain("notes/old.md");
   });
 
   it("emits thread_changed pointing at the new path", async () => {
