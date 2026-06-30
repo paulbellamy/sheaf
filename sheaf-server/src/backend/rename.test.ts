@@ -121,8 +121,9 @@ describe("StubBackend.renameDoc", () => {
       targets: [{ path: "notes/sub/b.md", scope: "doc" }],
     });
 
-    // Simulate the vault's folder rename: the OS moves the whole tree, sidecars
-    // included, but the YAML still carries the old `notes/…` target paths.
+    // Simulate the vault's folder rename: the OS moves the whole tree (each
+    // doc's inline threads travel with it), but the endmatter records still
+    // carry the old `notes/…` target paths.
     await fs.rename(path.join(root, "notes"), path.join(root, "archive"));
 
     const moved = await backend.renameDoc("notes", "archive");
