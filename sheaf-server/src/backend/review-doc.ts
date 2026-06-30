@@ -61,18 +61,20 @@ function endmatterThreads(
     if (!map || typeof map !== "object" || Array.isArray(map)) continue;
     for (const [id, value] of Object.entries(map as Record<string, unknown>)) {
       // The map key is the authoritative id, and the file's location (not any
-      // stored value) is authoritative for draft scoping. Inject both into the
-      // candidate before parsing so Zod emits them in canonical schema order —
-      // keeping the Thread JSON byte-identical to the pre-migration shape
-      // (`draft_id` as the 4th key, present only for draft-scoped threads).
-      const candidate =
-        value && typeof value === "object" && !Array.isArray(value)
-          ? {
-              ...(value as Record<string, unknown>),
-              id,
-              ...(draftId !== undefined ? { draft_id: draftId } : {}),
-            }
-          : value;
+      // stored value) is authoritative for draft scoping. Drop any stored
+      // draft_id and re-derive it from location, then let Zod emit keys in
+      // canonical schema order — keeping the Thread JSON byte-identical to the
+      // pre-migration shape (`draft_id` as the 4th key, present only for
+      // draft-scoped threads).
+      let candidate: unknown = value;
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        const rest: Record<string, unknown> = {
+          ...(value as Record<string, unknown>),
+        };
+        delete rest.draft_id;
+        candidate =
+          draftId !== undefined ? { ...rest, id, draft_id: draftId } : { ...rest, id };
+      }
       const parsed = threadOnDiskSchema.safeParse(candidate);
       if (!parsed.success) continue; // skip drifted/corrupt record
       out.push(parsed.data as Thread);

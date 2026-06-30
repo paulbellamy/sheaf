@@ -180,6 +180,25 @@ describe("inline RFM thread storage", () => {
     );
   });
 
+  it("preserves hand-typed CriticMarkup even after a thread is added", async () => {
+    const doc = "The {==highlight==} syntax marks a span here.\n";
+    await backend.writeDoc("about.md", "main", doc);
+    // No endmatter yet, so the literal markup reads back verbatim.
+    expect((await backend.readDoc("about.md", "main")).md).toBe(doc);
+    const from = doc.indexOf("span");
+    await backend.addThread({
+      ref: "main",
+      author: "user",
+      message: "explain",
+      targets: [
+        { path: "about.md", scope: "range", char_range: { from, to: from + 4 } },
+      ],
+    });
+    // The thread renders an id-terminated marker on "span"; the hand-typed
+    // {==highlight==} has no id, so it survives the clean read intact.
+    expect((await backend.readDoc("about.md", "main")).md).toBe(doc);
+  });
+
   it("keeps draft_id in canonical JSON key order", async () => {
     const mainId = await backend.addThread({
       ref: "main",

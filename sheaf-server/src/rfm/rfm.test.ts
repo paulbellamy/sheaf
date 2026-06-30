@@ -11,13 +11,12 @@ import {
 } from "./index";
 
 describe("stripInlineMarkup", () => {
-  it("strips each CriticMarkup marker to its as-is projection", () => {
-    expect(stripInlineMarkup("a {==anchor==} b")).toBe("a anchor b");
-    expect(stripInlineMarkup("a {>>note<<} b")).toBe("a  b");
-    expect(stripInlineMarkup("a {++ins++} b")).toBe("a  b");
-    expect(stripInlineMarkup("a {--del--} b")).toBe("a del b");
-    expect(stripInlineMarkup("a {~~old~>new~~} b")).toBe("a old b");
-    expect(stripInlineMarkup("a {#thrd_x} b")).toBe("a  b");
+  it("strips id-terminated marker groups to their as-is projection", () => {
+    expect(stripInlineMarkup("a {==anchor==}{#c1} b")).toBe("a anchor b");
+    expect(stripInlineMarkup("a {++ins++}{#s1} b")).toBe("a  b");
+    expect(stripInlineMarkup("a {--del--}{#s2} b")).toBe("a del b");
+    expect(stripInlineMarkup("a {~~old~>new~~}{#s3} b")).toBe("a old b");
+    expect(stripInlineMarkup("a {==anchor==}{>>note<<}{#c1} b")).toBe("a anchor b");
   });
 
   it("strips an anchored comment with id reference to the anchor text", () => {
@@ -25,10 +24,19 @@ describe("stripInlineMarkup", () => {
     expect(stripInlineMarkup(md)).toBe("Please revisit this sentence now.");
   });
 
+  it("leaves hand-typed CriticMarkup with no id reference literal", () => {
+    expect(stripInlineMarkup("a {==anchor==} b")).toBe("a {==anchor==} b");
+    expect(stripInlineMarkup("a {>>note<<} b")).toBe("a {>>note<<} b");
+    expect(stripInlineMarkup("a {~~old~>new~~} b")).toBe("a {~~old~>new~~} b");
+    expect(stripInlineMarkup("a {#thrd_x} b")).toBe("a {#thrd_x} b");
+  });
+
   it("leaves markers inside inline code and fences literal", () => {
-    expect(stripInlineMarkup("use `{==x==}` here")).toBe("use `{==x==}` here");
-    const fenced = "```\n{>>not a comment<<}\n```\ntext {>>real<<}";
-    expect(stripInlineMarkup(fenced)).toBe("```\n{>>not a comment<<}\n```\ntext ");
+    expect(stripInlineMarkup("use `{==x==}{#c1}` here")).toBe("use `{==x==}{#c1}` here");
+    const fenced = "```\n{>>not a comment<<}{#c1}\n```\ntext {==real==}{>>c<<}{#x}";
+    expect(stripInlineMarkup(fenced)).toBe(
+      "```\n{>>not a comment<<}{#c1}\n```\ntext real",
+    );
   });
 
   it("leaves unrelated braces untouched", () => {

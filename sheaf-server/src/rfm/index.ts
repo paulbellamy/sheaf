@@ -115,22 +115,80 @@ function matchIdRef(md: string, offset: number): number | null {
   return m ? offset + m[0].length : null;
 }
 
+/**
+ * Match a sheaf-injected inline marker *group* at `offset`. Every marker sheaf
+ * renders is terminated by a `{#id}` reference (a highlight may carry a comment
+ * block in between); this returns the group's clean-text range
+ * `[keptStart, keptEnd)` and its end offset, or null when there is no complete
+ * id-terminated group here. That null case is what protects hand-typed
+ * CriticMarkup in prose: bare `{==x==}` with no `{#id}` is left literal.
+ */
+function matchMarkerGroup(
+  body: string,
+  offset: number,
+): { keptStart: number; keptEnd: number; end: number } | null {
+  // highlight + optional comment block(s) + id  ->  keep the highlighted run
+  if (body.startsWith("{==", offset)) {
+    const close = body.indexOf("==}", offset + 3);
+    if (close === -1) return null;
+    let pos = close + 3;
+    while (body.startsWith("{>>", pos)) {
+      const c = body.indexOf("<<}", pos + 3);
+      if (c === -1) return null;
+      pos = c + 3;
+    }
+    const idEnd = matchIdRef(body, pos);
+    return idEnd === null
+      ? null
+      : { keptStart: offset + 3, keptEnd: close, end: idEnd };
+  }
+  // substitution + id  ->  keep the old side
+  if (body.startsWith("{~~", offset)) {
+    const sep = body.indexOf("~>", offset + 3);
+    const close = sep === -1 ? -1 : body.indexOf("~~}", sep + 2);
+    if (sep === -1 || close === -1) return null;
+    const idEnd = matchIdRef(body, close + 3);
+    return idEnd === null
+      ? null
+      : { keptStart: offset + 3, keptEnd: sep, end: idEnd };
+  }
+  // insertion + id  ->  drop (not yet in the doc)
+  if (body.startsWith("{++", offset)) {
+    const close = body.indexOf("++}", offset + 3);
+    if (close === -1) return null;
+    const idEnd = matchIdRef(body, close + 3);
+    return idEnd === null
+      ? null
+      : { keptStart: offset + 3, keptEnd: offset + 3, end: idEnd };
+  }
+  // deletion + id  ->  keep (still in the doc)
+  if (body.startsWith("{--", offset)) {
+    const close = body.indexOf("--}", offset + 3);
+    if (close === -1) return null;
+    const idEnd = matchIdRef(body, close + 3);
+    return idEnd === null
+      ? null
+      : { keptStart: offset + 3, keptEnd: close, end: idEnd };
+  }
+  return null;
+}
+
 /* ------------------------------------------------------------- strip markup -- */
 
 /**
- * Project an RFM body (no endmatter) back to clean prose by removing inline
- * CriticMarkup. The projection is the "as-is" view — pending insertions are
- * dropped and pending deletions kept, so the result is the current canonical
- * text, never the as-proposed text:
+ * Project an RFM body (no endmatter) back to clean prose by removing the
+ * sheaf-injected inline CriticMarkup. The projection is the "as-is" view —
+ * pending insertions are dropped and pending deletions kept, so the result is
+ * the current canonical text, never the as-proposed text:
  *
- *   {==text==}        -> text         (highlight: keep the anchored run)
- *   {>>note<<}        -> ""           (comment: drop)
- *   {++text++}        -> ""           (insertion: not yet in the doc)
- *   {--text--}        -> text         (deletion: still in the doc)
- *   {~~old~>new~~}    -> old          (substitution: old side is canonical)
- *   {#id}             -> ""           (id reference: drop)
+ *   {==text==}{>>note<<}{#id}   -> text   (highlight + comment: keep the run)
+ *   {~~old~>new~~}{#id}         -> old    (substitution: old side is canonical)
+ *   {++text++}{#id}             -> ""     (insertion: not yet in the doc)
+ *   {--text--}{#id}             -> text   (deletion: still in the doc)
  *
- * Markers inside inline code spans and fenced code blocks are left literal.
+ * Only complete `{#id}`-terminated groups (the shape sheaf renders) are
+ * stripped — hand-typed CriticMarkup with no id, and any markup inside inline
+ * code spans or fenced code blocks, is left exactly as written.
  */
 export function stripInlineMarkup(body: string): string {
   let out = "";
@@ -160,48 +218,10 @@ export function stripInlineMarkup(body: string): string {
       offset = cs;
       continue;
     }
-    if (body.startsWith("{==", offset)) {
-      const end = body.indexOf("==}", offset + 3);
-      if (end !== -1) {
-        out += body.slice(offset + 3, end);
-        offset = end + 3;
-        continue;
-      }
-    }
-    if (body.startsWith("{>>", offset)) {
-      const end = body.indexOf("<<}", offset + 3);
-      if (end !== -1) {
-        offset = end + 3;
-        continue;
-      }
-    }
-    if (body.startsWith("{++", offset)) {
-      const end = body.indexOf("++}", offset + 3);
-      if (end !== -1) {
-        offset = end + 3;
-        continue;
-      }
-    }
-    if (body.startsWith("{--", offset)) {
-      const end = body.indexOf("--}", offset + 3);
-      if (end !== -1) {
-        out += body.slice(offset + 3, end);
-        offset = end + 3;
-        continue;
-      }
-    }
-    if (body.startsWith("{~~", offset)) {
-      const sep = body.indexOf("~>", offset + 3);
-      const end = sep === -1 ? -1 : body.indexOf("~~}", sep + 2);
-      if (sep !== -1 && end !== -1) {
-        out += body.slice(offset + 3, sep);
-        offset = end + 3;
-        continue;
-      }
-    }
-    const idEnd = matchIdRef(body, offset);
-    if (idEnd !== null) {
-      offset = idEnd;
+    const group = matchMarkerGroup(body, offset);
+    if (group) {
+      out += body.slice(group.keptStart, group.keptEnd);
+      offset = group.end;
       continue;
     }
     out += body[offset];
@@ -258,29 +278,10 @@ export function cleanOffset(rawMd: string, rawOffset: number): number {
       if (r !== null) return r;
       continue;
     }
-    let handled: number | null | undefined;
-    if (body.startsWith("{==", offset)) {
-      const end = body.indexOf("==}", offset + 3);
-      if (end !== -1) handled = step(end + 3, offset + 3, end);
-    } else if (body.startsWith("{>>", offset)) {
-      const end = body.indexOf("<<}", offset + 3);
-      if (end !== -1) handled = step(end + 3, offset, offset);
-    } else if (body.startsWith("{++", offset)) {
-      const end = body.indexOf("++}", offset + 3);
-      if (end !== -1) handled = step(end + 3, offset, offset);
-    } else if (body.startsWith("{--", offset)) {
-      const end = body.indexOf("--}", offset + 3);
-      if (end !== -1) handled = step(end + 3, offset + 3, end);
-    } else if (body.startsWith("{~~", offset)) {
-      const sep = body.indexOf("~>", offset + 3);
-      const end = sep === -1 ? -1 : body.indexOf("~~}", sep + 2);
-      if (sep !== -1 && end !== -1) handled = step(end + 3, offset + 3, sep);
-    } else {
-      const idEnd = matchIdRef(body, offset);
-      if (idEnd !== null) handled = step(idEnd, offset, offset);
-    }
-    if (handled !== undefined) {
-      if (handled !== null) return handled;
+    const group = matchMarkerGroup(body, offset);
+    if (group) {
+      const r = step(group.end, group.keptStart, group.keptEnd);
+      if (r !== null) return r;
       continue;
     }
     const r = step(offset + 1, offset, offset + 1);
