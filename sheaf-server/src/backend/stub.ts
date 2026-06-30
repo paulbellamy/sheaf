@@ -64,10 +64,9 @@ import { styleConfigSchema, styleProfileSchema } from "../style/schemas";
  *   .drafts/<draft_id>/<dir>/<name>.md                     # changed files only
  *   .op_log.json
  *
- * Threads live inline in the doc markdown (CriticMarkup spans + a YAML
- * endmatter block — see `review-doc.ts`), not in sidecar files. `readDoc`
- * returns the clean prose with that markup stripped; the thread methods
- * read/write the endmatter directly.
+ * Threads live inline in the doc markdown (CriticMarkup + a YAML endmatter
+ * block — see `review-doc.ts`), not in sidecars; `readDoc` returns clean prose
+ * with that markup stripped.
  *
  * No yjs, no git, no case-2 sync. Every "commit" is a new uuid so clients
  * that cache by commit hash behave correctly.
@@ -359,8 +358,8 @@ export class StubBackend implements Backend {
     await fs.mkdir(p, { recursive: true });
   }
 
-  /** Read a file's raw bytes, or null on any read failure. For discovery /
-   *  listing paths, where one bad doc must not abort the whole operation. */
+  /** Null on any read failure — for discovery/listing, where one bad doc must
+   *  not abort the whole walk. */
   private async readRawMaybe(abs: string): Promise<string | null> {
     try {
       return await readFileNoFollow(abs);
@@ -371,10 +370,9 @@ export class StubBackend implements Backend {
 
   /**
    * Read a doc we're about to rewrite. Returns null only when the file is
-   * genuinely absent (ENOENT) — a safe "no existing threads" signal. Any other
-   * failure (e.g. the file exceeds the read cap) is rethrown rather than
-   * swallowed, so a rewrite never silently overwrites a doc's threads with an
-   * empty endmatter because its bytes couldn't be read.
+   * genuinely absent (ENOENT); any other failure (e.g. it exceeds the read cap)
+   * is rethrown, so a rewrite never silently overwrites a doc's threads with an
+   * empty endmatter just because its bytes couldn't be read.
    */
   private async readRawForRewrite(abs: string): Promise<string | null> {
     try {
@@ -385,16 +383,13 @@ export class StubBackend implements Backend {
     }
   }
 
-  /** Absolute path of the file that homes a doc on `main` or a draft override. */
   private homeAbs(p: DocPath, draftId?: DraftId): string {
     return draftId ? this.absDraft(draftId, p) : this.absMain(p);
   }
 
   /**
-   * Write clean prose to a doc while preserving the review threads already
-   * homed in it: re-project their inline markup over the new prose and re-emit
-   * the endmatter. Used by `writeDoc`/`editDoc`/`merge` so a prose change never
-   * drops the doc's threads.
+   * Write clean prose while preserving the threads already homed in the doc, so
+   * a prose change never drops them. Used by `writeDoc`/`editDoc`/`merge`.
    */
   private async persistDoc(
     abs: string,
@@ -409,9 +404,9 @@ export class StubBackend implements Backend {
   }
 
   /**
-   * Every doc file that may carry review threads: visible vault docs (main,
-   * `draftId` undefined) and per-draft override copies under `.drafts/`. The
-   * file's location is authoritative for a thread's `draft_id`.
+   * Every doc file that may carry threads — visible vault docs and per-draft
+   * overrides under `.drafts/`. The file's location is authoritative for a
+   * thread's `draft_id`.
    */
   private async allReviewDocFiles(): Promise<
     { abs: string; homePath: DocPath; draftId?: DraftId }[]
@@ -1362,10 +1357,9 @@ export class StubBackend implements Backend {
   }
 
   /**
-   * Upsert a thread into its home doc's endmatter. The home doc is
-   * `targets[0].path` on `main` or the thread's draft override. A draft
-   * override that doesn't exist yet is seeded from the draft's current view of
-   * the doc so the thread has prose to anchor against.
+   * Upsert a thread into its home doc's endmatter (home = `targets[0].path`, on
+   * `main` or the draft override). A not-yet-materialized draft override is
+   * seeded from the draft's current view so the thread has prose to anchor to.
    */
   private async saveThread(t: Thread): Promise<void> {
     if (t.targets.length === 0) {
@@ -1381,8 +1375,7 @@ export class StubBackend implements Backend {
     if (raw !== null) {
       ({ prose, threads } = parseReviewDoc(raw, t.draft_id));
     } else {
-      // Only legitimate for a not-yet-materialized draft override: seed prose
-      // from the draft's current view (which falls through to main).
+      // A missing file is only legitimate for a not-yet-materialized override.
       prose = (await this.readDoc(homePath, t.draft_id ?? "main")).md;
       threads = [];
     }

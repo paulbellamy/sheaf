@@ -267,9 +267,9 @@ export class ThreadsView extends ItemView {
   private async refreshDocText(): Promise<void> {
     if (!this.currentFile) return;
     try {
-      // The on-disk note now carries inline review markup + a YAML endmatter
-      // (roughdraft style); strip it so drift detection matches `anchored_text`
-      // against the clean prose, not the markers or the stored anchor copies.
+      // Strip the inline markup + endmatter so drift detection matches
+      // `anchored_text` against clean prose, not the markers or the endmatter's
+      // own stored copies of the anchor text (which would mask a real drift).
       this.docText = stripReviewMarkup(
         await this.app.vault.cachedRead(this.currentFile),
       );

@@ -1,19 +1,10 @@
 /**
- * Thread <-> RFM mapping for the filesystem backend.
- *
- * A doc's review state lives inline in its markdown (see
- * `docs/roughdraft-review-markup.md`): a YAML endmatter block authoritatively
- * stores the full thread records for every thread *homed* in that doc (home =
- * `targets[0].path`), and the inline CriticMarkup spans are a regenerated
- * projection of those records onto the prose. This module is the codec between
- * the two; `backend/stub.ts` calls it and owns the filesystem.
- *
- * The endmatter uses roughdraft's two buckets — a thread lands under
- * `suggestions:` when any message carries a draft (it proposes a change) and
- * under `comments:` otherwise — keyed by the sheaf thread id. The thread's
- * `draft_id` is *not* stored: a doc's storage location (main vs a
- * `.drafts/<id>/` override) is the authoritative source for it, so callers pass
- * it in on parse.
+ * Thread <-> RFM codec for the filesystem backend (`backend/stub.ts` owns the
+ * files). A doc's YAML endmatter authoritatively stores the full record for
+ * every thread *homed* in the doc (home = `targets[0].path`); the inline
+ * CriticMarkup spans are a regenerated projection. A thread's `draft_id` is
+ * derived from the doc's storage location (main vs a `.drafts/<id>/` override),
+ * not stored — callers pass it in on parse.
  */
 
 import {
@@ -28,17 +19,15 @@ import { threadOnDiskSchema } from "../persistence-schemas";
 import type { DocPath, DraftId, Thread, ThreadDraftBody } from "./index";
 
 /**
- * Clean canonical prose. Only a doc that carries a real review endmatter has
- * sheaf-injected inline markup; for any other doc we return the bytes untouched,
- * so prose that legitimately contains CriticMarkup-like text (a tutorial, this
- * repo's own RFM docs) round-trips intact instead of being silently stripped.
+ * Clean canonical prose. Only a doc with a real review endmatter carries
+ * sheaf-injected markup, so any other doc is returned untouched — prose that
+ * legitimately contains CriticMarkup-like text round-trips intact.
  */
 export function cleanProse(rawMd: string): string {
   const split = splitEndmatter(rawMd);
   return split.endmatter ? stripInlineMarkup(split.body) : rawMd;
 }
 
-/** Parse a doc's raw markdown into its clean prose plus the threads it homes. */
 export function parseReviewDoc(
   rawMd: string,
   draftId?: DraftId,
@@ -60,12 +49,9 @@ function endmatterThreads(
     const map = endmatter[bucket];
     if (!map || typeof map !== "object" || Array.isArray(map)) continue;
     for (const [id, value] of Object.entries(map as Record<string, unknown>)) {
-      // The map key is the authoritative id, and the file's location (not any
-      // stored value) is authoritative for draft scoping. Drop any stored
-      // draft_id and re-derive it from location, then let Zod emit keys in
-      // canonical schema order — keeping the Thread JSON byte-identical to the
-      // pre-migration shape (`draft_id` as the 4th key, present only for
-      // draft-scoped threads).
+      // Location (not any stored value) is authoritative for draft scoping, so
+      // drop a stored draft_id and re-derive it; letting Zod re-emit in schema
+      // order keeps the Thread JSON byte-identical to the pre-migration shape.
       let candidate: unknown = value;
       if (value && typeof value === "object" && !Array.isArray(value)) {
         const rest: Record<string, unknown> = {
@@ -84,9 +70,8 @@ function endmatterThreads(
 }
 
 /**
- * Serialize clean prose + the threads homed in `homePath` back into one RFM
- * document: inline marker projection for each home-doc range anchor, plus the
- * authoritative YAML endmatter. With no threads this returns `prose` unchanged.
+ * Serialize clean prose + the threads homed in `homePath` into one RFM doc.
+ * Returns `prose` unchanged when there are no threads.
  */
 export function serializeReviewDoc(
   prose: string,
@@ -137,9 +122,8 @@ function threadsToEndmatter(threads: Thread[]): Endmatter | null {
   return Object.keys(endmatter).length > 0 ? endmatter : null;
 }
 
-/** The stored record for a thread. `id` is the map key; `draft_id` is implied
- *  by location. `by`/`at` mirror the root message for roughdraft interop and
- *  legibility, and are ignored on read. */
+/** `id` (the map key) and `draft_id` (location-derived) are omitted; `by`/`at`
+ *  mirror the root message for roughdraft interop and are ignored on read. */
 function threadRecord(t: Thread): Record<string, unknown> {
   const root = t.messages[0];
   return {

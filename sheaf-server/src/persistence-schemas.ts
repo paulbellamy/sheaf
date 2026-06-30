@@ -77,9 +77,8 @@ const threadMessageSchema = z.object({
 });
 
 /**
- * One stored thread record. On disk it is a value in a doc's review endmatter
- * (`comments:` / `suggestions:` map, keyed by thread id); the `id` is carried
- * in the value too so this schema validates an entry directly.
+ * One stored thread record — a value in a doc's review endmatter. The `id` is
+ * carried in the value too, so this schema validates an entry directly.
  */
 export const threadOnDiskSchema = z.preprocess(
   (val) => {

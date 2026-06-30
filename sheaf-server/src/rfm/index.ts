@@ -1,23 +1,12 @@
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
 /**
- * Roughdraft Flavored Markdown (RFM) — markup layer.
- *
- * A pure, domain-agnostic codec for the review-markup *style* sheaf borrows
- * from Lex-Inc/roughdraft (see `docs/roughdraft-review-markup.md`): inline
- * CriticMarkup spans for the anchored comment / proposed change, plus a YAML
- * **endmatter** block — everything after the file's final `---` divider —
- * carrying `comments:` / `suggestions:` maps keyed by review id.
- *
- * This module knows nothing about sheaf threads. It only:
- *   - splits a doc into (body, endmatter object),
- *   - strips inline CriticMarkup back to clean prose,
- *   - renders an inline-marker projection of anchored review items, and
- *   - composes a body + endmatter back into one document.
- *
- * The backend (`backend/stub.ts`) owns the Thread <-> endmatter mapping; the
- * endmatter is the authoritative store and the inline markers are a regenerated
- * projection, so this layer never has to parse data back out of the markers.
+ * Roughdraft Flavored Markdown (RFM) — a pure, domain-agnostic codec for the
+ * review-markup style sheaf borrows from Lex-Inc/roughdraft (see
+ * `docs/roughdraft-review-markup.md`). It knows nothing about sheaf threads:
+ * the backend treats the YAML endmatter as the authoritative store and the
+ * inline CriticMarkup spans as a regenerated projection, so this layer never
+ * parses data back out of the markers.
  */
 
 /* ----------------------------------------------------------- code scanning -- */
@@ -36,7 +25,6 @@ function nextLineOffset(md: string, offset: number): number {
   return nl === -1 ? md.length : nl + 1;
 }
 
-/** Match a ``` / ~~~ fence line. Mirrors CommonMark fence open/close rules. */
 function matchFence(
   md: string,
   offset: number,
@@ -53,8 +41,7 @@ function matchFence(
   return { fence };
 }
 
-/** If an inline code span opens at `offset`, return the offset just past its
- *  close; otherwise null. Backtick runs must match in length. */
+/** Closing backtick run must match the opener's length (CommonMark). */
 function matchInlineCodeSpan(md: string, offset: number): number | null {
   if (md[offset] !== "`") return null;
   let length = 1;
@@ -64,10 +51,9 @@ function matchInlineCodeSpan(md: string, offset: number): number | null {
 }
 
 /**
- * Byte ranges of fenced code blocks and inline code spans. `stripInlineMarkup`
- * leaves CriticMarkup literal inside these regions, so `renderInlineMarkers`
- * must not inject markers into them — otherwise the injected markup would
- * survive the strip and leak into the clean prose `readDoc` returns.
+ * `stripInlineMarkup` leaves CriticMarkup literal inside code, so
+ * `renderInlineMarkers` must not inject markers there — injected markup would
+ * otherwise survive the strip and leak into the clean prose `readDoc` returns.
  */
 function codeRanges(md: string): Array<[number, number]> {
   const ranges: Array<[number, number]> = [];
@@ -116,18 +102,15 @@ function matchIdRef(md: string, offset: number): number | null {
 }
 
 /**
- * Match a sheaf-injected inline marker *group* at `offset`. Every marker sheaf
- * renders is terminated by a `{#id}` reference (a highlight may carry a comment
- * block in between); this returns the group's clean-text range
- * `[keptStart, keptEnd)` and its end offset, or null when there is no complete
- * id-terminated group here. That null case is what protects hand-typed
- * CriticMarkup in prose: bare `{==x==}` with no `{#id}` is left literal.
+ * Match a complete sheaf-injected marker group at `offset`, returning the
+ * clean-text (`[keptStart, keptEnd)`, the "as-is" projection) and the group's
+ * end. Every marker sheaf renders ends in a `{#id}`; requiring that terminator
+ * is what leaves hand-typed CriticMarkup (a bare `{==x==}` with no id) literal.
  */
 function matchMarkerGroup(
   body: string,
   offset: number,
 ): { keptStart: number; keptEnd: number; end: number } | null {
-  // highlight + optional comment block(s) + id  ->  keep the highlighted run
   if (body.startsWith("{==", offset)) {
     const close = body.indexOf("==}", offset + 3);
     if (close === -1) return null;
@@ -142,30 +125,30 @@ function matchMarkerGroup(
       ? null
       : { keptStart: offset + 3, keptEnd: close, end: idEnd };
   }
-  // substitution + id  ->  keep the old side
   if (body.startsWith("{~~", offset)) {
     const sep = body.indexOf("~>", offset + 3);
     const close = sep === -1 ? -1 : body.indexOf("~~}", sep + 2);
     if (sep === -1 || close === -1) return null;
     const idEnd = matchIdRef(body, close + 3);
+    // keep the old side
     return idEnd === null
       ? null
       : { keptStart: offset + 3, keptEnd: sep, end: idEnd };
   }
-  // insertion + id  ->  drop (not yet in the doc)
   if (body.startsWith("{++", offset)) {
     const close = body.indexOf("++}", offset + 3);
     if (close === -1) return null;
     const idEnd = matchIdRef(body, close + 3);
+    // drop: a pending insertion isn't in the doc yet
     return idEnd === null
       ? null
       : { keptStart: offset + 3, keptEnd: offset + 3, end: idEnd };
   }
-  // deletion + id  ->  keep (still in the doc)
   if (body.startsWith("{--", offset)) {
     const close = body.indexOf("--}", offset + 3);
     if (close === -1) return null;
     const idEnd = matchIdRef(body, close + 3);
+    // keep: a pending deletion is still in the doc
     return idEnd === null
       ? null
       : { keptStart: offset + 3, keptEnd: close, end: idEnd };
@@ -176,19 +159,10 @@ function matchMarkerGroup(
 /* ------------------------------------------------------------- strip markup -- */
 
 /**
- * Project an RFM body (no endmatter) back to clean prose by removing the
- * sheaf-injected inline CriticMarkup. The projection is the "as-is" view —
- * pending insertions are dropped and pending deletions kept, so the result is
- * the current canonical text, never the as-proposed text:
- *
- *   {==text==}{>>note<<}{#id}   -> text   (highlight + comment: keep the run)
- *   {~~old~>new~~}{#id}         -> old    (substitution: old side is canonical)
- *   {++text++}{#id}             -> ""     (insertion: not yet in the doc)
- *   {--text--}{#id}             -> text   (deletion: still in the doc)
- *
- * Only complete `{#id}`-terminated groups (the shape sheaf renders) are
- * stripped — hand-typed CriticMarkup with no id, and any markup inside inline
- * code spans or fenced code blocks, is left exactly as written.
+ * Project an RFM body back to clean prose — the "as-is" view of the current
+ * canonical text, never the as-proposed text. Only complete `{#id}`-terminated
+ * groups are stripped; hand-typed CriticMarkup and anything inside code is left
+ * exactly as written (see `matchMarkerGroup`).
  */
 export function stripInlineMarkup(body: string): string {
   let out = "";
@@ -231,11 +205,10 @@ export function stripInlineMarkup(body: string): string {
 }
 
 /**
- * Map a byte offset in a marked-up document to the corresponding offset in the
- * clean prose `stripInlineMarkup` produces. Used to translate an editor
- * selection made against the on-disk markup into the clean-prose coordinates
- * the server anchors against — correctly, even when the offset lands inside a
- * marker (it maps through the marker's kept text, or snaps past a dropped one).
+ * Map a byte offset in a marked-up document to the offset in the clean prose
+ * `stripInlineMarkup` produces — so an editor selection made against the
+ * on-disk markup lands in the clean-prose coordinates the server anchors
+ * against, correctly even when the offset is inside a marker.
  */
 export function cleanOffset(rawMd: string, rawOffset: number): number {
   const body = splitEndmatter(rawMd).body;
@@ -244,9 +217,6 @@ export function cleanOffset(rawMd: string, rawOffset: number): number {
   let clean = 0;
   let fence: FenceState | null = null;
   const n = body.length;
-  // Each step covers raw [offset, rawEnd) and emits body[keptStart, keptEnd) of
-  // clean text (empty for dropped markers). Resolve `target` the moment it
-  // falls within a step; otherwise advance past it.
   const step = (rawEnd: number, keptStart: number, keptEnd: number): number | null => {
     if (target >= rawEnd) {
       clean += keptEnd - keptStart;
@@ -295,9 +265,8 @@ export function cleanOffset(rawMd: string, rawOffset: number): number {
 export type Endmatter = Record<string, unknown>;
 
 interface SplitDoc {
-  /** Document body with inline markup still present, endmatter removed. */
+  /** Body with inline markup still present (only the endmatter is removed). */
   body: string;
-  /** Parsed endmatter object, or null when the doc has no RFM endmatter. */
   endmatter: Endmatter | null;
 }
 
@@ -305,11 +274,10 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return Boolean(v) && typeof v === "object" && !Array.isArray(v);
 }
 
-/** True when a `comments:`/`suggestions:` bucket holds at least one sheaf
- *  thread record — an object with a `messages` array. This is the provenance
- *  signal that tells a real sheaf endmatter apart from a prose section that
- *  merely happens to end with a `comments:`/`suggestions:` YAML mapping (a
- *  config tutorial, or a doc documenting the RFM format itself). */
+/** A `messages` array is the provenance signal that tells a real sheaf
+ *  endmatter apart from a prose section that merely ends with a
+ *  `comments:`/`suggestions:` YAML mapping (a config doc, or a doc documenting
+ *  the RFM format itself). */
 function hasThreadRecord(bucket: unknown): boolean {
   if (!isPlainObject(bucket)) return false;
   return Object.values(bucket).some(
@@ -317,8 +285,6 @@ function hasThreadRecord(bucket: unknown): boolean {
   );
 }
 
-/** True when a parsed trailing block is a sheaf/RFM review endmatter (vs. an
- *  ordinary `---` section that merely happens to be the last one). */
 function looksLikeEndmatter(parsed: unknown): parsed is Endmatter {
   return (
     isPlainObject(parsed) &&
@@ -327,10 +293,8 @@ function looksLikeEndmatter(parsed: unknown): parsed is Endmatter {
 }
 
 /**
- * Split off the final RFM endmatter. The endmatter is the *last* `\n---\n`
- * whose YAML body parses to an object whose `comments:`/`suggestions:` maps
- * carry at least one sheaf thread record (an entry with a `messages` array).
- * Any other trailing `---` block is treated as document content.
+ * Split off the final RFM endmatter — the *last* `\n---\n` block whose YAML
+ * carries a thread record. Any other trailing `---` block is document content.
  */
 export function splitEndmatter(md: string): SplitDoc {
   const matches = [...md.matchAll(/\n---[ \t]*\r?\n/g)];
@@ -353,10 +317,9 @@ export function splitEndmatter(md: string): SplitDoc {
 }
 
 /**
- * Full clean projection: strip the RFM endmatter and all inline CriticMarkup,
- * leaving the canonical prose. Only a doc with a real review endmatter carries
- * sheaf-injected markup; any other doc is returned untouched so prose that
- * legitimately contains CriticMarkup-like text is preserved verbatim.
+ * Clean projection of the whole doc. Only a doc with a real review endmatter
+ * carries sheaf-injected markup, so any other doc is returned untouched — prose
+ * that legitimately contains CriticMarkup-like text is preserved verbatim.
  */
 export function stripReviewMarkup(md: string): string {
   const split = splitEndmatter(md);
@@ -364,15 +327,9 @@ export function stripReviewMarkup(md: string): string {
 }
 
 /**
- * Compose a body (inline markup already rendered) with an endmatter object into
- * one document. A null/empty endmatter yields the body alone, with no stray
- * trailing `---`.
- *
- * The `\n---\n` divider is an exact inverse of `splitEndmatter`, so
- * `splitEndmatter(composeDoc(body, em)).body === body` for any body — adding or
- * editing review state never mutates a single byte of the prose. (A body that
- * already ends in a newline therefore gets a blank line before `---`; one that
- * doesn't sits flush against it.)
+ * Compose a body with an endmatter object. The `\n---\n` divider is an exact
+ * inverse of `splitEndmatter` (`splitEndmatter(composeDoc(body, em)).body ===
+ * body`), so adding or editing review state never mutates a byte of the prose.
  */
 export function composeDoc(body: string, endmatter: Endmatter | null): string {
   const hasContent =
@@ -403,7 +360,7 @@ export interface InlineMarker {
   newText?: string;
 }
 
-/** Collapse to one line and bound length — inline previews are cosmetic. */
+/** Inline previews are cosmetic — the endmatter holds the real text. */
 function previewText(text: string, max = 280): string {
   const flat = text.replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max)}…` : flat;
@@ -419,11 +376,8 @@ function safeNewText(text: string): string {
   return previewText(text, 2000).split("~~}").join("~~ }").split("~>").join("~ >");
 }
 
-/**
- * Anchored text that itself contains a marker's own close (or, for a
- * substitution, the `~>` separator) can't be wrapped without corrupting the
- * round-trip, so such a marker is dropped to endmatter-only.
- */
+/** Anchored text containing a marker's own close (or, for a substitution, the
+ *  `~>` separator) can't be wrapped without corrupting the strip round-trip. */
 function anchorIsWrappable(text: string, kind: InlineMarkerKind): boolean {
   if (text.length === 0) return false;
   if (kind === "comment") return !text.includes("==}");
@@ -438,10 +392,8 @@ function renderMarker(text: string, m: InlineMarker): string {
 }
 
 /**
- * Render anchored review markers into clean prose as a CriticMarkup projection.
  * Markers whose anchor can't be located (or would corrupt the round-trip) are
  * skipped — they still live in the endmatter, just without an inline span.
- *
  * Guarantees `stripInlineMarkup(renderInlineMarkers(prose, …)) === prose` for
  * any prose that contained no review markup to begin with.
  */

@@ -477,12 +477,9 @@ export default class SheafPlugin extends Plugin {
     if (Number.isNaN(fromOff) || Number.isNaN(toOff)) return null;
     const lo = Math.min(fromOff, toOff);
     const hi = Math.max(fromOff, toOff);
-    // Once a note has threads its on-disk `.md` carries inline review markup,
-    // but the server anchors against the clean prose `readDoc` returns. Map the
-    // editor's marked-up offsets into clean-prose offsets so the char_range
-    // lines up — `cleanOffset` resolves correctly even when a selection
-    // boundary lands inside an existing marker. A note with no threads has no
-    // markup, so this is a no-op for the common first-comment case.
+    // The editor buffer carries inline review markup, but the server anchors
+    // against the clean prose `readDoc` returns — map the offsets into
+    // clean-prose space (a no-op until the note has its first thread).
     const buf = editor.getValue();
     return { from: cleanOffset(buf, lo), to: cleanOffset(buf, hi) };
   }
