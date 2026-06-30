@@ -175,8 +175,6 @@ interface SplitDoc {
   body: string;
   /** Parsed endmatter object, or null when the doc has no RFM endmatter. */
   endmatter: Endmatter | null;
-  /** Byte offset where the endmatter's `\n---\n` begins, or null. */
-  endmatterOffset: number | null;
 }
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
@@ -208,14 +206,10 @@ export function splitEndmatter(md: string): SplitDoc {
       continue;
     }
     if (looksLikeEndmatter(parsed)) {
-      return {
-        body: md.slice(0, match.index),
-        endmatter: parsed,
-        endmatterOffset: match.index,
-      };
+      return { body: md.slice(0, match.index), endmatter: parsed };
     }
   }
-  return { body: md, endmatter: null, endmatterOffset: null };
+  return { body: md, endmatter: null };
 }
 
 /**
