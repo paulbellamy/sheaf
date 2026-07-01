@@ -216,18 +216,17 @@ function scanSegments(body: string): Segment[] {
       offset += 1;
       continue;
     }
-    // Ordinary prose: jump to the next char that could start a segment (a
-    // backtick, a brace, or the start of the next line for a fence).
-    const tick = body.indexOf("`", offset + 1);
-    const brace = body.indexOf("{", offset + 1);
-    const nl = body.indexOf("\n", offset);
-    const afterNl = nl === -1 ? n : nl + 1;
-    let next = Math.min(
-      tick === -1 ? n : tick,
-      brace === -1 ? n : brace,
-      afterNl,
-    );
-    if (next <= offset) next = offset + 1;
+    // Ordinary prose: advance to the next char that could begin a segment (a
+    // backtick or brace) or the first char of the next line (a fence candidate).
+    // A manual scan visits each prose char at most once, so the whole tokenize
+    // stays O(n). `indexOf` here would re-scan to EOF on every newline-free
+    // line, turning a doc full of tiny inline-code spans into an O(n^2) read.
+    let next = offset + 1;
+    while (next < n) {
+      const c = body[next];
+      if (c === "`" || c === "{" || body[next - 1] === "\n") break;
+      next += 1;
+    }
     offset = next;
   }
   if (fence) {
@@ -260,11 +259,14 @@ function codeRanges(md: string): Array<[number, number]> {
  * exactly as written (see `matchMarkerGroup`).
  */
 export function stripInlineMarkup(body: string): string {
-  let out = "";
+  // Collect + join rather than `out += …`: over a doc with hundreds of
+  // thousands of tiny segments, repeated concatenation risks quadratic
+  // rope-flattening; an array join is unambiguously linear.
+  const parts: string[] = [];
   for (const seg of scanSegments(body)) {
-    out += body.slice(seg.keptStart, seg.keptEnd);
+    parts.push(body.slice(seg.keptStart, seg.keptEnd));
   }
-  return out;
+  return parts.join("");
 }
 
 /**
@@ -395,6 +397,14 @@ export function splitEndmatter(md: string): SplitDoc {
  * corrupted endmatter, not plain prose), strip the inline spans anyway so a
  * comment body can never leak into clean prose. A doc with only hand-typed
  * CriticMarkup — and no trailing divider — is still left verbatim.
+ *
+ * Residual (write path can't produce either; both need hand-edited files):
+ *   - A thread with no inline span (its span was skipped) whose endmatter YAML
+ *     is *also* hand-corrupted into unparseable YAML falls through the guard
+ *     (no marker group to key on), so its body stays visible in the raw bytes.
+ *   - Two valid endmatter blocks pasted back-to-back: only the last is treated
+ *     as review state, so the earlier block's body reads as prose. `composeDoc`
+ *     only ever writes one block.
  */
 export function stripReviewMarkup(md: string): string {
   const split = splitEndmatter(md);

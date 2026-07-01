@@ -67,6 +67,18 @@ describe("stripInlineMarkup", () => {
     expect(out).toBe(bigTicks); // no markers -> unchanged
     expect(elapsed).toBeLessThan(2000);
   });
+
+  it("strips a doc of many tiny inline-code spans in linear time (F8)", () => {
+    // Newline/brace-free input where every `\`a\`` is its own segment: a
+    // per-segment scan-to-EOF would be O(n^2) (~seconds by 1 MB). The bounded
+    // per-char skip keeps it linear.
+    const many = "`a".repeat(500_000); // ~1 MB, no newlines, no braces
+    const start = Date.now();
+    const out = stripInlineMarkup(many);
+    const elapsed = Date.now() - start;
+    expect(out).toBe(many); // no {#id} groups -> preserved verbatim
+    expect(elapsed).toBeLessThan(2000);
+  });
 });
 
 describe("splitEndmatter", () => {
