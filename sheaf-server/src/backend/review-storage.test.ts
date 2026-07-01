@@ -258,4 +258,46 @@ describe("inline RFM thread storage", () => {
       (await backend.listThreads({ ref: draftId })).map((t) => t.id),
     ).toContain(threadId);
   });
+
+  it("round-trips a comment on a selection larger than the old 10k cap (F4)", async () => {
+    const big = "x".repeat(12_000);
+    await backend.writeDoc("big.md", "main", big + "\nEND\n");
+    const id = await backend.addThread({
+      ref: "main",
+      author: "user",
+      message: "huge selection",
+      targets: [
+        { path: "big.md", scope: "range", char_range: { from: 0, to: 12_000 } },
+      ],
+    });
+
+    // The stored anchored_text is >10k chars: it must read back, not fail the
+    // schema and get dropped (then deleted on the next write).
+    const thread = await backend.readThread(id);
+    expect(thread.targets[0].scope).toBe("range");
+    if (thread.targets[0].scope === "range") {
+      expect(thread.targets[0].anchor.anchored_text.length).toBe(12_000);
+    }
+
+    // An unrelated later edit must not erase the drifted-cap thread.
+    await backend.editDoc("big.md", "main", "END", "DONE", false);
+    expect(
+      (await backend.listThreads({ path: "big.md", ref: "main" })).map((t) => t.id),
+    ).toEqual([id]);
+  });
+
+  it("aborts a merge instead of blanking main when a draft override is unreadable (F20)", async () => {
+    const [draftId] = await backend.fork("doc.md", 1);
+    // An override larger than the read cap (16MB): merge must abort, never land
+    // empty prose on main.
+    const huge = "a".repeat(17 * 1024 * 1024);
+    await backend.writeDoc("doc.md", draftId, huge);
+    await backend.propose(draftId);
+
+    await expect(backend.merge(draftId)).rejects.toThrow();
+
+    expect((await backend.readDoc("doc.md", "main")).md).toBe(
+      "The quick brown fox.\n",
+    );
+  });
 });

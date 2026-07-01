@@ -200,11 +200,20 @@ async function writeFileNoFollow(abs: string, content: string): Promise<void> {
     if (e instanceof McpError) throw e;
     // ENOENT is fine — we're about to create.
   }
+  // Write a sibling temp file, then rename over `abs`. A doc's prose and all
+  // its threads now share one file, so an in-place O_TRUNC write torn mid-way
+  // would lose both; rename is atomic, so a concurrent reader (or a crash) sees
+  // either the old file or the fully-written new one, never a truncated hybrid.
+  // O_EXCL | O_NOFOLLOW keeps the temp create symlink-hostile, and the dot
+  // prefix keeps a leftover temp out of the vault walk.
+  const dir = path.dirname(abs);
+  await fs.mkdir(dir, { recursive: true });
+  const tmp = path.join(dir, `.${path.basename(abs)}.tmp-${randomUUID()}`);
   const fh = await fs.open(
-    abs,
+    tmp,
     fsConstants.O_WRONLY |
       fsConstants.O_CREAT |
-      fsConstants.O_TRUNC |
+      fsConstants.O_EXCL |
       fsConstants.O_NOFOLLOW,
     0o644,
   );
@@ -212,6 +221,12 @@ async function writeFileNoFollow(abs: string, content: string): Promise<void> {
     await fh.writeFile(content, "utf8");
   } finally {
     await fh.close();
+  }
+  try {
+    await fs.rename(tmp, abs);
+  } catch (e) {
+    await fs.rm(tmp, { force: true });
+    throw e;
   }
 }
 
@@ -815,7 +830,11 @@ export class StubBackend implements Backend {
       //    path; only the paths recorded inside the records are stale.
       const moved: { id: ThreadId; target_paths: DocPath[] }[] = [];
       for (const file of await this.allReviewDocFiles()) {
-        const raw = await this.readRawMaybe(file.abs);
+        // Fail loud on a non-ENOENT read error (oversized doc, EIO) instead of
+        // silently skipping: the vault already moved the bytes, so skipping
+        // would strand this doc's stored target paths at the old location.
+        // ENOENT (the file vanished) is the one benign case — skip it.
+        const raw = await this.readRawForRewrite(file.abs);
         if (raw === null) continue;
         const { prose, threads } = parseReviewDoc(raw, file.draftId);
         let changed = false;
@@ -1222,8 +1241,13 @@ export class StubBackend implements Backend {
       for (const plan of plans) {
         // Land the draft's clean prose on main (its review markup stays behind
         // in the draft override); preserve any threads already homed on main.
-        const draftRaw = await this.readRawMaybe(plan.src);
-        const draftProse = draftRaw !== null ? cleanProse(draftRaw) : "";
+        // `plan.src` was lstat-confirmed as a file, so a non-ENOENT read
+        // failure (oversized, EIO) must abort rather than land empty prose on
+        // main and wipe it — `readRawForRewrite` rethrows those. A rare ENOENT
+        // race (the override vanished mid-merge) skips this path, never blanks.
+        const draftRaw = await this.readRawForRewrite(plan.src);
+        if (draftRaw === null) continue;
+        const draftProse = cleanProse(draftRaw);
         await this.persistDoc(plan.dest, draftProse, plan.rel);
         const from = this.versionCounters.get(plan.rel) ?? baseVersion;
         const to = from + 1;

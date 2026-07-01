@@ -7,8 +7,21 @@ import {
   splitEndmatter,
   stripInlineMarkup,
   stripReviewMarkup,
+  type Endmatter,
   type InlineMarker,
 } from "./index";
+
+/** A minimal endmatter record. `looksLikeEndmatter` demands both a `messages`
+ *  and a `targets` array (the invariants of every real sheaf thread), so the
+ *  fixtures below carry both. */
+function record(body = "hi"): Record<string, unknown> {
+  return {
+    status: "open",
+    created: 1,
+    targets: [{ path: "d.md", scope: "doc" }],
+    messages: [{ body }],
+  };
+}
 
 describe("stripInlineMarkup", () => {
   it("strips id-terminated marker groups to their as-is projection", () => {
@@ -42,12 +55,24 @@ describe("stripInlineMarkup", () => {
   it("leaves unrelated braces untouched", () => {
     expect(stripInlineMarkup("interface X { a: 1 }")).toBe("interface X { a: 1 }");
   });
+
+  it("strips a pathological backtick run without O(n^2) blowup (F8)", () => {
+    // A long non-fenced backtick run in the prose: the old scanner re-scanned
+    // the whole run at every offset (seconds at 64 KB); the tokenizer skips it
+    // in one step, so this finishes in milliseconds.
+    const bigTicks = "x" + "`".repeat(100_000);
+    const start = Date.now();
+    const out = stripInlineMarkup(bigTicks);
+    const elapsed = Date.now() - start;
+    expect(out).toBe(bigTicks); // no markers -> unchanged
+    expect(elapsed).toBeLessThan(2000);
+  });
 });
 
 describe("splitEndmatter", () => {
   it("detects a trailing comments/suggestions endmatter", () => {
     const md =
-      "Body here.\n\n---\ncomments:\n  thrd_a:\n    status: open\n    messages:\n      - body: hi\n";
+      "Body here.\n\n---\ncomments:\n  thrd_a:\n    status: open\n    targets:\n      - path: d.md\n        scope: doc\n    messages:\n      - body: hi\n";
     const split = splitEndmatter(md);
     expect(split.body).toBe("Body here.\n");
     expect(split.endmatter).not.toBeNull();
@@ -72,21 +97,68 @@ describe("splitEndmatter", () => {
     expect(stripReviewMarkup(md)).toBe(md);
   });
 
+  it("ignores a trailing comments block whose records have no targets (F1)", () => {
+    // A doc documenting the format, ending in an (unfenced) example with a
+    // `messages:` array but no `targets:` — not a real record, so it must not
+    // be detected as review state and stripped/erased on the next write.
+    const md =
+      "# Notes\n\nExample record shape:\n\n---\ncomments:\n  thrd_a:\n    messages:\n      - body: illustrative only\n";
+    const split = splitEndmatter(md);
+    expect(split.endmatter).toBeNull();
+    expect(split.body).toBe(md);
+    expect(stripReviewMarkup(md)).toBe(md);
+  });
+
   it("picks the last real endmatter when several --- dividers exist", () => {
     const md =
-      "A\n\n---\n\nmiddle\n\n---\nsuggestions:\n  thrd_b:\n    status: open\n    messages:\n      - body: hi\n";
+      "A\n\n---\n\nmiddle\n\n---\nsuggestions:\n  thrd_b:\n    status: open\n    targets:\n      - path: d.md\n        scope: doc\n    messages:\n      - body: hi\n";
     const split = splitEndmatter(md);
     expect(split.endmatter).toHaveProperty("suggestions");
     expect(split.body).toBe("A\n\n---\n\nmiddle\n");
+  });
+
+  it("recovers a body that ends in a --- horizontal rule (F6)", () => {
+    // composeDoc appends `\n---\n`; a body ending `…\n---` (an hr, no trailing
+    // newline) used to share the divider's newline, so the real boundary was
+    // missed and the prose `---` swallowed.
+    const body = "# Doc\n\ntext\n\n---";
+    const doc = composeDoc(body, { comments: { thrd_a: record() } });
+    const split = splitEndmatter(doc);
+    expect(split.body).toBe(body);
+    expect(split.endmatter).toHaveProperty("comments");
+  });
+
+  it("detects the real endmatter even with a block pasted after it (F10)", () => {
+    // Pasting a second unindented `---` block after the endmatter used to make
+    // its region parse as multi-document YAML → throw → fail *open*, dumping
+    // every comment body into clean prose. Bounding each candidate to the next
+    // divider keeps the real endmatter parseable and the bodies hidden.
+    const body = "Please revisit {==this sentence==}{>>SECRET note<<}{#thrd_x} now.";
+    const doc =
+      composeDoc(body, {
+        comments: { thrd_x: record("SECRET note") },
+      }) + "\n---\nappended by hand\n";
+    const clean = stripReviewMarkup(doc);
+    expect(clean).toBe("Please revisit this sentence now.");
+    expect(clean).not.toContain("SECRET");
+  });
+
+  it("fails closed: strips inline spans when a corrupted endmatter won't parse (F10)", () => {
+    // The endmatter YAML itself is broken (unparseable), but the doc carries an
+    // injected `{#id}` group and a trailing divider — so hide the inline body
+    // rather than returning raw bytes with the comment in them.
+    const md =
+      "See {==this==}{>>SECRET<<}{#thrd_x} here.\n---\ncomments:\n  thrd_x: [oops: : :\n";
+    const clean = stripReviewMarkup(md);
+    expect(clean).not.toContain("SECRET");
+    expect(clean).toContain("See this here.");
   });
 });
 
 describe("composeDoc / round trips", () => {
   it("composes body + endmatter and strips back to clean prose", () => {
     const prose = "Hello world.\n";
-    const endmatter = {
-      comments: { thrd_a: { status: "open", messages: [{ body: "hi" }] } },
-    };
+    const endmatter: Endmatter = { comments: { thrd_a: record() } };
     const doc = composeDoc(prose, endmatter);
     expect(doc).toContain("\n---\ncomments:");
     expect(stripReviewMarkup(doc)).toBe("Hello world.\n");
@@ -188,6 +260,27 @@ describe("renderInlineMarkers", () => {
     expect(strip(out)).toBe(prose);
   });
 
+  it("does not leak marker syntax when the comment body has a backtick (F3)", () => {
+    // An unmatched backtick sits before the anchor and the comment body also
+    // has backticks; un-neutralized they would pair into a code span that
+    // swallows the injected `{==`.
+    const prose = "a ` b anchorword c";
+    const at = prose.indexOf("anchorword");
+    const markers: InlineMarker[] = [
+      {
+        id: "t",
+        from: at,
+        to: at + "anchorword".length,
+        anchoredText: "anchorword",
+        kind: "comment",
+        commentBody: "see `foo` for context",
+      },
+    ];
+    const out = renderInlineMarkers(prose, markers);
+    expect(out).not.toContain("`foo`");
+    expect(strip(out)).toBe(prose);
+  });
+
   it("does not inject a marker inside a fenced code block (strip honors fences)", () => {
     const prose = "Example:\n```\nconst x = 1;\n```\nDone.\n";
     const from = prose.indexOf("const x = 1;");
@@ -226,7 +319,7 @@ describe("stripReviewMarkup leaves plain prose untouched", () => {
 
 describe("cleanOffset", () => {
   const raw =
-    "The {==quick==}{>>note<<}{#thrd_x} brown fox.\n---\ncomments:\n  thrd_x:\n    status: open\n    messages:\n      - body: note\n";
+    "The {==quick==}{>>note<<}{#thrd_x} brown fox.\n---\ncomments:\n  thrd_x:\n    status: open\n    targets:\n      - path: d.md\n        scope: doc\n    messages:\n      - body: note\n";
 
   it("maps an offset before any marker unchanged", () => {
     expect(cleanOffset(raw, 3)).toBe(3); // 'The'
@@ -240,5 +333,15 @@ describe("cleanOffset", () => {
 
   it("maps an offset after the marker block back to clean coordinates", () => {
     expect(cleanOffset(raw, raw.indexOf("brown"))).toBe(10); // 'The quick '
+  });
+
+  it("is identity on a doc with a {#id} group but no endmatter (F2)", () => {
+    // No endmatter → the server returns the bytes verbatim, so an editor offset
+    // already is a clean-prose offset. Compressing it here would mis-anchor the
+    // first comment on such a doc.
+    const noEnd = "ab {==cd==}{#thrd_x} ef";
+    for (const off of [0, 3, 6, 10, noEnd.length]) {
+      expect(cleanOffset(noEnd, off)).toBe(off);
+    }
   });
 });

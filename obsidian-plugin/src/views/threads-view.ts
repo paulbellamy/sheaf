@@ -146,9 +146,18 @@ export class ThreadsView extends ItemView {
       return;
     }
 
-    const docText = editor.getValue();
     const anchored = target.anchor.anchored_text;
     if (!anchored) return;
+    // Drift is judged against the *clean* prose (`this.docText`), but the raw
+    // editor value still contains the anchored text inside the endmatter's
+    // stored `anchored_text:` copy — so searching the raw value for a drifted
+    // thread would scroll into the YAML block, contradicting the "⚠ anchor
+    // drifted" badge on this very card. Bail with the same notice instead.
+    if (isDrifted(thread, this.docText)) {
+      new Notice("Anchor drifted — text not in doc", 4000);
+      return;
+    }
+    const docText = editor.getValue();
     const idx = docText.indexOf(anchored);
     if (idx === -1) {
       new Notice("Anchor drifted — text not in doc", 4000);

@@ -5,11 +5,20 @@ import { z } from "zod";
  * surfaces as a structured `invalid_path`-style error instead of crashing
  * downstream when a field is the wrong shape.
  *
- * Also enforces a maximum byte count before `yaml.parse` / `JSON.parse` runs,
- * so a billion-laughs YAML anchor or a 1GB oplog can't DoS the server.
+ * The filesystem backend caps the whole file at read time (`MAX_FILE_BYTES`),
+ * so the per-field length limits below are DoS backstops, not the primary
+ * bound. They are sized *above* anything the write path can produce from an
+ * in-bounds file: a record that fails validation is dropped on read and then
+ * deleted on the next write, so an over-tight cap is silent data loss (e.g.
+ * commenting on a >10k-char selection once stored an `anchored_text` the read
+ * schema rejected).
  */
 
-export const MAX_DISK_BYTES = 4 * 1024 * 1024; // 4MB
+/** Upper bound for a single free-text / content field. As large as the largest
+ *  file the backend will read, since that file cap already dominates; the
+ *  intent is only to reject a pathologically huge single value, never to clip
+ *  legitimate content (clipping would drop the whole record on the next write). */
+const MAX_FIELD_CHARS = 16 * 1024 * 1024;
 
 export const draftMetaSchema = z.object({
   draft_id: z.string().regex(/^draft_[A-Za-z0-9]{6,64}(?:-[A-Za-z0-9]{1,64}){0,8}$/),
@@ -53,27 +62,31 @@ const threadAnchorSchema = z.discriminatedUnion("scope", [
     anchor: z.object({
       rel_pos: z.string().max(1024),
       content_hash: z.string().max(128),
-      anchored_text: z.string().max(10_000),
-      context_before: z.string().max(256),
-      context_after: z.string().max(256),
+      // A range comment stores the whole selection verbatim, so this must admit
+      // any in-bounds selection — not a small fixed cap that a large selection
+      // would blow, dropping the thread.
+      anchored_text: z.string().max(MAX_FIELD_CHARS),
+      context_before: z.string().max(1024),
+      context_after: z.string().max(1024),
     }),
   }),
 ]);
 
 const threadDraftBodySchema = z.object({
-  new_md: z.string().max(1_000_000),
-  name: z.string().max(256).optional(),
-  description: z.string().max(1_000).optional(),
+  // A draft replacement can be as large as a whole doc.
+  new_md: z.string().max(MAX_FIELD_CHARS),
+  name: z.string().max(512).optional(),
+  description: z.string().max(16_384).optional(),
 });
 
 const threadMessageSchema = z.object({
   author: z.string().max(64),
   ts: z.number().int(),
-  body: z.string().max(10_000),
+  body: z.string().max(MAX_FIELD_CHARS),
   draft: threadDraftBodySchema.optional(),
   // Multi-option α payload (Phase F). Bounded list so a malformed message
   // can't blow the on-disk schema budget.
-  draft_options: z.array(threadDraftBodySchema).min(1).max(8).optional(),
+  draft_options: z.array(threadDraftBodySchema).min(1).max(64).optional(),
 });
 
 /**
@@ -105,8 +118,10 @@ export const threadOnDiskSchema = z.preprocess(
     created: z.number().int(),
     status: z.enum(["open", "accepted", "declined", "archived"]),
     draft_id: z.string().optional(),
-    targets: z.array(threadAnchorSchema).min(1).max(16),
-    messages: z.array(threadMessageSchema).min(1).max(1000),
+    targets: z.array(threadAnchorSchema).min(1).max(64),
+    // A long-lived thread accretes replies; the file cap is the real bound, so
+    // keep this generous rather than dropping a busy thread wholesale.
+    messages: z.array(threadMessageSchema).min(1).max(100_000),
   }),
 );
 

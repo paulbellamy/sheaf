@@ -11,7 +11,7 @@ import {
   composeDoc,
   renderInlineMarkers,
   splitEndmatter,
-  stripInlineMarkup,
+  stripReviewMarkup,
   type Endmatter,
   type InlineMarker,
 } from "../rfm/index";
@@ -19,23 +19,21 @@ import { threadOnDiskSchema } from "../persistence-schemas";
 import type { DocPath, DraftId, Thread, ThreadDraftBody } from "./index";
 
 /**
- * Clean canonical prose. Only a doc with a real review endmatter carries
- * sheaf-injected markup, so any other doc is returned untouched — prose that
- * legitimately contains CriticMarkup-like text round-trips intact.
+ * Clean canonical prose. `stripReviewMarkup` returns a plain doc untouched but
+ * fails *closed* on a doc that carries injected markup with a broken endmatter,
+ * so a comment body can never leak into what `readDoc`/`grep` surface.
  */
 export function cleanProse(rawMd: string): string {
-  const split = splitEndmatter(rawMd);
-  return split.endmatter ? stripInlineMarkup(split.body) : rawMd;
+  return stripReviewMarkup(rawMd);
 }
 
 export function parseReviewDoc(
   rawMd: string,
   draftId?: DraftId,
 ): { prose: string; threads: Thread[] } {
-  const split = splitEndmatter(rawMd);
   return {
-    prose: split.endmatter ? stripInlineMarkup(split.body) : rawMd,
-    threads: endmatterThreads(split.endmatter, draftId),
+    prose: stripReviewMarkup(rawMd),
+    threads: endmatterThreads(splitEndmatter(rawMd).endmatter, draftId),
   };
 }
 

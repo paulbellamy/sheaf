@@ -50,49 +50,6 @@ function matchInlineCodeSpan(md: string, offset: number): number | null {
   return closing === -1 ? null : closing + length;
 }
 
-/**
- * `stripInlineMarkup` leaves CriticMarkup literal inside code, so
- * `renderInlineMarkers` must not inject markers there — injected markup would
- * otherwise survive the strip and leak into the clean prose `readDoc` returns.
- */
-function codeRanges(md: string): Array<[number, number]> {
-  const ranges: Array<[number, number]> = [];
-  let offset = 0;
-  let fence: FenceState | null = null;
-  let fenceStart = 0;
-  const n = md.length;
-  while (offset < n) {
-    if (isLineStart(md, offset)) {
-      const fm = matchFence(md, offset, fence);
-      if (fm) {
-        const end = nextLineOffset(md, offset);
-        if (fence) {
-          ranges.push([fenceStart, end]);
-          fence = null;
-        } else {
-          fence = fm.fence;
-          fenceStart = offset;
-        }
-        offset = end;
-        continue;
-      }
-    }
-    if (fence) {
-      offset = nextLineOffset(md, offset);
-      continue;
-    }
-    const cs = matchInlineCodeSpan(md, offset);
-    if (cs !== null) {
-      ranges.push([offset, cs]);
-      offset = cs;
-      continue;
-    }
-    offset += 1;
-  }
-  if (fence) ranges.push([fenceStart, n]);
-  return ranges;
-}
-
 const ID_REF_RE = /^\{#[A-Za-z][A-Za-z0-9_-]*\}/;
 
 function matchIdRef(md: string, offset: number): number | null {
@@ -156,6 +113,144 @@ function matchMarkerGroup(
   return null;
 }
 
+/**
+ * One contiguous run of the body. `[start, end)` is the raw span; `[keptStart,
+ * keptEnd)` is its clean-prose projection (the whole span for text/code, the
+ * kept sub-range for a marker group). `code` marks inline/fenced code, which
+ * `renderInlineMarkers` must never inject into.
+ *
+ * A single left-to-right pass tokenizes the body once; strip, code-range, and
+ * offset-mapping all consume the same segments, so those three views can't
+ * drift out of agreement and re-break the round-trip. The scan bulk-skips
+ * ordinary prose and jumps past an unclosable backtick run in one step, so a
+ * doc that is mostly backticks no longer costs O(n²).
+ */
+interface Segment {
+  start: number;
+  end: number;
+  keptStart: number;
+  keptEnd: number;
+  code: boolean;
+}
+
+function scanSegments(body: string): Segment[] {
+  const segs: Segment[] = [];
+  const n = body.length;
+  let offset = 0;
+  let textStart = 0;
+  let fence: FenceState | null = null;
+  let fenceStart = 0;
+
+  const flushText = (upto: number): void => {
+    if (upto > textStart) {
+      segs.push({
+        start: textStart,
+        end: upto,
+        keptStart: textStart,
+        keptEnd: upto,
+        code: false,
+      });
+    }
+  };
+
+  while (offset < n) {
+    if (isLineStart(body, offset)) {
+      const fm = matchFence(body, offset, fence);
+      if (fm) {
+        const end = nextLineOffset(body, offset);
+        if (fence) {
+          // Closing fence: emit the whole run as one code segment.
+          segs.push({
+            start: fenceStart,
+            end,
+            keptStart: fenceStart,
+            keptEnd: end,
+            code: true,
+          });
+          textStart = end;
+          fence = null;
+        } else {
+          flushText(offset);
+          fence = fm.fence;
+          fenceStart = offset;
+        }
+        offset = end;
+        continue;
+      }
+    }
+    if (fence) {
+      offset = nextLineOffset(body, offset);
+      continue;
+    }
+    if (body[offset] === "`") {
+      const cs = matchInlineCodeSpan(body, offset);
+      if (cs !== null) {
+        flushText(offset);
+        segs.push({ start: offset, end: cs, keptStart: offset, keptEnd: cs, code: true });
+        textStart = cs;
+        offset = cs;
+        continue;
+      }
+      // No matching close — the whole maximal backtick run is literal text.
+      // Skip it in one step (not char-by-char) so we never re-scan the run.
+      let run = offset + 1;
+      while (run < n && body[run] === "`") run += 1;
+      offset = run;
+      continue;
+    }
+    if (body[offset] === "{") {
+      const group = matchMarkerGroup(body, offset);
+      if (group) {
+        flushText(offset);
+        segs.push({
+          start: offset,
+          end: group.end,
+          keptStart: group.keptStart,
+          keptEnd: group.keptEnd,
+          code: false,
+        });
+        textStart = group.end;
+        offset = group.end;
+        continue;
+      }
+      offset += 1;
+      continue;
+    }
+    // Ordinary prose: jump to the next char that could start a segment (a
+    // backtick, a brace, or the start of the next line for a fence).
+    const tick = body.indexOf("`", offset + 1);
+    const brace = body.indexOf("{", offset + 1);
+    const nl = body.indexOf("\n", offset);
+    const afterNl = nl === -1 ? n : nl + 1;
+    let next = Math.min(
+      tick === -1 ? n : tick,
+      brace === -1 ? n : brace,
+      afterNl,
+    );
+    if (next <= offset) next = offset + 1;
+    offset = next;
+  }
+  if (fence) {
+    segs.push({ start: fenceStart, end: n, keptStart: fenceStart, keptEnd: n, code: true });
+  } else {
+    flushText(n);
+  }
+  return segs;
+}
+
+/**
+ * Byte ranges of inline/fenced code. `stripInlineMarkup` leaves CriticMarkup
+ * literal inside code, so `renderInlineMarkers` must not inject markers there —
+ * injected markup would otherwise survive the strip and leak into clean prose.
+ */
+function codeRanges(md: string): Array<[number, number]> {
+  const ranges: Array<[number, number]> = [];
+  for (const seg of scanSegments(md)) {
+    if (seg.code) ranges.push([seg.start, seg.end]);
+  }
+  return ranges;
+}
+
 /* ------------------------------------------------------------- strip markup -- */
 
 /**
@@ -166,40 +261,8 @@ function matchMarkerGroup(
  */
 export function stripInlineMarkup(body: string): string {
   let out = "";
-  let offset = 0;
-  let fence: FenceState | null = null;
-  const n = body.length;
-  while (offset < n) {
-    if (isLineStart(body, offset)) {
-      const fm = matchFence(body, offset, fence);
-      if (fm) {
-        fence = fence ? null : fm.fence;
-        const end = nextLineOffset(body, offset);
-        out += body.slice(offset, end);
-        offset = end;
-        continue;
-      }
-    }
-    if (fence) {
-      const end = nextLineOffset(body, offset);
-      out += body.slice(offset, end);
-      offset = end;
-      continue;
-    }
-    const cs = matchInlineCodeSpan(body, offset);
-    if (cs !== null) {
-      out += body.slice(offset, cs);
-      offset = cs;
-      continue;
-    }
-    const group = matchMarkerGroup(body, offset);
-    if (group) {
-      out += body.slice(group.keptStart, group.keptEnd);
-      offset = group.end;
-      continue;
-    }
-    out += body[offset];
-    offset += 1;
+  for (const seg of scanSegments(body)) {
+    out += body.slice(seg.keptStart, seg.keptEnd);
   }
   return out;
 }
@@ -211,51 +274,26 @@ export function stripInlineMarkup(body: string): string {
  * against, correctly even when the offset is inside a marker.
  */
 export function cleanOffset(rawMd: string, rawOffset: number): number {
-  const body = splitEndmatter(rawMd).body;
+  const split = splitEndmatter(rawMd);
+  // A doc with no sheaf endmatter carries no injected markup, so `readDoc`
+  // returns its bytes verbatim (see `stripReviewMarkup`) — the editor offset is
+  // already a clean-prose offset. Mapping unconditionally would compress a
+  // hand-typed `{#id}` group the server never stripped, mis-anchoring the very
+  // first comment on such a doc.
+  if (!split.endmatter) {
+    return Math.max(0, Math.min(rawOffset, rawMd.length));
+  }
+  const body = split.body;
   const target = Math.max(0, Math.min(rawOffset, body.length));
-  let offset = 0;
   let clean = 0;
-  let fence: FenceState | null = null;
-  const n = body.length;
-  const step = (rawEnd: number, keptStart: number, keptEnd: number): number | null => {
-    if (target >= rawEnd) {
-      clean += keptEnd - keptStart;
-      offset = rawEnd;
-      return null;
-    }
-    if (target <= keptStart) return clean;
-    if (target >= keptEnd) return clean + (keptEnd - keptStart);
-    return clean + (target - keptStart);
-  };
-  while (offset < n) {
-    if (isLineStart(body, offset)) {
-      const fm = matchFence(body, offset, fence);
-      if (fm) {
-        fence = fence ? null : fm.fence;
-        const r = step(nextLineOffset(body, offset), offset, nextLineOffset(body, offset));
-        if (r !== null) return r;
-        continue;
-      }
-    }
-    if (fence) {
-      const r = step(nextLineOffset(body, offset), offset, nextLineOffset(body, offset));
-      if (r !== null) return r;
+  for (const seg of scanSegments(body)) {
+    if (target >= seg.end) {
+      clean += seg.keptEnd - seg.keptStart;
       continue;
     }
-    const cs = matchInlineCodeSpan(body, offset);
-    if (cs !== null) {
-      const r = step(cs, offset, cs);
-      if (r !== null) return r;
-      continue;
-    }
-    const group = matchMarkerGroup(body, offset);
-    if (group) {
-      const r = step(group.end, group.keptStart, group.keptEnd);
-      if (r !== null) return r;
-      continue;
-    }
-    const r = step(offset + 1, offset, offset + 1);
-    if (r !== null) return r;
+    if (target <= seg.keptStart) return clean;
+    if (target >= seg.keptEnd) return clean + (seg.keptEnd - seg.keptStart);
+    return clean + (target - seg.keptStart);
   }
   return clean;
 }
@@ -274,14 +312,20 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return Boolean(v) && typeof v === "object" && !Array.isArray(v);
 }
 
-/** A `messages` array is the provenance signal that tells a real sheaf
- *  endmatter apart from a prose section that merely ends with a
- *  `comments:`/`suggestions:` YAML mapping (a config doc, or a doc documenting
- *  the RFM format itself). */
+/**
+ * A real sheaf record carries both a `messages` array and a `targets` array —
+ * the two invariants every stored thread has (and `threadOnDiskSchema` requires
+ * to parse). Demanding both is the provenance signal that tells an endmatter
+ * apart from prose that merely ends with a `comments:`/`suggestions:` YAML
+ * mapping — a config doc, or a doc documenting the RFM format itself. Detecting
+ * such prose as review state would strip it at read and delete it on the next
+ * write, so the bar is deliberately high.
+ */
 function hasThreadRecord(bucket: unknown): boolean {
   if (!isPlainObject(bucket)) return false;
   return Object.values(bucket).some(
-    (v) => isPlainObject(v) && Array.isArray(v.messages),
+    (v) =>
+      isPlainObject(v) && Array.isArray(v.messages) && Array.isArray(v.targets),
   );
 }
 
@@ -292,17 +336,42 @@ function looksLikeEndmatter(parsed: unknown): parsed is Endmatter {
   );
 }
 
+/** True when the doc carries at least one sheaf-injected `{#id}`-terminated
+ *  marker group. Used to fail *closed* when endmatter detection fails. */
+function hasInjectedMarkerGroup(md: string): boolean {
+  let i = md.indexOf("{");
+  while (i !== -1) {
+    if (matchMarkerGroup(md, i)) return true;
+    i = md.indexOf("{", i + 1);
+  }
+  return false;
+}
+
 /**
  * Split off the final RFM endmatter — the *last* `\n---\n` block whose YAML
  * carries a thread record. Any other trailing `---` block is document content.
+ *
+ * The `---` matcher keeps the divider's trailing newline out of the match (a
+ * lookahead) so two adjacent dividers are both found; otherwise a body ending
+ * in a `---` line would share that newline with the endmatter divider and the
+ * real boundary would be missed, corrupting the round-trip.
+ *
+ * Each candidate's YAML is bounded to the *next* divider, not to EOF, so a
+ * block pasted after a real endmatter can't turn the endmatter's text into
+ * unparseable multi-document YAML — which used to fail open and dump every
+ * comment body into `readDoc`/`grep`.
  */
 export function splitEndmatter(md: string): SplitDoc {
-  const matches = [...md.matchAll(/\n---[ \t]*\r?\n/g)];
+  const matches = [...md.matchAll(/\n---[ \t]*(?=\r?\n)/g)];
   for (let i = matches.length - 1; i >= 0; i--) {
     const match = matches[i];
     if (match.index === undefined) continue;
-    const raw = md.slice(match.index);
-    const yamlText = raw.replace(/^\n---[ \t]*\r?\n/, "");
+    const nextIndex = i + 1 < matches.length ? matches[i + 1].index : undefined;
+    const region =
+      nextIndex === undefined
+        ? md.slice(match.index)
+        : md.slice(match.index, nextIndex);
+    const yamlText = region.replace(/^\n---[ \t]*\r?\n/, "");
     let parsed: unknown;
     try {
       parsed = parseYaml(yamlText);
@@ -320,10 +389,20 @@ export function splitEndmatter(md: string): SplitDoc {
  * Clean projection of the whole doc. Only a doc with a real review endmatter
  * carries sheaf-injected markup, so any other doc is returned untouched — prose
  * that legitimately contains CriticMarkup-like text is preserved verbatim.
+ *
+ * Fail-closed guard: if endmatter detection fails on a doc that nonetheless
+ * carries injected `{#id}` marker groups *and* a trailing `---` block (i.e. a
+ * corrupted endmatter, not plain prose), strip the inline spans anyway so a
+ * comment body can never leak into clean prose. A doc with only hand-typed
+ * CriticMarkup — and no trailing divider — is still left verbatim.
  */
 export function stripReviewMarkup(md: string): string {
   const split = splitEndmatter(md);
-  return split.endmatter ? stripInlineMarkup(split.body) : md;
+  if (split.endmatter) return stripInlineMarkup(split.body);
+  if (/\n---[ \t]*\r?\n/.test(md) && hasInjectedMarkerGroup(md)) {
+    return stripInlineMarkup(md);
+  }
+  return md;
 }
 
 /**
@@ -366,14 +445,22 @@ function previewText(text: string, max = 280): string {
   return flat.length > max ? `${flat.slice(0, max)}…` : flat;
 }
 
-/** A close delimiter inside a comment body would terminate the span early. */
+/** A close delimiter inside a comment body would terminate the span early; a
+ *  backtick could pair with a stray backtick in the prose to form a code span
+ *  that swallows the injected markup. Both leak marker syntax into clean prose
+ *  on strip, so neutralize them (previews are cosmetic). */
 function safeCommentBody(text: string): string {
-  return previewText(text).split("<<}").join("<< }");
+  return previewText(text).replace(/`/g, "").split("<<}").join("<< }");
 }
 
 /** Keep the substitution's `new` side from prematurely closing the span. */
 function safeNewText(text: string): string {
-  return previewText(text, 2000).split("~~}").join("~~ }").split("~>").join("~ >");
+  return previewText(text, 2000)
+    .replace(/`/g, "")
+    .split("~~}")
+    .join("~~ }")
+    .split("~>")
+    .join("~ >");
 }
 
 /** Anchored text containing a marker's own close (or, for a substitution, the
