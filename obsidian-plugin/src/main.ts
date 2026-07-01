@@ -21,8 +21,20 @@ import {
 import { CommentModal } from "./views/comment-modal";
 import { ReviewModal } from "./views/review-modal";
 import { ThreadsView, VIEW_TYPE_SHEAF_THREADS } from "./views/threads-view";
+import { ActivityView, VIEW_TYPE_SHEAF_ACTIVITY } from "./views/activity-view";
 import { buildPanelRequestMessage } from "./review";
-import { flashField, mountFlashStyles } from "./editor/flash";
+import { flashField, flashRange, mountFlashStyles } from "./editor/flash";
+import type { EditorView } from "@codemirror/view";
+import { AcpController } from "./acp/controller";
+import type { ActivityStore } from "./acp/activity-store";
+import {
+  ACP_EFFORTS,
+  DEFAULT_ACP_AGENT_ID,
+  DEFAULT_ACP_EFFORT,
+  listAcpAgents,
+  resolveAcpAgent,
+  type AcpAgentSpec,
+} from "./acp/registry";
 
 export default class SheafPlugin extends Plugin {
   settings: SheafSettings = DEFAULT_SETTINGS;
@@ -31,6 +43,7 @@ export default class SheafPlugin extends Plugin {
   private events!: SheafEventStream;
   private statusBar: HTMLElement | null = null;
   private host = new SheafServerHost();
+  private acp!: AcpController;
   private settingTab: SheafSettingTab | null = null;
 
   async onload(): Promise<void> {
@@ -40,10 +53,19 @@ export default class SheafPlugin extends Plugin {
       this.settings.serverUrl,
       (e) => this.dispatchEvent(e),
     );
+    this.acp = new AcpController({
+      app: this.app,
+      onStatus: (t) => this.flashStatus(t),
+      onConnectionChange: () => this.refreshAgentPresence(),
+    });
 
     this.registerView(
       VIEW_TYPE_SHEAF_THREADS,
       (leaf) => new ThreadsView(leaf, this),
+    );
+    this.registerView(
+      VIEW_TYPE_SHEAF_ACTIVITY,
+      (leaf) => new ActivityView(leaf, this),
     );
 
     // Backs the transient highlight when a thread card is clicked (flash.ts).
@@ -58,10 +80,20 @@ export default class SheafPlugin extends Plugin {
       void this.activateThreadsView();
     });
 
+    this.addRibbonIcon("activity", "Sheaf activity", () => {
+      void this.activateActivityView();
+    });
+
     this.addCommand({
       id: "sheaf-open-threads-panel",
       name: "Open threads panel",
       callback: () => void this.activateThreadsView(),
+    });
+
+    this.addCommand({
+      id: "sheaf-open-activity",
+      name: "Open activity view",
+      callback: () => void this.activateActivityView(),
     });
 
     this.addCommand({
@@ -85,6 +117,20 @@ export default class SheafPlugin extends Plugin {
           this.openReviewModalForPath(this.vaultPathToSheafPath(view.file.path));
         }
         return true;
+      },
+    });
+
+    this.addCommand({
+      id: "sheaf-acp-connect",
+      name: "Connect ACP agent",
+      callback: () => void this.connectAcp(),
+    });
+
+    this.addCommand({
+      id: "sheaf-acp-disconnect",
+      name: "Disconnect ACP agent",
+      callback: () => {
+        this.disconnectAcp();
       },
     });
 
@@ -153,7 +199,95 @@ export default class SheafPlugin extends Plugin {
 
   async onunload(): Promise<void> {
     this.events?.stop();
+    this.acp?.disconnect();
     await this.host.stop();
+  }
+
+  /**
+   * Spawn the configured ACP agent as a subprocess and bring up the connection.
+   * Replaces the manual `claude mcp add` + terminal flow: the plugin hands the
+   * agent the sheaf MCP (scoped per doc) over session/new, services its file
+   * I/O through the ydoc, and gates writes via a permission modal.
+   */
+  async connectAcp(): Promise<void> {
+    const root = this.vaultRoot();
+    if (!root) {
+      new Notice("Sheaf: ACP needs a local-filesystem vault.");
+      return;
+    }
+    const spec = resolveAcpAgent(
+      this.settings.acpAgentId,
+      this.settings.customAcpAgents,
+    );
+    if (!spec) {
+      new Notice(`Sheaf: unknown ACP agent "${this.settings.acpAgentId}".`);
+      return;
+    }
+    try {
+      new Notice("Sheaf: starting ACP agent…");
+      await this.acp.connect(
+        spec,
+        root,
+        this.settings.serverUrl,
+        this.settings.acpEffort,
+      );
+      new Notice("Sheaf: ACP agent connected.");
+    } catch (err) {
+      console.error("sheaf: ACP connect failed", err);
+      const msg = err instanceof Error ? err.message : String(err);
+      new Notice(`Sheaf: ACP connect failed — ${msg}`, 8000);
+    }
+  }
+
+  /** Stop the ACP agent the plugin started. */
+  disconnectAcp(): void {
+    this.acp.disconnect();
+    new Notice("Sheaf: ACP agent disconnected");
+  }
+
+  /** True when the plugin has a live ACP agent (distinct from a manual MCP one). */
+  acpConnected(): boolean {
+    return this.acp?.connected === true;
+  }
+
+  /** Built-in + user-defined ACP agents (for the pickers). */
+  acpAgents(): AcpAgentSpec[] {
+    return listAcpAgents(this.settings.customAcpAgents);
+  }
+
+  /** The per-doc activity model the threads panel renders. */
+  acpActivity(): ActivityStore {
+    return this.acp.activity;
+  }
+
+  /** Cancel the agent's in-flight turn on `docPath`. */
+  cancelAgentTurn(docPath: string): void {
+    this.acp.cancel(docPath);
+  }
+
+  /** Switch the agent's mode for `docPath`. */
+  setAcpMode(docPath: string, modeId: string): void {
+    this.acp.setMode(docPath, modeId);
+  }
+
+  /** Send a free-form follow-up into the doc's live agent session. */
+  interjectAcp(docPath: string, text: string): Promise<void> {
+    return this.acp.interject(docPath, text);
+  }
+
+  /** Follow-along: briefly highlight `line` (1-based) of `docPath`'s open editor. */
+  flashDocLine(docPath: string, line: number): void {
+    const editor = this.editorForPath(docPath);
+    if (!editor) return;
+    const lineIdx = line - 1; // ACP line numbers are 1-based
+    if (lineIdx < 0 || lineIdx >= editor.lineCount()) return;
+    const from = editor.posToOffset({ line: lineIdx, ch: 0 });
+    const to = editor.posToOffset({
+      line: lineIdx,
+      ch: editor.getLine(lineIdx).length,
+    });
+    const cm = (editor as unknown as { cm?: EditorView }).cm;
+    if (cm) flashRange(cm, from, to);
   }
 
   async loadSettings(): Promise<void> {
@@ -162,6 +296,20 @@ export default class SheafPlugin extends Plugin {
     // Reconcile the style block against current defaults (fresh object so the
     // settings UI never mutates the shared default in place).
     this.settings.style = mergeStyle(loaded?.style);
+    // Migrate an out-of-range stored effort (e.g. the old "default") to a valid
+    // mode so the dropdown and the spawn env both stay well-formed.
+    if (!ACP_EFFORTS.includes(this.settings.acpEffort)) {
+      this.settings.acpEffort = DEFAULT_ACP_EFFORT;
+    }
+    if (!Array.isArray(this.settings.customAcpAgents)) {
+      this.settings.customAcpAgents = [];
+    }
+    // A selected agent that no longer resolves (deleted custom) → reset.
+    if (
+      !resolveAcpAgent(this.settings.acpAgentId, this.settings.customAcpAgents)
+    ) {
+      this.settings.acpAgentId = DEFAULT_ACP_AGENT_ID;
+    }
   }
 
   async saveSettings(): Promise<void> {
@@ -345,6 +493,22 @@ export default class SheafPlugin extends Plugin {
     workspace.revealLeaf(right);
   }
 
+  private async activateActivityView(): Promise<void> {
+    const { workspace } = this.app;
+    const existing = workspace.getLeavesOfType(VIEW_TYPE_SHEAF_ACTIVITY);
+    if (existing.length > 0) {
+      workspace.revealLeaf(existing[0]);
+      return;
+    }
+    const right = workspace.getRightLeaf(false);
+    if (!right) return;
+    await right.setViewState({
+      type: VIEW_TYPE_SHEAF_ACTIVITY,
+      active: true,
+    });
+    workspace.revealLeaf(right);
+  }
+
   /**
    * Auto-mount on plugin load: add a sheaf-threads leaf to the right sidebar
    * if there isn't one already. Doesn't steal focus from the user's current
@@ -416,6 +580,9 @@ export default class SheafPlugin extends Plugin {
           ? "Doc-level comment posted; agent will pick it up"
           : "Comment posted; agent will pick it up",
       );
+      // If an ACP agent is connected, point it at the new thread directly
+      // (no-op otherwise — the manual-MCP watch flow still applies).
+      void this.acp.promptForThread(docPath, message);
     }).open();
   }
 
@@ -426,8 +593,10 @@ export default class SheafPlugin extends Plugin {
    * selection needed — the panel reads the whole doc.
    */
   openReviewModalForPath(docPath: string): void {
-    if (!this.agentConnected) {
-      new Notice("No agent connected — start a Claude Code session first");
+    if (!this.agentConnected && !this.acp.connected) {
+      new Notice(
+        "No agent connected — run “Sheaf: Connect ACP agent” or start a Claude Code session first",
+      );
       return;
     }
 
@@ -447,6 +616,7 @@ export default class SheafPlugin extends Plugin {
       new Notice(
         `Panel review requested (${selected.length} role${selected.length === 1 ? "" : "s"}); comments will appear as the agent posts them`,
       );
+      void this.acp.promptForThread(docPath, message);
     }).open();
   }
 
@@ -491,14 +661,31 @@ export default class SheafPlugin extends Plugin {
         break;
       case "agent_presence":
         this.agentConnected = event.connected;
-        view?.setAgentPresence(event.connected);
+        // Combined presence (manual MCP OR a spawned ACP agent).
+        this.refreshAgentPresence();
         this.settingTab?.onAgentPresenceChanged();
-        this.updateStatusBar(event.connected);
         break;
       default:
         // draft_* events: prototype doesn't show drafts in UX. Ignore.
         break;
     }
+  }
+
+  /**
+   * Reflect agent presence from *either* signal — a manual MCP agent (SSE
+   * `agent_presence`) or a spawned ACP agent — in the status bar and the
+   * threads panel. The two are independent, so an SSE "no agent" must not hide
+   * a live ACP connection (and vice versa).
+   */
+  private refreshAgentPresence(): void {
+    const present = this.isAgentPresent();
+    this.getThreadsView()?.setAgentPresence(present);
+    this.updateStatusBar(present);
+  }
+
+  /** Agent present via *either* signal — a manual MCP agent or a spawned ACP one. */
+  isAgentPresent(): boolean {
+    return this.agentConnected || this.acp?.connected === true;
   }
 
   private getThreadsView(): ThreadsView | null {

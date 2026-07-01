@@ -18,6 +18,9 @@ import {
   prettyPersona,
   reviewPersonaId,
 } from "../review";
+import { ACP_EFFORTS, type AcpEffort } from "../acp/registry";
+import { STALL_MS } from "../acp/activity-store";
+import type { ActivityEvent, ActivitySnapshot } from "../acp/activity-store";
 
 export const VIEW_TYPE_SHEAF_THREADS = "sheaf-threads";
 
@@ -90,6 +93,9 @@ export class ThreadsView extends ItemView {
   private docText: string | null = null;
   private threads: Thread[] = [];
   private agentConnected = false;
+  private activityEl: HTMLElement | null = null;
+  private storeUnsub: (() => void) | null = null;
+  private activityRenderQueued = false;
   // Per-thread selected variant index. Resets when the thread's payload changes.
   private selectedVariant = new Map<string, number>();
   // Per-thread pending reply text. The panel re-renders wholesale on every
@@ -189,7 +195,9 @@ export class ThreadsView extends ItemView {
   async onOpen(): Promise<void> {
     this.contentEl.empty();
     this.contentEl.addClass("sheaf-threads-view");
-    this.agentConnected = this.plugin.agentConnected;
+    // Combined presence (manual MCP *or* a spawned ACP agent) — reading the
+    // raw SSE-only flag here showed "no agent" even with an ACP agent live.
+    this.agentConnected = this.plugin.isAgentPresent();
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
         void this.onFileOpen(file);
@@ -202,17 +210,186 @@ export class ThreadsView extends ItemView {
         }
       }),
     );
+    // Live agent-activity: re-render the activity subtree on store changes
+    // (debounced — message/thought chunks can burst) and tick while a turn is
+    // active so the elapsed/stalled hint stays current.
+    this.storeUnsub = this.plugin
+      .acpActivity()
+      .subscribe(() => this.scheduleActivityRender());
+    this.registerInterval(window.setInterval(() => this.tickActivity(), 2000));
+
     const active = this.app.workspace.getActiveFile();
     if (active) void this.onFileOpen(active);
   }
 
   async onClose(): Promise<void> {
+    this.storeUnsub?.();
+    this.storeUnsub = null;
+    this.activityEl = null;
     this.contentEl.empty();
   }
 
   setAgentPresence(connected: boolean): void {
     this.agentConnected = connected;
     this.render();
+  }
+
+  private scheduleActivityRender(): void {
+    if (this.activityRenderQueued) return;
+    this.activityRenderQueued = true;
+    window.setTimeout(() => {
+      this.activityRenderQueued = false;
+      this.renderActivity();
+    }, 120);
+  }
+
+  /** Keep the elapsed/stalled hint fresh while a turn is in flight. */
+  private tickActivity(): void {
+    if (!this.currentDocPath) return;
+    const snap = this.plugin.acpActivity().snapshot(this.currentDocPath);
+    if (snap && snap.state !== "idle" && snap.state !== "dead") {
+      this.renderActivity();
+    }
+  }
+
+  /** Patch the activity subtree in place from the current doc's snapshot. */
+  private renderActivity(): void {
+    const el = this.activityEl;
+    if (!el || !el.isConnected) return;
+    el.empty();
+    const docPath = this.currentDocPath;
+    if (!docPath) return;
+    const snap = this.plugin.acpActivity().snapshot(docPath);
+    if (!snap) return;
+    const tools = snap.timeline.filter(
+      (e): e is Extract<ActivityEvent, { kind: "tool" }> => e.kind === "tool",
+    );
+    // Nothing worth showing for an untouched/idle doc.
+    if (
+      snap.state === "idle" &&
+      snap.plan.length === 0 &&
+      tools.length === 0 &&
+      !snap.stopReason
+    ) {
+      return;
+    }
+
+    el.style.padding = "0.5em";
+    el.style.borderBottom = "1px solid var(--background-modifier-border)";
+    el.style.fontSize = "0.85em";
+
+    const statusRow = el.createDiv();
+    statusRow.style.display = "flex";
+    statusRow.style.alignItems = "center";
+    statusRow.style.justifyContent = "space-between";
+    statusRow.style.gap = "0.5em";
+
+    const { text, color } = this.describeActivity(snap);
+    const label = statusRow.createDiv();
+    label.setText(text);
+    label.style.color = color;
+    label.style.fontWeight = "500";
+
+    if (
+      snap.state === "working" ||
+      snap.state === "thinking" ||
+      snap.state === "stalled"
+    ) {
+      const stop = statusRow.createEl("button", { text: "Stop" });
+      stop.style.fontSize = "0.8em";
+      stop.style.flexShrink = "0";
+      stop.title = "Cancel the agent's current turn";
+      stop.addEventListener("click", () =>
+        this.plugin.cancelAgentTurn(docPath),
+      );
+    }
+
+    if (snap.plan.length > 0) {
+      const planEl = el.createDiv();
+      planEl.style.marginTop = "0.4em";
+      for (const p of snap.plan) {
+        const row = planEl.createDiv();
+        const mark =
+          p.status === "completed"
+            ? "☑"
+            : p.status === "in_progress"
+              ? "◐"
+              : "☐";
+        row.setText(`${mark} ${p.content}`); // setText = plain text (injection-safe)
+        row.style.opacity = p.status === "completed" ? "0.6" : "1";
+        if (p.status === "in_progress") row.style.fontWeight = "500";
+      }
+    }
+
+    if (tools.length > 0) {
+      const toolsEl = el.createDiv();
+      toolsEl.style.marginTop = "0.4em";
+      toolsEl.style.opacity = "0.85";
+      // Last few — the full transcript lives in the Activity view.
+      for (const t of tools.slice(-6)) {
+        const row = toolsEl.createDiv();
+        const icon =
+          t.status === "completed"
+            ? "✓"
+            : t.status === "failed"
+              ? "✗"
+              : t.status === "in_progress"
+                ? "⟳"
+                : "·";
+        row.setText(`${icon} ${t.title}`);
+        if (t.status === "failed") row.style.color = "var(--text-error)";
+      }
+    }
+  }
+
+  private describeActivity(snap: ActivitySnapshot): {
+    text: string;
+    color: string;
+  } {
+    const secs = Math.round(
+      (snap.state === "stalled" ? snap.quietMs : snap.elapsedMs) / 1000,
+    );
+    switch (snap.state) {
+      case "thinking":
+        return { text: `Thinking… (${secs}s)`, color: "var(--text-muted)" };
+      case "working":
+        if (snap.currentTool) {
+          return {
+            text: `⟳ ${snap.currentTool}… (${secs}s)`,
+            color: "var(--text-normal)",
+          };
+        }
+        if (snap.quietMs > STALL_MS) {
+          return {
+            text: `⟳ Working — quiet for ${Math.round(snap.quietMs / 1000)}s`,
+            color: "var(--text-normal)",
+          };
+        }
+        return { text: `⟳ Working… (${secs}s)`, color: "var(--text-normal)" };
+      case "waiting":
+        return {
+          text: "⏸ Waiting for your input",
+          color: "var(--text-warning)",
+        };
+      case "stalled":
+        return {
+          text: `⚠ No response for ${secs}s — possibly stuck`,
+          color: "var(--text-warning)",
+        };
+      case "dead":
+        return {
+          text: `✗ Agent crashed${snap.dead ? `: ${snap.dead}` : ""}`,
+          color: "var(--text-error)",
+        };
+      default: // idle
+        return {
+          text:
+            snap.stopReason && snap.stopReason !== "end_turn"
+              ? `■ Stopped (${snap.stopReason})`
+              : "✓ Done",
+          color: "var(--text-muted)",
+        };
+    }
   }
 
   async refreshCurrent(): Promise<void> {
@@ -282,7 +459,13 @@ export class ThreadsView extends ItemView {
     header.style.padding = "0.5em";
     header.style.borderBottom = "1px solid var(--background-modifier-border)";
 
-    const presence = header.createDiv();
+    const presenceRow = header.createDiv();
+    presenceRow.style.display = "flex";
+    presenceRow.style.alignItems = "center";
+    presenceRow.style.justifyContent = "space-between";
+    presenceRow.style.gap = "0.5em";
+
+    const presence = presenceRow.createDiv();
     presence.setText(
       this.agentConnected ? "● agent connected" : "○ no agent listening",
     );
@@ -291,6 +474,70 @@ export class ThreadsView extends ItemView {
     presence.style.color = this.agentConnected
       ? "var(--text-success)"
       : "var(--text-muted)";
+
+    // Connect/disconnect the plugin-managed ACP agent. Labelled by ACP state
+    // specifically (not the combined presence) — it only controls the
+    // subprocess the plugin spawns, not a manually-attached MCP agent.
+    const acpConnected = this.plugin.acpConnected();
+    const acpBtn = presenceRow.createEl("button", {
+      text: acpConnected ? "Disconnect" : "Connect agent",
+    });
+    acpBtn.style.fontSize = "0.8em";
+    acpBtn.style.flexShrink = "0";
+    acpBtn.title = acpConnected
+      ? "Stop the ACP agent the plugin started"
+      : "Start the configured ACP agent (Settings → Sheaf → ACP agent)";
+    acpBtn.addEventListener("click", () => {
+      if (this.plugin.acpConnected()) {
+        this.plugin.disconnectAcp();
+      } else {
+        acpBtn.disabled = true;
+        acpBtn.setText("Connecting…");
+        // Re-renders via onConnectionChange on success/failure.
+        void this.plugin.connectAcp();
+      }
+    });
+
+    // Agent + effort selectors. They configure the *next* connect, so they're
+    // disabled while an agent is live (disconnect to change, then reconnect).
+    const acpLive = this.plugin.acpConnected();
+    const configRow = header.createDiv();
+    configRow.style.display = "flex";
+    configRow.style.gap = "0.5em";
+    configRow.style.marginTop = "0.4em";
+    configRow.style.fontSize = "0.8em";
+
+    const agentSel = configRow.createEl("select");
+    agentSel.title = "Which ACP agent to spawn";
+    agentSel.disabled = acpLive;
+    for (const a of this.plugin.acpAgents()) {
+      const opt = agentSel.createEl("option", { text: a.displayName });
+      opt.value = a.id;
+      if (a.id === this.plugin.settings.acpAgentId) opt.selected = true;
+    }
+    agentSel.addEventListener("change", () => {
+      this.plugin.settings.acpAgentId = agentSel.value;
+      void this.plugin.saveSettings();
+    });
+
+    const effortSel = configRow.createEl("select");
+    effortSel.title = "Reasoning effort passed to the agent on connect";
+    effortSel.disabled = acpLive;
+    for (const e of ACP_EFFORTS) {
+      const opt = effortSel.createEl("option", { text: `Effort: ${e}` });
+      opt.value = e;
+      if (e === this.plugin.settings.acpEffort) opt.selected = true;
+    }
+    effortSel.addEventListener("change", () => {
+      this.plugin.settings.acpEffort = effortSel.value as AcpEffort;
+      void this.plugin.saveSettings();
+    });
+
+    // Live agent activity for the current doc (plan, current step, state, stop
+    // reason, Stop button). Its own node so store updates patch it in place
+    // without a full panel re-render.
+    this.activityEl = el.createDiv();
+    this.renderActivity();
 
     // No agent listening → show how to connect one (or how to start the
     // server, if it's the server that's down). Shown regardless of whether a

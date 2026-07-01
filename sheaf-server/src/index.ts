@@ -13,7 +13,11 @@ export { StubBackend } from "./backend/stub";
 export { getBackend, setBackend } from "./backend/factory";
 
 // MCP server (tool definitions). Transport is supplied per-runtime.
-export { buildServer } from "./server";
+export {
+  buildServer,
+  type BuildServerOptions,
+  type ToolSurface,
+} from "./server";
 
 // Framework-agnostic UI route logic.
 export * from "./handlers";

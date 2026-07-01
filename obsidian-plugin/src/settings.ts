@@ -7,6 +7,13 @@ import {
 } from "obsidian";
 import { defaultStyleConfig, type StyleConfig } from "sheaf-server/types";
 import type SheafPlugin from "./main";
+import {
+  ACP_EFFORTS,
+  type AcpEffort,
+  type CustomAcpAgent,
+  DEFAULT_ACP_AGENT_ID,
+  DEFAULT_ACP_EFFORT,
+} from "./acp/registry";
 import { renderCommandRow } from "./command-row";
 
 /** The prompt the user pastes into a fresh `claude` session. */
@@ -34,6 +41,12 @@ export type SheafSettings = {
   showResolved: boolean;
   /** Run the sheaf server (backend + MCP + API) inside Obsidian itself. */
   runServer: boolean;
+  /** Which ACP adapter "Connect ACP agent" spawns (id from the registry). */
+  acpAgentId: string;
+  /** Reasoning-effort level passed to the ACP agent on spawn. */
+  acpEffort: AcpEffort;
+  /** User-defined ACP agents, merged into the picker alongside the built-ins. */
+  customAcpAgents: CustomAcpAgent[];
   personas: ReviewPersona[];
   /** Voice matching: how the agent learns to write like the user. Mirrored to
    *  the vault's `.sheaf/config.json` (the server's source of truth). */
@@ -103,6 +116,9 @@ export const DEFAULT_SETTINGS: SheafSettings = {
   defaultAuthor: "user",
   showResolved: true,
   runServer: true,
+  acpAgentId: DEFAULT_ACP_AGENT_ID,
+  acpEffort: DEFAULT_ACP_EFFORT,
+  customAcpAgents: [],
   personas: DEFAULT_PERSONAS,
   style: defaultStyleConfig(),
 };
@@ -218,7 +234,7 @@ export class SheafSettingTab extends PluginSettingTab {
     // Connect-an-agent commands, copy-ready (mirrors the threads sidebar).
     const url = this.plugin.settings.serverUrl.replace(/\/$/, "");
     new Setting(containerEl)
-      .setName("Connect an agent")
+      .setName("Connect an agent (manual MCP)")
       .setDesc(
         "In a terminal, register the MCP server; then run claude and paste the prompt to put it to work:",
       );
@@ -230,6 +246,37 @@ export class SheafSettingTab extends PluginSettingTab {
     renderCommandRow(cmds, `claude mcp add --transport http sheaf ${url}/api/mcp`);
     renderCommandRow(cmds, AGENT_PROMPT);
 
+    new Setting(containerEl)
+      .setName("ACP agent")
+      .setDesc(
+        'Which agent the "Sheaf: Connect ACP agent" command spawns. The plugin runs it as a subprocess and hands it the sheaf MCP scoped per doc — no terminal, no manual setup.',
+      )
+      .addDropdown((d) => {
+        for (const a of this.plugin.acpAgents()) d.addOption(a.id, a.displayName);
+        d.setValue(this.plugin.settings.acpAgentId);
+        d.onChange(async (v) => {
+          this.plugin.settings.acpAgentId = v;
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("Reasoning effort")
+      .setDesc(
+        "Claude Code reasoning effort passed to the agent on connect (Codex has no max; max runs as xhigh). Applies on the next connect.",
+      )
+      .addDropdown((d) => {
+        for (const e of ACP_EFFORTS) {
+          d.addOption(e, e[0].toUpperCase() + e.slice(1));
+        }
+        d.setValue(this.plugin.settings.acpEffort);
+        d.onChange(async (v) => {
+          this.plugin.settings.acpEffort = v as AcpEffort;
+          await this.plugin.saveSettings();
+        });
+      });
+
+    this.renderCustomAgents(containerEl);
     this.renderVoiceMatching(containerEl);
     this.renderPersonas(containerEl);
   }
@@ -323,6 +370,112 @@ export class SheafSettingTab extends PluginSettingTab {
             save();
           }),
       );
+  }
+
+  /**
+   * Custom ACP agents — the escape hatch for any agent not built in. Each is a
+   * command + args spawned over stdio; they appear in the agent picker.
+   */
+  private renderCustomAgents(containerEl: HTMLElement): void {
+    new Setting(containerEl).setName("Custom ACP agents").setHeading();
+
+    const intro = containerEl.createDiv();
+    intro.style.fontSize = "0.85em";
+    intro.style.opacity = "0.7";
+    intro.style.marginBottom = "0.75em";
+    intro.setText(
+      "Any ACP agent: the command + args to spawn it over stdio (e.g. command “npx”, args “-y some-acp-adapter”). Args are split on spaces. It appears in the agent picker; effort isn't passed to custom agents.",
+    );
+
+    const list = containerEl.createDiv();
+    this.renderCustomAgentList(list);
+
+    new Setting(containerEl).addButton((b) =>
+      b
+        .setButtonText("Add custom agent")
+        .setCta()
+        .onClick(async () => {
+          this.plugin.settings.customAcpAgents.push({
+            id: this.uniqueAgentId(),
+            displayName: "New agent",
+            command: "",
+            args: [],
+          });
+          await this.plugin.saveSettings();
+          this.renderCustomAgentList(list);
+        }),
+    );
+  }
+
+  private renderCustomAgentList(list: HTMLElement): void {
+    list.empty();
+    const agents = this.plugin.settings.customAcpAgents;
+    if (agents.length === 0) {
+      const empty = list.createDiv();
+      empty.style.opacity = "0.6";
+      empty.style.fontSize = "0.85em";
+      empty.style.marginBottom = "0.5em";
+      empty.setText("No custom agents. Add one below.");
+      return;
+    }
+
+    const save = () => this.plugin.saveSettings();
+
+    agents.forEach((agent, index) => {
+      const card = list.createDiv();
+      card.style.border = "1px solid var(--background-modifier-border)";
+      card.style.borderRadius = "6px";
+      card.style.padding = "0.25em 0.5em";
+      card.style.marginBottom = "0.5em";
+
+      new Setting(card)
+        .setName(`Agent: ${agent.id}`)
+        .addExtraButton((b) =>
+          b
+            .setIcon("trash")
+            .setTooltip("Remove agent")
+            .onClick(async () => {
+              agents.splice(index, 1);
+              await save();
+              this.renderCustomAgentList(list);
+            }),
+        );
+
+      new Setting(card).setName("Display name").addText((t) =>
+        t.setValue(agent.displayName).onChange(async (v) => {
+          agent.displayName = v;
+          await save();
+        }),
+      );
+      new Setting(card).setName("Command").addText((t) =>
+        t
+          .setPlaceholder("npx")
+          .setValue(agent.command)
+          .onChange(async (v) => {
+            agent.command = v.trim();
+            await save();
+          }),
+      );
+      new Setting(card).setName("Args").addText((t) =>
+        t
+          .setPlaceholder("-y some-acp-adapter")
+          .setValue(agent.args.join(" "))
+          .onChange(async (v) => {
+            const trimmed = v.trim();
+            agent.args = trimmed ? trimmed.split(/\s+/) : [];
+            await save();
+          }),
+      );
+    });
+  }
+
+  /** A stable, unique id for a new custom agent (never collides with a built-in). */
+  private uniqueAgentId(): string {
+    const taken = new Set(this.plugin.acpAgents().map((a) => a.id));
+    let n = 1;
+    let id = `custom-${n}`;
+    while (taken.has(id)) id = `custom-${++n}`;
+    return id;
   }
 
   /**

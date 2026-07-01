@@ -40,10 +40,13 @@ export class SheafServerHost {
     // pluginRoot = root (not the default parent dir) so the backend's
     // read-only `.claude-plugin/` serving can never reach above the vault.
     const backend = new StubBackend(root, root);
-    const app = buildSheafApp(
-      backend,
-      allowedOrigins ? { allowedOrigins } : {},
-    );
+    // thread-only: the plugin runs in thread-on-doc mode and never drives the
+    // draft workflow, so the embedded server omits the draft tools (Fork /
+    // Propose / Merge / DeclineDraft / DraftChanges).
+    const app = buildSheafApp(backend, {
+      tools: "thread-only",
+      ...(allowedOrigins ? { allowedOrigins } : {}),
+    });
     await app.listen({ port, host: "127.0.0.1" });
     this.app = app;
     this.startedAt = { root, port };
