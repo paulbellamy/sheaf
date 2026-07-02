@@ -210,7 +210,8 @@ and can be ignored.
 ## Tools you'll use
 
 - \`ReadThread(thread_id)\` — full thread. Each target has a \`scope\` field: \`"range"\` carries an \`anchor\` (\`anchored_text\`, \`context_before/after\`, \`rel_pos\`); \`"doc"\` has no anchor.
-- \`ListThreads({path, ref:"main"})\` — enumerate threads on a doc; useful when you want context beyond the one event.
+- \`ReadThreads({path, ref:"main"})\` — the full content of **every** thread on a doc in one call (the batch form of \`ReadThread\`). Prefer this over \`ListThreads\` + a \`ReadThread\` per id when you want the whole queue with its messages and anchors.
+- \`ListThreads({path, ref:"main"})\` — lightweight summaries (id, status, preview) when you only need to see what's there, not every message.
 - \`Read(file_path)\` — full doc contents. \`ref\` defaults to \`"main"\`.
 - \`Edit(file_path, old_string, new_string)\` — surgical replace. Pass \`ref="main"\` (or omit). Prefer this for small changes; \`old_string\` should be unique in the doc.
 - \`Write(file_path, content)\` — full-doc rewrite. Pass \`ref="main"\` (or omit). Use this for doc-level briefs or when many edits would be needed.

@@ -143,6 +143,37 @@ describe("thread tools doc-scoping", () => {
     expect(errCode(denied)).toBe("out_of_scope");
   });
 
+  it("ReadThreads returns full detail for every thread on a doc in one call", async () => {
+    const { idA } = await seed();
+    const c = await connect();
+    const res = await call(c, "ReadThreads", { path: A, ref: "main" });
+    const threads = (
+      res.structuredContent as {
+        threads: Array<{
+          id: string;
+          messages: Array<{ body: string }>;
+          targets: Array<{ path: string }>;
+        }>;
+      }
+    ).threads;
+    expect(threads.map((t) => t.id)).toEqual([idA]);
+    // Full detail, not a summary: messages + targets come back inline.
+    expect(threads[0].messages[0].body).toContain("comment on");
+    expect(threads[0].targets.some((t) => t.path === A)).toBe(true);
+  });
+
+  it("scoped ReadThreads returns only its doc — even when asked for another", async () => {
+    const { idA, idB } = await seed();
+    const c = await connect(A);
+    expect(listedIds(await call(c, "ReadThreads", { ref: "main" }))).toEqual([
+      idA,
+    ]);
+    // A foreign path is ignored, not honored.
+    expect(
+      listedIds(await call(c, "ReadThreads", { path: B, ref: "main" })),
+    ).toEqual([idA]);
+  });
+
   it("scoped AddThread accepts in-scope targets, rejects foreign ones", async () => {
     const c = await connect(A);
 

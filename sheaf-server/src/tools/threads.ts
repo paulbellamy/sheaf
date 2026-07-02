@@ -118,6 +118,42 @@ export function registerThreadTools(
   );
 
   server.registerTool(
+    "ReadThreads",
+    {
+      title: "ReadThreads",
+      description:
+        "Read the full content (messages, targets, anchors, attached drafts) of every thread on a doc in one call — the batch form of ReadThread. Prefer this over ListThreads followed by a ReadThread per id when you want a doc's whole queue.",
+      inputSchema: {
+        path: pathArg.optional(),
+        ref: refOptionalArg,
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ path: p, ref }) => {
+      try {
+        const threads = await backend.readThreads({
+          // Scoped connections are clamped to their doc (see ListThreads).
+          path: docScope ?? p,
+          ref,
+        });
+        return {
+          content: [
+            {
+              type: "text",
+              text: threads.length
+                ? threads.map(formatThread).join("\n\n")
+                : "(no threads)",
+            },
+          ],
+          structuredContent: { threads },
+        };
+      } catch (e) {
+        return toToolError(e);
+      }
+    },
+  );
+
+  server.registerTool(
     "AddThread",
     {
       title: "AddThread",
