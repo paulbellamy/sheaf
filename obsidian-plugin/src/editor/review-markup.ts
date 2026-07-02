@@ -13,6 +13,7 @@ import {
   splitEndmatter,
   type ReviewMarkerGroup,
 } from "sheaf-server/types";
+import { buildCommentChip } from "./reading-markup";
 
 const EMPTY_IDS: ReadonlySet<string> = new Set();
 
@@ -71,18 +72,8 @@ class CommentChipWidget extends WidgetType {
   }
 
   toDOM(): HTMLElement {
-    const el = document.createElement("span");
-    el.className = "sheaf-rfm-chip";
-    el.textContent = "💬";
-    // The inline note is only a preview; the real thread body lives in the
-    // endmatter and is shown in the threads panel. Fall back to the id so a
-    // body-in-endmatter comment (sheaf's own writer) still names itself.
-    el.setAttribute(
-      "aria-label",
-      this.note ? `Comment: ${this.note}` : `Comment ${this.id}`,
-    );
-    el.title = this.note || `Sheaf comment · ${this.id}`;
-    return el;
+    // Shared with the reading-mode processor so both modes render the same chip.
+    return buildCommentChip(this.id, this.note, document);
   }
 
   ignoreEvent(): boolean {

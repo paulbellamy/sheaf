@@ -34,6 +34,7 @@ import {
   mountReviewMarkupStyles,
   setResolvedThreadIds,
 } from "./editor/review-markup";
+import { decorateReadingReviewMarkup } from "./editor/reading-markup";
 import type { EditorView } from "@codemirror/view";
 import { AcpController } from "./acp/controller";
 import type { ActivityStore } from "./acp/activity-store";
@@ -91,6 +92,12 @@ export default class SheafPlugin extends Plugin {
     this.app.workspace.updateOptions();
     this.register(mountFlashStyles());
     this.register(mountReviewMarkupStyles());
+
+    // Reading mode has no CodeMirror editor, so the CM6 extension above never
+    // runs there — decorate the rendered HTML with the same review markup via a
+    // post-processor (reading-markup.ts). Shares the `.sheaf-rfm-*` styles the
+    // mount above injects, so both modes read identically.
+    this.registerMarkdownPostProcessor((el) => decorateReadingReviewMarkup(el));
 
     this.addRibbonIcon("message-square", "Sheaf threads", () => {
       void this.activateThreadsView();
