@@ -1603,7 +1603,7 @@ export class StubBackend implements Backend {
     });
   }
 
-  reopenThread(threadId: ThreadId): Promise<void> {
+  reopenThread(threadId: ThreadId, origin: Origin = "ui"): Promise<void> {
     return this.withLock(async () => {
       const thread = await this.loadThread(threadId);
       if (thread.status === "open") {
@@ -1611,44 +1611,65 @@ export class StubBackend implements Backend {
           `thread ${threadId} is already open`,
         );
       }
-      if (thread.status === "declined") {
-        throw err.invalidPayload(
-          `thread ${threadId} is declined; declined threads cannot be reopened`,
-        );
-      }
-      // Snapshot the current draft prose for the thread's primary target so
-      // reviewers can compare past options against current state. v0 uses
-      // target[0] only; multi-target snapshots are deferred polish. Doc-level
-      // targets don't have an anchor; snapshot is empty in that case.
-      const target = thread.targets[0];
-      let currentMd = target.scope === "range" ? target.anchor.anchored_text : "";
-      if (target.scope === "range" && thread.draft_id) {
-        try {
-          const view = await this.readDoc(target.path, thread.draft_id);
-          const decoded = JSON.parse(
-            Buffer.from(target.anchor.rel_pos, "base64").toString("utf8"),
-          ) as { from: number; to: number };
-          const from = Math.max(0, Math.min(decoded.from, view.md.length));
-          const to = Math.max(from, Math.min(decoded.to, view.md.length));
-          currentMd = view.md.slice(from, to);
-        } catch {
-          // Fall back to the anchored text if rel_pos drifted; the leaf is
-          // still useful as the historical snapshot of what reviewers saw.
+
+      if (thread.draft_id) {
+        // Draft-mode "remix": the thread lives on a draft, so snapshot the
+        // current draft prose for the thread's primary target as a `current`
+        // leaf. Reviewers reopen to attach further options against that
+        // snapshot. v0 uses target[0] only; multi-target snapshots are deferred
+        // polish. Doc-level targets have no anchor; the snapshot is empty.
+        if (thread.status === "declined") {
+          throw err.invalidPayload(
+            `thread ${threadId} is declined; declined threads cannot be reopened`,
+          );
         }
+        const target = thread.targets[0];
+        let currentMd =
+          target.scope === "range" ? target.anchor.anchored_text : "";
+        if (target.scope === "range") {
+          try {
+            const view = await this.readDoc(target.path, thread.draft_id);
+            const decoded = JSON.parse(
+              Buffer.from(target.anchor.rel_pos, "base64").toString("utf8"),
+            ) as { from: number; to: number };
+            const from = Math.max(0, Math.min(decoded.from, view.md.length));
+            const to = Math.max(from, Math.min(decoded.to, view.md.length));
+            currentMd = view.md.slice(from, to);
+          } catch {
+            // Fall back to the anchored text if rel_pos drifted; the leaf is
+            // still useful as the historical snapshot of what reviewers saw.
+          }
+        }
+        thread.status = "open";
+        thread.messages.push({
+          author: "system",
+          ts: Date.now(),
+          body: "reopened",
+          draft_options: [{ name: "current", new_md: currentMd }],
+        });
+      } else {
+        // Thread-on-doc "unresolve": no draft to snapshot. Resurrect the thread
+        // straight back to open so it re-enters the queue as an outstanding
+        // item — the escape hatch for an agent that resolved too eagerly. No
+        // payload leaf: a lone `current` option would misrender as a
+        // one-choice picker in the panel.
+        thread.status = "open";
+        thread.messages.push({
+          author: "system",
+          ts: Date.now(),
+          body: "reopened",
+        });
       }
-      thread.status = "open";
-      thread.messages.push({
-        author: "system",
-        ts: Date.now(),
-        body: "reopened",
-        draft_options: [{ name: "current", new_md: currentMd }],
-      });
+
       await this.saveThread(thread);
-      this.emit({
-        kind: "thread_changed",
-        thread_id: threadId,
-        target_paths: thread.targets.map((t) => t.path),
-      });
+      this.emit(
+        {
+          kind: "thread_changed",
+          thread_id: threadId,
+          target_paths: thread.targets.map((t) => t.path),
+        },
+        origin,
+      );
     });
   }
 

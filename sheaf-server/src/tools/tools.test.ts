@@ -1929,6 +1929,38 @@ describe("backend.reopenThread (Phase J)", () => {
     const [t] = await backend.listThreads({ ref: draft_id });
     await expect(backend.reopenThread(t.id)).rejects.toThrow();
   });
+
+  it("unresolves a thread-on-doc thread with no `current` leaf", async () => {
+    // Thread-on-doc threads (no draft_id) are the Obsidian mode. Reopening one
+    // must resurrect it plainly — flip to open with a bare `reopened` message —
+    // rather than append a `current` option leaf, which would misrender as a
+    // one-choice picker in the panel.
+    const id = await backend.addThread({
+      targets: [{ path: DOC, char_range: { from: 9, to: 17 } }],
+      message: "tighten",
+      author: "user",
+      ref: "main",
+    });
+    await backend.resolveThread(id);
+    expect((await backend.readThread(id)).status).toBe("accepted");
+
+    const events: BackendEvent[] = [];
+    backend.subscribe((e) => events.push(e), { role: "ui" });
+    events.length = 0;
+
+    await backend.reopenThread(id);
+
+    const after = await backend.readThread(id);
+    expect(after.status).toBe("open");
+    const last = after.messages[after.messages.length - 1];
+    expect(last.author).toBe("system");
+    expect(last.body).toBe("reopened");
+    expect(last.draft_options).toBeUndefined();
+    expect(last.draft).toBeUndefined();
+
+    const changed = events.filter((e) => e.kind === "thread_changed");
+    expect(changed).toHaveLength(1);
+  });
 });
 
 describe("backend.merge accept_blocked gating (Phase J)", () => {

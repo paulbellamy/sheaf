@@ -451,15 +451,23 @@ export interface Backend {
   ): Promise<void>;
 
   /**
-   * Phase J: reopen an accepted (or archived) thread. Flips status back to
-   * `open` and appends a system-style message carrying a `current` leaf — a
-   * snapshot of the current draft prose for the thread's primary target. The
-   * reviewer can then attach further options via `attachDraftPayload`.
+   * Reopen a resolved thread — flip its status back to `open`. Two shapes,
+   * keyed on whether the thread lives on a draft:
    *
-   * Throws `invalid_payload` if the thread is already open (no-op signal) or
-   * if it is `declined` (declined threads cannot be reopened).
+   *  - Draft-mode (`draft_id` set) — the Phase J "remix": appends a
+   *    system-style message carrying a `current` leaf (a snapshot of the
+   *    current draft prose for the thread's primary target) so the reviewer can
+   *    attach further options via `attachDraftPayload`. Throws `invalid_payload`
+   *    if the thread is `declined` (declined draft threads cannot be reopened).
+   *  - Thread-on-doc (`draft_id` absent) — a plain "unresolve": resurrects the
+   *    thread as an outstanding item with a bare `reopened` message and no
+   *    payload leaf. The escape hatch for an agent that resolved too eagerly.
+   *
+   * Either way, emits a `thread_changed` (stamped with `origin`, default `ui`)
+   * so the panel and the connected agent see the thread return to the queue.
+   * Throws `invalid_payload` if the thread is already open (no-op signal).
    */
-  reopenThread(id: ThreadId): Promise<void>;
+  reopenThread(id: ThreadId, origin?: Origin): Promise<void>;
 
   /**
    * Style / voice matching. The vault is the corpus; these expose the cheap
