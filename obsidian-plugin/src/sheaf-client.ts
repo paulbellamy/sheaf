@@ -211,7 +211,7 @@ export class SheafClient {
   /**
    * Tell the server a doc was renamed `from` → `to` so it moves the doc's
    * threads, version history, and drafts onto the new path. The vault has
-   * already moved the `.md`; this reconciles sheaf's sidecar state and wakes
+   * already moved the `.md`; this reconciles sheaf's review state and wakes
    * the connected agent. Returns the ids of the threads that moved.
    */
   async renameDoc(from: string, to: string): Promise<string[]> {

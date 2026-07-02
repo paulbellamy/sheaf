@@ -406,9 +406,11 @@ describe("resolve route does NOT auto-apply variants to main (thread-on-doc)", (
     const ctx = { params: Promise.resolve({ id: threadId }) };
     const res = await resolvePOST(req, ctx);
     expect(res.status).toBe(200);
-    const onDisk = await fs.readFile(
-      path.join(root, "workspaces", "ws", "docs", "a.md"),
-      "utf8",
+    // Read the clean prose (the doc now carries inline review markup); the
+    // option's new_md must not have been applied to it.
+    const { md: onDisk } = await backend.readDoc(
+      "workspaces/ws/docs/a.md",
+      "main",
     );
     expect(onDisk).toBe("hello world"); // unchanged — agent will make the edit
     const thread = await backend.readThread(threadId);
@@ -436,9 +438,11 @@ describe("resolve route does NOT auto-apply variants to main (thread-on-doc)", (
     const ctx = { params: Promise.resolve({ id: threadId }) };
     const res = await resolvePOST(req, ctx);
     expect(res.status).toBe(200);
-    const onDisk = await fs.readFile(
-      path.join(root, "workspaces", "ws", "docs", "a.md"),
-      "utf8",
+    // Read the clean prose (the doc now carries inline review markup); the
+    // option's new_md must not have been applied to it.
+    const { md: onDisk } = await backend.readDoc(
+      "workspaces/ws/docs/a.md",
+      "main",
     );
     expect(onDisk).toBe("hello world"); // unchanged
   });
@@ -464,9 +468,11 @@ describe("resolve route does NOT auto-apply variants to main (thread-on-doc)", (
     const ctx = { params: Promise.resolve({ id: threadId }) };
     const res = await resolvePOST(req, ctx);
     expect(res.status).toBe(200);
-    const onDisk = await fs.readFile(
-      path.join(root, "workspaces", "ws", "docs", "a.md"),
-      "utf8",
+    // Read the clean prose (the doc now carries inline review markup); the
+    // option's new_md must not have been applied to it.
+    const { md: onDisk } = await backend.readDoc(
+      "workspaces/ws/docs/a.md",
+      "main",
     );
     expect(onDisk).toBe("hello world"); // unchanged
     const thread = await backend.readThread(threadId);
@@ -656,14 +662,21 @@ describe("operates on any vault doc (not just workspaces/)", () => {
     expect(onDisk).toBe("hello vault");
   });
 
-  it("AddThread on a non-workspaces doc lands a sidecar next to the doc", async () => {
+  it("AddThread on a non-workspaces doc stores the thread inline in the doc", async () => {
     const id = await backend.addThread({
       targets: [{ path: "notes/x.md", scope: "doc" }],
       message: "comment on any doc",
       author: "user",
     });
-    const sidecar = path.join(root, "notes", "x.threads", `${id}.yaml`);
-    await expect(fs.stat(sidecar)).resolves.toBeTruthy();
+    // No sidecar dir — the thread lives in the doc's RFM endmatter.
+    await expect(
+      fs.stat(path.join(root, "notes", "x.threads")),
+    ).rejects.toThrow();
+    const raw = await fs.readFile(path.join(root, "notes", "x.md"), "utf8");
+    expect(raw).toContain(id);
+    expect(raw).toContain("comment on any doc");
+    // The clean prose is unchanged by the doc-level comment.
+    expect((await backend.readDoc("notes/x.md", "main")).md).toBe("hello world");
     const threads = await backend.listThreads({ path: "notes/x.md", ref: "main" });
     expect(threads.map((t) => t.id)).toContain(id);
   });

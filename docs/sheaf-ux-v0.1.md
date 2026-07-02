@@ -108,9 +108,9 @@ open a manuscript (or a weave) in redline zoom level. scroll; drafts render inli
 
 this ux maps onto design-v0.1 with minimal violence:
 
-- **thread-with-draft** — already supported. a thread's sidecar yaml gains a `draft` field holding the proposed new md for each target, plus anchor ranges for the strikethrough/insertion rendering. accepting a thread runs the case-2 sync algorithm (§4.2 of design-v0.1) on the draft md and closes the thread in one commit.
-- **sub-drafts** — represented as a tree in the thread yaml, or as replies with `kind: draft`. determined at implementation time.
-- **transclusion** — a new primitive. represented as an inline md extension (e.g. `![[path#anchor@commit]]`) rendered by the editor. the source manuscript's sidecar gains a back-reference so invariant 1.5 still holds. drift detection is a read-time hash check, same pattern as comment anchors (§5 of design-v0.1).
+- **thread-with-draft** — already supported. a thread's endmatter record gains a `draft` field holding the proposed new md for each target (rendered inline as a `{~~old~>new~~}` suggestion), plus anchor ranges for the strikethrough/insertion rendering. accepting a thread runs the case-2 sync algorithm (§4.2 of design-v0.1) on the draft md and closes the thread in one commit.
+- **sub-drafts** — represented as a tree in the thread record, or as replies with `kind: draft`. determined at implementation time.
+- **transclusion** — a new primitive. represented as an inline md extension (e.g. `![[path#anchor@commit]]`) rendered by the editor. the source manuscript's endmatter gains a back-reference so invariant 1.5 still holds. drift detection is a read-time hash check, same pattern as comment anchors (§5 of design-v0.1).
 - **weave** — a new file type, e.g. `.sheaf/weaves/<id>.yml`, listing constituent thread ids. index maintenance mirrors thread-index.
 - **trail** — per-user, stored in the user's workspace or ephemerally client-side. low-risk to ship.
 

@@ -1,7 +1,6 @@
 import { promises as fs, constants as fsConstants } from "node:fs";
 import * as path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import * as yaml from "yaml";
 
 import {
   type Backend,
@@ -38,11 +37,12 @@ import {
   remapRenamedPath,
   safeJoin,
 } from "../paths";
+import { draftMetaSchema, opLogSchema } from "../persistence-schemas";
 import {
-  draftMetaSchema,
-  opLogSchema,
-  threadOnDiskSchema,
-} from "../persistence-schemas";
+  cleanProse,
+  parseReviewDoc,
+  serializeReviewDoc,
+} from "./review-doc";
 import {
   type CorpusFile,
   type StyleConfig,
@@ -59,12 +59,14 @@ import { styleConfigSchema, styleProfileSchema } from "../style/schemas";
  * `.op_log.json`, `.obsidian/`, …) are infra and never surfaced as docs.
  *
  * Layout (all under `<root>`):
- *   <dir>/<name>.md
- *   <dir>/<name>.threads/thrd_<id>.yaml                    # sidecar next to its doc
+ *   <dir>/<name>.md                                        # prose + inline RFM review markup
  *   .drafts/<draft_id>/meta.json
  *   .drafts/<draft_id>/<dir>/<name>.md                     # changed files only
- *   .drafts/<draft_id>/<dir>/<name>.threads/thrd_<id>.yaml
  *   .op_log.json
+ *
+ * Threads live inline in the doc markdown (CriticMarkup + a YAML endmatter
+ * block — see `review-doc.ts`), not in sidecars; `readDoc` returns clean prose
+ * with that markup stripped.
  *
  * No yjs, no git, no case-2 sync. Every "commit" is a new uuid so clients
  * that cache by commit hash behave correctly.
@@ -162,9 +164,11 @@ async function walk(root: string): Promise<string[]> {
  * the final path component fails with ELOOP instead of being silently
  * dereferenced into (e.g.) `/etc/passwd`.
  */
-/** Largest file we're willing to read into memory. See MAX_DISK_BYTES in
- *  persistence-schemas.ts for the matching "structured" cap. */
-const MAX_FILE_BYTES = 4 * 1024 * 1024;
+/** Largest file we're willing to read into memory. Inline review state now
+ *  lives in the doc itself, so a doc with many threads (each carrying up to a
+ *  1MB draft) is larger than clean prose alone — the cap is sized to hold a
+ *  realistic annotated doc while still bounding a pathological read. */
+const MAX_FILE_BYTES = 16 * 1024 * 1024;
 
 async function readFileNoFollow(abs: string): Promise<string> {
   const fh = await fs.open(
@@ -196,11 +200,20 @@ async function writeFileNoFollow(abs: string, content: string): Promise<void> {
     if (e instanceof McpError) throw e;
     // ENOENT is fine — we're about to create.
   }
+  // Write a sibling temp file, then rename over `abs`. A doc's prose and all
+  // its threads now share one file, so an in-place O_TRUNC write torn mid-way
+  // would lose both; rename is atomic, so a concurrent reader (or a crash) sees
+  // either the old file or the fully-written new one, never a truncated hybrid.
+  // O_EXCL | O_NOFOLLOW keeps the temp create symlink-hostile, and the dot
+  // prefix keeps a leftover temp out of the vault walk.
+  const dir = path.dirname(abs);
+  await fs.mkdir(dir, { recursive: true });
+  const tmp = path.join(dir, `.${path.basename(abs)}.tmp-${randomUUID()}`);
   const fh = await fs.open(
-    abs,
+    tmp,
     fsConstants.O_WRONLY |
       fsConstants.O_CREAT |
-      fsConstants.O_TRUNC |
+      fsConstants.O_EXCL |
       fsConstants.O_NOFOLLOW,
     0o644,
   );
@@ -208,6 +221,12 @@ async function writeFileNoFollow(abs: string, content: string): Promise<void> {
     await fh.writeFile(content, "utf8");
   } finally {
     await fh.close();
+  }
+  try {
+    await fs.rename(tmp, abs);
+  } catch (e) {
+    await fs.rm(tmp, { force: true });
+    throw e;
   }
 }
 
@@ -354,6 +373,75 @@ export class StubBackend implements Backend {
     await fs.mkdir(p, { recursive: true });
   }
 
+  /** Null on any read failure — for discovery/listing, where one bad doc must
+   *  not abort the whole walk. */
+  private async readRawMaybe(abs: string): Promise<string | null> {
+    try {
+      return await readFileNoFollow(abs);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Read a doc we're about to rewrite. Returns null only when the file is
+   * genuinely absent (ENOENT); any other failure (e.g. it exceeds the read cap)
+   * is rethrown, so a rewrite never silently overwrites a doc's threads with an
+   * empty endmatter just because its bytes couldn't be read.
+   */
+  private async readRawForRewrite(abs: string): Promise<string | null> {
+    try {
+      return await readFileNoFollow(abs);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException)?.code === "ENOENT") return null;
+      throw e;
+    }
+  }
+
+  private homeAbs(p: DocPath, draftId?: DraftId): string {
+    return draftId ? this.absDraft(draftId, p) : this.absMain(p);
+  }
+
+  /**
+   * Write clean prose while preserving the threads already homed in the doc, so
+   * a prose change never drops them. Used by `writeDoc`/`editDoc`/`merge`.
+   */
+  private async persistDoc(
+    abs: string,
+    prose: string,
+    homePath: DocPath,
+    draftId?: DraftId,
+  ): Promise<void> {
+    const raw = await this.readRawForRewrite(abs);
+    const existing = raw ? parseReviewDoc(raw, draftId).threads : [];
+    await this.ensureDir(path.dirname(abs));
+    await writeFileNoFollow(abs, serializeReviewDoc(prose, existing, homePath));
+  }
+
+  /**
+   * Every doc file that may carry threads — visible vault docs and per-draft
+   * overrides under `.drafts/`. The file's location is authoritative for a
+   * thread's `draft_id`.
+   */
+  private async allReviewDocFiles(): Promise<
+    { abs: string; homePath: DocPath; draftId?: DraftId }[]
+  > {
+    const out: { abs: string; homePath: DocPath; draftId?: DraftId }[] = [];
+    for (const f of await walk(this.root)) {
+      if (!f.endsWith(".md")) continue;
+      out.push({ abs: f, homePath: path.relative(this.root, f).replace(/\\/g, "/") });
+    }
+    const draftsRoot = path.join(this.root, ".drafts");
+    for (const f of await walk(draftsRoot)) {
+      if (!f.endsWith(".md")) continue;
+      const parts = path.relative(draftsRoot, f).split(path.sep);
+      const draftId = parts[0];
+      if (!draftId || !DRAFT_ID_RE.test(draftId)) continue;
+      out.push({ abs: f, homePath: parts.slice(1).join("/"), draftId });
+    }
+    return out;
+  }
+
   private async readOpLog(): Promise<OpLog> {
     if (this.opLogCache) return this.opLogCache;
     try {
@@ -470,12 +558,19 @@ export class StubBackend implements Backend {
     const results: DocSummary[] = [];
     for (const f of files) {
       if (!f.endsWith(".md")) continue;
+      // Skip an unreadable/oversized doc rather than aborting the whole listing.
+      const raw = await this.readRawMaybe(f);
+      if (raw === null) continue;
+      let stat: import("node:fs").Stats;
+      try {
+        stat = await fs.lstat(f);
+      } catch {
+        continue;
+      }
       const rel = path.relative(this.root, f).replace(/\\/g, "/");
-      const stat = await fs.lstat(f);
-      const md = await readFileNoFollow(f);
       results.push({
         path: rel,
-        title: titleFromMd(md, path.basename(f, ".md")),
+        title: titleFromMd(cleanProse(raw), path.basename(f, ".md")),
         updated_at: stat.mtimeMs,
       });
     }
@@ -503,12 +598,18 @@ export class StubBackend implements Backend {
     const overridden = new Map<DocPath, DocSummary>();
     for (const f of draftFiles) {
       if (!f.endsWith(".md")) continue;
+      const raw = await this.readRawMaybe(f);
+      if (raw === null) continue;
+      let stat: import("node:fs").Stats;
+      try {
+        stat = await fs.lstat(f);
+      } catch {
+        continue;
+      }
       const rel = path.relative(draftBase, f).replace(/\\/g, "/");
-      const stat = await fs.lstat(f);
-      const md = await readFileNoFollow(f);
       overridden.set(rel, {
         path: rel,
-        title: titleFromMd(md, path.basename(f, ".md")),
+        title: titleFromMd(cleanProse(raw), path.basename(f, ".md")),
         updated_at: stat.mtimeMs,
       });
     }
@@ -648,13 +749,15 @@ export class StubBackend implements Backend {
         origin = "main";
       }
     }
-    let md: string;
+    let raw: string;
     try {
-      md = await readFileNoFollow(abs);
+      raw = await readFileNoFollow(abs);
     } catch (e) {
       if (e instanceof McpError) throw e;
       throw err.docNotFound(p);
     }
+    // The on-disk file carries inline review markup; readers see clean prose.
+    const md = cleanProse(raw);
     // Initialize the counter the first time we surface a doc with prose. The
     // counter is keyed off the workspace-relative path so drafts and main
     // share the same counter (the doc's identity is the path, not the ref).
@@ -677,53 +780,16 @@ export class StubBackend implements Backend {
       assertVaultPath(to);
       if (from === to) return [];
 
-      // `from`/`to` may be a single doc or a folder — `remapRenamedPath`
-      // covers both, so a folder rename reconciles every descendant in one
-      // pass. The vault has already moved the bytes on disk (a folder rename
-      // carries the `.threads` sidecars with it; a file rename leaves them
-      // behind). Either way we re-derive each sidecar's home from its rewritten
-      // target path, so the same routine lands both shapes correctly.
+      // `from`/`to` may name a single doc or a whole folder — `remapRenamedPath`
+      // covers both, reconciling every descendant in one pass. The vault has
+      // already moved the visible bytes, and a doc's threads now travel inside
+      // its `.md` (no sidecars), so we only fix what the vault can't see: our
+      // hidden `.drafts/` overrides, the per-doc counters, and the target paths
+      // recorded inside each doc's review endmatter.
 
-      // 1. Rewrite every thread (main + draft-scoped) with a target at or under
-      //    `from`. `saveThread` derives the sidecar location from
-      //    `targets[0].path`, so rewriting before saving moves the file to its
-      //    new home; we delete whatever stale copy `allThreadFiles` found.
-      const moved: { id: ThreadId; target_paths: DocPath[] }[] = [];
-      const staleDirs = new Set<string>();
-      for (const f of await this.allThreadFiles()) {
-        const raw = await readFileNoFollow(f);
-        const validated = threadOnDiskSchema.safeParse(yaml.parse(raw));
-        if (!validated.success) continue; // skip drifted/corrupt sidecar
-        const t = validated.data as Thread;
-        const next = t.targets.map((tg) => ({
-          tg,
-          path: remapRenamedPath(tg.path, from, to),
-        }));
-        if (!next.some((n) => n.path !== null)) continue;
-        t.draft_id = this.draftIdFromFilePath(f);
-        t.targets = next.map(({ tg, path: np }) =>
-          np === null ? tg : { ...tg, path: np },
-        ) as Thread["targets"];
-        staleDirs.add(path.dirname(f));
-        await fs.rm(f, { force: true });
-        await this.saveThread(t);
-        moved.push({ id: t.id, target_paths: t.targets.map((tg) => tg.path) });
-      }
-      // Best-effort cleanup of any now-empty `.threads/` dir we emptied (a
-      // no-op when the sidecar's new home is the same dir, e.g. a folder
-      // rename where the tree already moved underneath us).
-      for (const dir of staleDirs) {
-        await fs.rmdir(dir).catch(() => {});
-      }
-
-      // 2. Carry per-doc version counters + history onto their new paths (the
-      //    doc's identity is its path). Don't clobber an existing destination.
-      this.remapMapKeys(this.versionCounters, from, to);
-      this.remapMapKeys(this.versionHistory, from, to);
-
-      // 3. Repoint any draft whose `base_path`/`touches` sits under `from`, and
-      //    move its override `.md` working copies (under `.drafts/`, which the
-      //    vault never touches) to match.
+      // 1. Repoint each draft's meta and move its override `.md` working copies
+      //    under `.drafts/` (the vault never touches that hidden tree). Do this
+      //    before the endmatter remap so overrides sit at their new paths.
       for (const d of await this.listDrafts()) {
         const meta = await this.loadDraftMeta(d.draft_id);
         const touches = meta.touches ?? [meta.base_path];
@@ -758,6 +824,48 @@ export class StubBackend implements Backend {
         }
         if (metaChanged) await this.saveDraftMeta(meta);
       }
+
+      // 2. Rewrite the target paths stored in every doc's endmatter. The byte
+      //    move already carried each home doc (threads and all) to its new
+      //    path; only the paths recorded inside the records are stale.
+      const moved: { id: ThreadId; target_paths: DocPath[] }[] = [];
+      for (const file of await this.allReviewDocFiles()) {
+        // Fail loud on a non-ENOENT read error (oversized doc, EIO) instead of
+        // silently skipping: the vault already moved the bytes, so skipping
+        // would strand this doc's stored target paths at the old location.
+        // ENOENT (the file vanished) is the one benign case — skip it.
+        const raw = await this.readRawForRewrite(file.abs);
+        if (raw === null) continue;
+        const { prose, threads } = parseReviewDoc(raw, file.draftId);
+        let changed = false;
+        for (const t of threads) {
+          let tChanged = false;
+          t.targets = t.targets.map((tg) => {
+            const np = remapRenamedPath(tg.path, from, to);
+            if (np === null) return tg;
+            tChanged = true;
+            return { ...tg, path: np };
+          }) as Thread["targets"];
+          if (tChanged) {
+            changed = true;
+            moved.push({
+              id: t.id,
+              target_paths: t.targets.map((tg) => tg.path),
+            });
+          }
+        }
+        if (changed) {
+          await writeFileNoFollow(
+            file.abs,
+            serializeReviewDoc(prose, threads, file.homePath),
+          );
+        }
+      }
+
+      // 3. Carry per-doc version counters + history onto their new paths (the
+      //    doc's identity is its path). Don't clobber an existing destination.
+      this.remapMapKeys(this.versionCounters, from, to);
+      this.remapMapKeys(this.versionHistory, from, to);
 
       // 4. Tell every consumer (UI panels + the connected agent) the threads
       //    now live on their new paths so they re-resolve.
@@ -801,18 +909,14 @@ export class StubBackend implements Backend {
       this.cachedWrite(opId, async () => {
         assertVaultPath(p);
         if (ref === "main") {
-          const abs = this.absMain(p);
-          await this.ensureDir(path.dirname(abs));
-          await writeFileNoFollow(abs, content);
+          await this.persistDoc(this.absMain(p), content, p);
           bumpCounter(this.versionCounters, p);
           this.emit({ kind: "doc_changed", path: p }, origin);
           return { version_token: `v-${sha(content).slice(0, 12)}` };
         }
         assertDraftRef(ref);
         await this.loadDraftMeta(ref);
-        const abs = this.absDraft(ref, p);
-        await this.ensureDir(path.dirname(abs));
-        await writeFileNoFollow(abs, content);
+        await this.persistDoc(this.absDraft(ref, p), content, p, ref);
         await this.addTouches(ref, [p]);
         const result: WriteResult = {
           version_token: `v-${sha(content).slice(0, 12)}`,
@@ -863,16 +967,12 @@ export class StubBackend implements Backend {
             current.md.slice(first + oldString.length);
         }
         if (ref === "main") {
-          const abs = this.absMain(p);
-          await this.ensureDir(path.dirname(abs));
-          await writeFileNoFollow(abs, next);
+          await this.persistDoc(this.absMain(p), next, p);
           bumpCounter(this.versionCounters, p);
           this.emit({ kind: "doc_changed", path: p }, origin);
           return { version_token: `v-${sha(next).slice(0, 12)}` };
         }
-        const abs = this.absDraft(ref, p);
-        await this.ensureDir(path.dirname(abs));
-        await writeFileNoFollow(abs, next);
+        await this.persistDoc(this.absDraft(ref, p), next, p, ref);
         await this.addTouches(ref, [p]);
         const result: WriteResult = {
           version_token: `v-${sha(next).slice(0, 12)}`,
@@ -1139,8 +1239,16 @@ export class StubBackend implements Backend {
       const versions: { path: DocPath; from: number; to: number }[] = [];
       const acceptedAt = Date.now();
       for (const plan of plans) {
-        await this.ensureDir(path.dirname(plan.dest));
-        await copyFileNoFollow(plan.src, plan.dest);
+        // Land the draft's clean prose on main (its review markup stays behind
+        // in the draft override); preserve any threads already homed on main.
+        // `plan.src` was lstat-confirmed as a file, so a non-ENOENT read
+        // failure (oversized, EIO) must abort rather than land empty prose on
+        // main and wipe it — `readRawForRewrite` rethrows those. A rare ENOENT
+        // race (the override vanished mid-merge) skips this path, never blanks.
+        const draftRaw = await this.readRawForRewrite(plan.src);
+        if (draftRaw === null) continue;
+        const draftProse = cleanProse(draftRaw);
+        await this.persistDoc(plan.dest, draftProse, plan.rel);
         const from = this.versionCounters.get(plan.rel) ?? baseVersion;
         const to = from + 1;
         this.versionCounters.set(plan.rel, to);
@@ -1208,19 +1316,12 @@ export class StubBackend implements Backend {
     const out: { path: DocPath; main_md: string; draft_md: string }[] = [];
     for (const rel of touches) {
       if (!rel.endsWith(".md")) continue;
-      let main_md = "";
-      try {
-        main_md = await readFileNoFollow(this.absMain(rel));
-      } catch {
-        main_md = "";
-      }
-      let draft_md = main_md;
-      try {
-        draft_md = await readFileNoFollow(safeJoin(draftRoot, rel));
-      } catch {
-        // No override on disk — the path was added to touches by addThread
-        // without an edit landing yet. Show main bytes on both sides.
-      }
+      const mainRaw = await this.readRawMaybe(this.absMain(rel));
+      const main_md = mainRaw !== null ? cleanProse(mainRaw) : "";
+      const draftRaw = await this.readRawMaybe(safeJoin(draftRoot, rel));
+      // No override on disk — the path was added to touches by addThread
+      // without an edit landing yet. Show main prose on both sides.
+      const draft_md = draftRaw !== null ? cleanProse(draftRaw) : main_md;
       out.push({ path: rel, main_md, draft_md });
     }
     return out.sort((a, b) => a.path.localeCompare(b.path));
@@ -1267,66 +1368,46 @@ export class StubBackend implements Backend {
     return out.sort((a, b) => b.created_at - a.created_at);
   }
 
-  private threadSidecarPath(homeDoc: DocPath, t: Thread): string {
-    assertVaultPath(homeDoc);
-    assertThreadId(t.id);
-    const base = homeDoc.replace(/\.md$/, ".threads");
-    const rel = `${base}/${t.id}.yaml`;
-    if (t.draft_id) {
-      assertDraftId(t.draft_id);
-      const draftRoot = path.join(this.root, ".drafts", t.draft_id);
-      return safeJoin(draftRoot, rel);
-    }
-    return safeJoin(this.root, rel);
-  }
-
-  private async allThreadFiles(): Promise<string[]> {
-    // Main sidecars live next to their docs anywhere in the visible vault;
-    // `walk(root)` skips dot-dirs (including `.drafts`), so draft-scoped
-    // sidecars are gathered separately from the draft tree.
-    const mainFiles = await walk(this.root);
-    const draftFiles = await walk(path.join(this.root, ".drafts"));
-    return [...mainFiles, ...draftFiles].filter((f) =>
-      /\.threads\/thrd_[A-Za-z0-9-]+\.yaml$/.test(f),
-    );
-  }
-
-  // The file's on-disk location is authoritative: a thread under .drafts/<id>/
-  // is scoped to that draft, everything else is main. The YAML may carry a
-  // stale draft_id from a pre-fix run; trust the path instead.
-  private draftIdFromFilePath(file: string): DraftId | undefined {
-    const rel = path.relative(this.root, file);
-    const parts = rel.split(path.sep);
-    if (parts[0] !== ".drafts") return undefined;
-    const id = parts[1];
-    return id && DRAFT_ID_RE.test(id) ? id : undefined;
-  }
-
   private async loadThread(id: ThreadId): Promise<Thread> {
     assertThreadId(id);
-    const files = await this.allThreadFiles();
-    for (const f of files) {
-      if (path.basename(f) === `${id}.yaml`) {
-        const raw = await readFileNoFollow(f);
-        const validated = threadOnDiskSchema.safeParse(yaml.parse(raw));
-        if (!validated.success) throw err.threadNotFound(id);
-        const t = validated.data as Thread;
-        t.draft_id = this.draftIdFromFilePath(f);
-        return t;
-      }
+    for (const file of await this.allReviewDocFiles()) {
+      const raw = await this.readRawMaybe(file.abs);
+      if (raw === null) continue;
+      const { threads } = parseReviewDoc(raw, file.draftId);
+      const found = threads.find((t) => t.id === id);
+      if (found) return found;
     }
     throw err.threadNotFound(id);
   }
 
+  /**
+   * Upsert a thread into its home doc's endmatter (home = `targets[0].path`, on
+   * `main` or the draft override). A not-yet-materialized draft override is
+   * seeded from the draft's current view so the thread has prose to anchor to.
+   */
   private async saveThread(t: Thread): Promise<void> {
     if (t.targets.length === 0) {
       throw new McpError("invalid_path", "thread has no targets to save");
     }
-    assertVaultPath(t.targets[0].path);
+    const homePath = t.targets[0].path;
+    assertVaultPath(homePath);
     assertThreadId(t.id);
-    const sidecar = this.threadSidecarPath(t.targets[0].path, t);
-    await this.ensureDir(path.dirname(sidecar));
-    await writeFileNoFollow(sidecar, yaml.stringify(t));
+    const abs = this.homeAbs(homePath, t.draft_id);
+    const raw = await this.readRawForRewrite(abs);
+    let prose: string;
+    let threads: Thread[];
+    if (raw !== null) {
+      ({ prose, threads } = parseReviewDoc(raw, t.draft_id));
+    } else {
+      // A missing file is only legitimate for a not-yet-materialized override.
+      prose = (await this.readDoc(homePath, t.draft_id ?? "main")).md;
+      threads = [];
+    }
+    const next = [...threads.filter((x) => x.id !== t.id), t].sort(
+      (a, b) => a.created - b.created,
+    );
+    await this.ensureDir(path.dirname(abs));
+    await writeFileNoFollow(abs, serializeReviewDoc(prose, next, homePath));
   }
 
   async listThreads(opts: {
@@ -1334,32 +1415,30 @@ export class StubBackend implements Backend {
     thread_id?: ThreadId;
     ref?: Ref;
   }): Promise<ThreadSummary[]> {
-    const files = await this.allThreadFiles();
     const wantDraftId =
       opts.ref === undefined || opts.ref === "main" ? undefined : opts.ref;
     const out: ThreadSummary[] = [];
-    for (const f of files) {
-      const raw = await readFileNoFollow(f);
-      const validated = threadOnDiskSchema.safeParse(yaml.parse(raw));
-      if (!validated.success) continue; // skip drifted/corrupt sidecar
-      const t = validated.data as Thread;
-      const draftId = this.draftIdFromFilePath(f);
-      if (opts.thread_id && t.id !== opts.thread_id) continue;
-      if (opts.ref !== undefined && draftId !== wantDraftId) continue;
-      const paths = t.targets.map((tg) => tg.path);
-      if (opts.path && !paths.includes(opts.path)) continue;
-      const last = t.messages[t.messages.length - 1];
-      out.push({
-        id: t.id,
-        status: t.status,
-        created: t.created,
-        draft_id: draftId,
-        target_paths: paths,
-        message_count: t.messages.length,
-        last_message_preview: last
-          ? last.body.slice(0, 120)
-          : "",
-      });
+    for (const file of await this.allReviewDocFiles()) {
+      // The file's location is authoritative for a thread's draft scoping.
+      if (opts.ref !== undefined && file.draftId !== wantDraftId) continue;
+      const raw = await this.readRawMaybe(file.abs);
+      if (raw === null) continue;
+      const { threads } = parseReviewDoc(raw, file.draftId);
+      for (const t of threads) {
+        if (opts.thread_id && t.id !== opts.thread_id) continue;
+        const paths = t.targets.map((tg) => tg.path);
+        if (opts.path && !paths.includes(opts.path)) continue;
+        const last = t.messages[t.messages.length - 1];
+        out.push({
+          id: t.id,
+          status: t.status,
+          created: t.created,
+          draft_id: file.draftId,
+          target_paths: paths,
+          message_count: t.messages.length,
+          last_message_preview: last ? last.body.slice(0, 120) : "",
+        });
+      }
     }
     return out.sort((a, b) => b.created - a.created);
   }

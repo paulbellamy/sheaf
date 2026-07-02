@@ -26,6 +26,7 @@ export type {
 
 export { defaultStyleConfig } from "../style/profile";
 export { remapRenamedPath } from "../paths";
+export { stripReviewMarkup, cleanOffset } from "../rfm/index";
 
 export type Ref = "main" | string;
 
@@ -260,14 +261,15 @@ export interface Backend {
   readDoc(path: DocPath, ref?: Ref): Promise<DocContent>;
 
   /**
-   * Reconcile sheaf's sidecar state after a rename `from` → `to`. `from`/`to`
+   * Reconcile sheaf's review state after a rename `from` → `to`. `from`/`to`
    * may name a single doc OR a folder — a folder rename reconciles every
    * descendant in one pass (see `remapRenamedPath`).
    *
    * The byte move itself is the caller's job (in the Obsidian prototype the
-   * vault renames out from under us); this only fixes the metadata that would
-   * otherwise orphan: thread sidecars and their stored target paths, per-doc
-   * version counters/history, and any draft whose `base_path`/`touches` sat
+   * vault renames out from under us). A doc's threads travel inline with its
+   * `.md`, so this only fixes what the move can't: the target paths recorded
+   * inside each doc's review endmatter, per-doc version counters/history, the
+   * hidden `.drafts/` overrides, and any draft whose `base_path`/`touches` sat
    * under `from`. Emits a `thread_changed` for every moved thread so the UI
    * and the connected agent re-resolve against the new paths.
    *

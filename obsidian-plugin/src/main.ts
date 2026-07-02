@@ -9,6 +9,8 @@ import {
   TFolder,
 } from "obsidian";
 
+import { cleanOffset } from "sheaf-server/types";
+
 import { SheafApiError, SheafClient } from "./sheaf-client";
 import { SheafEventStream, type BackendEvent } from "./sheaf-events";
 import { SheafServerHost } from "./sheaf-server-host";
@@ -163,8 +165,9 @@ export default class SheafPlugin extends Plugin {
       }),
     );
 
-    // A vault rename moves the `.md` but leaves sheaf's sidecars (threads,
-    // version history, drafts) pinned to the old path. Reconcile them on the
+    // A vault rename moves the `.md` (threads travel inline with it), but the
+    // target paths recorded in its endmatter, the version history, and the
+    // hidden draft overrides stay pinned to the old path. Reconcile them on the
     // server — which also wakes the connected agent — and follow the rename in
     // the open threads panel so it doesn't go blank on the now-stale path.
     this.registerEvent(
@@ -642,8 +645,13 @@ export default class SheafPlugin extends Plugin {
     const fromOff = editor.posToOffset(editor.getCursor("from"));
     const toOff = editor.posToOffset(editor.getCursor("to"));
     if (Number.isNaN(fromOff) || Number.isNaN(toOff)) return null;
-    if (toOff < fromOff) return { from: toOff, to: fromOff };
-    return { from: fromOff, to: toOff };
+    const lo = Math.min(fromOff, toOff);
+    const hi = Math.max(fromOff, toOff);
+    // The editor buffer carries inline review markup, but the server anchors
+    // against the clean prose `readDoc` returns — map the offsets into
+    // clean-prose space (a no-op until the note has its first thread).
+    const buf = editor.getValue();
+    return { from: cleanOffset(buf, lo), to: cleanOffset(buf, hi) };
   }
 
   private dispatchEvent(event: BackendEvent): void {

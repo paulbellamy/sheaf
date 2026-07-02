@@ -7,7 +7,7 @@ import {
   Notice,
 } from "obsidian";
 import type { EditorView } from "@codemirror/view";
-import { remapRenamedPath } from "sheaf-server/types";
+import { remapRenamedPath, stripReviewMarkup } from "sheaf-server/types";
 import type SheafPlugin from "../main";
 import type { Thread, ThreadDraftBody } from "../sheaf-client";
 import { renderCommandRow } from "../command-row";
@@ -152,9 +152,18 @@ export class ThreadsView extends ItemView {
       return;
     }
 
-    const docText = editor.getValue();
     const anchored = target.anchor.anchored_text;
     if (!anchored) return;
+    // Drift is judged against the *clean* prose (`this.docText`), but the raw
+    // editor value still contains the anchored text inside the endmatter's
+    // stored `anchored_text:` copy — so searching the raw value for a drifted
+    // thread would scroll into the YAML block, contradicting the "⚠ anchor
+    // drifted" badge on this very card. Bail with the same notice instead.
+    if (isDrifted(thread, this.docText)) {
+      new Notice("Anchor drifted — text not in doc", 4000);
+      return;
+    }
+    const docText = editor.getValue();
     const idx = docText.indexOf(anchored);
     if (idx === -1) {
       new Notice("Anchor drifted — text not in doc", 4000);
@@ -444,7 +453,12 @@ export class ThreadsView extends ItemView {
   private async refreshDocText(): Promise<void> {
     if (!this.currentFile) return;
     try {
-      this.docText = await this.app.vault.cachedRead(this.currentFile);
+      // Strip the inline markup + endmatter so drift detection matches
+      // `anchored_text` against clean prose, not the markers or the endmatter's
+      // own stored copies of the anchor text (which would mask a real drift).
+      this.docText = stripReviewMarkup(
+        await this.app.vault.cachedRead(this.currentFile),
+      );
       this.render();
     } catch (err) {
       console.error("sheaf: read file failed", err);
