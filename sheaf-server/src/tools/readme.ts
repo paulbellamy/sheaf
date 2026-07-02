@@ -165,23 +165,33 @@ show "agent working", so this convention also keeps the UI honest.
 
 ## Subscribe to events
 
-Run this once with the \`Monitor\` tool. It connects to the SSE event stream
-and emits one JSON line per event; \`Monitor\` wakes the session on each line:
+Run this once with the \`Monitor\` tool. It connects to the SSE event stream,
+strips keep-alive pings, and **debounces**: it holds events until the stream
+has been quiet for 10s, then emits the whole batch at once. So a user typing
+rapidly — many \`thread_changed\` / \`doc_changed\` events in quick succession —
+wakes you a single time with the complete picture, not once per keystroke:
 
 \`\`\`
 Monitor({
-  command: "while true; do curl -sN 'http://localhost:31415/api/ui/drafts/stream?role=agent' | sed -n -u 's/^data: //p'; sleep 1; done",
+  command: 'while true; do curl -sN "http://localhost:31415/api/ui/drafts/stream?role=agent" | sed -n -u "s/^data: //p" | while :; do IFS= read -r -t 10 line; rc=$?; if [ $rc = 0 ]; then buf+=("$line"); elif [ $rc -gt 128 ]; then [ \${#buf[@]} -gt 0 ] && { printf "%s\\\\n" "\${buf[@]}"; buf=(); }; else [ \${#buf[@]} -gt 0 ] && printf "%s\\\\n" "\${buf[@]}"; break; fi; done; sleep 1; done',
   description: "sheaf events",
   persistent: true,
 })
 \`\`\`
+
+The \`read -t 10\` waits up to 10s for the next event; a timeout means the
+stream went quiet, so it flushes the buffered batch. On disconnect it flushes
+whatever it has and reconnects (\`sleep 1\`). Lower the \`10\` if you want to
+react faster at the cost of more, smaller wake-ups.
 
 Use the **same host:port you reached this MCP server on** — the example uses
 the Obsidian-plugin default (\`localhost:31415\`); the web prototype runs on
 \`localhost:3000\`. The \`role=agent\` query param is what makes the user's
 plugin show "agent connected" in its status bar — keep it.
 
-Each notification is one event of the form:
+Because of the debounce, a single wake-up may carry **one or more** event
+lines (the batch that arrived during the quiet window). Handle each line
+independently; each is an event of the form:
 
 \`\`\`
 {"kind":"thread_changed","thread_id":"thrd_...","target_paths":["notes/foo.md"]}
