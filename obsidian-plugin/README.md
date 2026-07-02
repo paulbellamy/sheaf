@@ -59,12 +59,17 @@ to "agent connected".
 ## Use
 
 1. Open a markdown file under your vault.
-2. Select a passage you want the agent to work on.
-3. Right-click → "Sheaf: Comment for agent" (or command palette →
-   "Sheaf: Comment for agent").
+2. Select a passage you want the agent to work on. This works in **editing and
+   reading modes** alike.
+3. Right-click → "Sheaf: Comment for agent" (or the command palette / the
+   `Cmd/Ctrl+Shift+M` hotkey — both work in reading mode too).
 4. Type the brief, hit Send.
 5. Watch the right-panel threads view and your editor. Within seconds the
    agent should pick up the thread, edit the doc, and tick the thread off.
+
+In reading mode the comment is pinned by locating your highlighted text in the
+doc; if it can't be pinned to one spot (the selection spans formatting or the
+text repeats non-uniquely) it's posted as a doc-level comment instead.
 
 ## Inline review markup
 
