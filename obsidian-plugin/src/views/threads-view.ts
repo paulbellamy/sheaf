@@ -11,6 +11,7 @@ import { remapRenamedPath, stripReviewMarkup } from "sheaf-server/types";
 import type SheafPlugin from "../main";
 import type { Thread, ThreadDraftBody } from "../sheaf-client";
 import { renderCommandRow } from "../command-row";
+import { agentConnectPrompt } from "../connect-prompt";
 import { flashRange } from "../editor/flash";
 import {
   REVIEW_AUTHOR_PREFIX,
@@ -736,10 +737,9 @@ export class ThreadsView extends ItemView {
     then.style.margin = "0.5em 0 0.3em";
     then.setText("Run claude, then paste this to put it to work:");
 
-    renderCommandRow(
-      panel,
-      "use the sheaf MCP and watch for events; action and resolve each thread as it appears, and keep handling new ones until I stop you",
-    );
+    // Name the open doc so the agent starts on the thread the user is looking at
+    // (like the ACP prompt names its doc) while still watching the whole vault.
+    renderCommandRow(panel, agentConnectPrompt(this.currentDocPath));
   }
 
   private renderThread(parent: HTMLElement, thread: Thread): void {
