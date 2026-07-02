@@ -100,4 +100,27 @@ describe("serializeReviewDoc anchor rebasing", () => {
     // Record is still stored, offsets untouched (not rebased to nonsense).
     expect(anchorOffsets(parseReviewDoc(raw).threads, A)).toEqual({ from: 3, to: 9 });
   });
+
+  it("rebases only the rendered target, not a second range target on the same doc", () => {
+    // The inline span is rendered from the FIRST home-path range target; a
+    // second range target on the same doc has no placement of its own, so its
+    // rel_pos must be left alone (rewriting it would stamp the first span's
+    // offsets over an anchor that still points elsewhere).
+    const prose = "keep foo and bar please"; // foo@[5,8), bar@[13,16)
+    const t: Thread = {
+      id: A,
+      created: 1,
+      status: "open",
+      targets: [
+        { path: HOME, scope: "range", anchor: { rel_pos: encodeRelPos(5, 8), content_hash: "h", anchored_text: "foo", context_before: "", context_after: "" } },
+        { path: HOME, scope: "range", anchor: { rel_pos: encodeRelPos(13, 16), content_hash: "h", anchored_text: "bar", context_before: "", context_after: "" } },
+      ],
+      messages: [{ author: "user", ts: 1, body: "note" }],
+    };
+    const parsed = parseReviewDoc(serializeReviewDoc(prose, [t], HOME)).threads[0];
+    const [t0, t1] = parsed.targets;
+    if (t0.scope !== "range" || t1.scope !== "range") throw new Error("shape");
+    expect(decodeRelPos(t0.anchor.rel_pos)).toEqual({ from: 5, to: 8 }); // foo, rebased (no drift)
+    expect(decodeRelPos(t1.anchor.rel_pos)).toEqual({ from: 13, to: 16 }); // bar, untouched
+  });
 });

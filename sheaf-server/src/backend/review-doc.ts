@@ -145,11 +145,15 @@ function encodeRelPos(from: number, to: number): string {
  * `id` (the map key) and `draft_id` (location-derived) are omitted; `by`/`at`
  * mirror the root message for roughdraft interop and are ignored on read.
  *
- * When `placement` is set, the home-path range target's `rel_pos` is rewritten
- * to the span's resolved offsets (the rebase; see `serializeReviewDoc`). Done
- * on a shallow copy so the caller's thread objects are never mutated. Offsets
- * that didn't drift re-encode to the identical bytes, so a no-drift save stays
- * byte-for-byte stable.
+ * When `placement` is set, it rewrites the `rel_pos` of the *one* target the
+ * inline span was rendered from — the first home-path range target, matching
+ * `serializeReviewDoc`'s own `find` (the rebase; see `serializeReviewDoc`).
+ * Only the first is touched: a thread with a second range target on the same
+ * doc has no second placement, so rewriting it too would stamp the first span's
+ * offsets over the second's (its own `anchored_text` still points elsewhere).
+ * Done on a shallow copy so the caller's thread objects are never mutated.
+ * Offsets that didn't drift re-encode to the identical bytes, so a no-drift
+ * save stays byte-for-byte stable.
  */
 function threadRecord(
   t: Thread,
@@ -157,19 +161,21 @@ function threadRecord(
   homePath: DocPath,
 ): Record<string, unknown> {
   const root = t.messages[0];
-  const targets = placement
-    ? t.targets.map((tg) =>
-        tg.scope === "range" && tg.path === homePath
-          ? {
-              ...tg,
-              anchor: {
-                ...tg.anchor,
-                rel_pos: encodeRelPos(placement.from, placement.to),
-              },
-            }
-          : tg,
-      )
-    : t.targets;
+  let rebased = false;
+  const targets =
+    placement === undefined
+      ? t.targets
+      : t.targets.map((tg) => {
+          if (rebased || tg.scope !== "range" || tg.path !== homePath) return tg;
+          rebased = true;
+          return {
+            ...tg,
+            anchor: {
+              ...tg.anchor,
+              rel_pos: encodeRelPos(placement.from, placement.to),
+            },
+          };
+        });
   return {
     by: root?.author ?? "agent",
     at: new Date(root?.ts ?? t.created).toISOString(),
