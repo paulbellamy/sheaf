@@ -15,10 +15,7 @@ import {
   DEFAULT_ACP_EFFORT,
 } from "./acp/registry";
 import { renderCommandRow } from "./command-row";
-
-/** The prompt the user pastes into a fresh `claude` session. */
-const AGENT_PROMPT =
-  "use the sheaf MCP and watch for events; action and resolve each thread as it appears, and keep handling new ones until I stop you";
+import { agentConnectPrompt } from "./connect-prompt";
 
 export type { StyleConfig } from "sheaf-server/types";
 
@@ -244,7 +241,15 @@ export class SheafSettingTab extends PluginSettingTab {
     cmds.style.gap = "0.4em";
     cmds.style.margin = "0 0 0.75em";
     renderCommandRow(cmds, `claude mcp add --transport http sheaf ${url}/api/mcp`);
-    renderCommandRow(cmds, AGENT_PROMPT);
+    // Point the agent at the markdown doc open behind the settings modal, if
+    // any — like the sidebar's connect panel does — so the pasted prompt starts
+    // it there. Non-markdown/no active file falls back to the whole-vault prompt.
+    const activeFile = this.app.workspace.getActiveFile();
+    const activeDoc =
+      activeFile && activeFile.extension === "md"
+        ? this.plugin.vaultPathToSheafPath(activeFile.path)
+        : null;
+    renderCommandRow(cmds, agentConnectPrompt(activeDoc));
 
     new Setting(containerEl)
       .setName("ACP agent")
