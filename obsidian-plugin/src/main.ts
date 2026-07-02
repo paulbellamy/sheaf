@@ -29,6 +29,7 @@ import { flashField, flashRange, mountFlashStyles } from "./editor/flash";
 import {
   reviewMarkupExtension,
   mountReviewMarkupStyles,
+  setResolvedThreadIds,
 } from "./editor/review-markup";
 import type { EditorView } from "@codemirror/view";
 import { AcpController } from "./acp/controller";
@@ -650,6 +651,27 @@ export default class SheafPlugin extends Plugin {
       }
     });
     return found;
+  }
+
+  /**
+   * Tell every open editor for `docPath` which of its threads are
+   * resolved/dismissed, so their inline anchor highlights drop (the markup
+   * itself stays in the file — resolving doesn't rewrite the doc). Called by the
+   * threads panel whenever it (re)loads a doc's threads.
+   */
+  setResolvedHighlights(docPath: string, resolvedIds: ReadonlySet<string>): void {
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      const v = leaf.view;
+      if (
+        !(v instanceof MarkdownView) ||
+        !v.file ||
+        this.vaultPathToSheafPath(v.file.path) !== docPath
+      ) {
+        return;
+      }
+      const cm = (v.editor as unknown as { cm?: EditorView }).cm;
+      cm?.dispatch({ effects: setResolvedThreadIds.of(resolvedIds) });
+    });
   }
 
   private computeCharRange(

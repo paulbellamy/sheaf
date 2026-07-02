@@ -422,6 +422,14 @@ export class ThreadsView extends ItemView {
     if (!this.currentDocPath) return;
     try {
       this.threads = await this.plugin.client.listThreads(this.currentDocPath);
+      // Drop the editor's anchor highlights for threads that are no longer open
+      // (resolved/dismissed); re-adds them if a thread was reopened.
+      this.plugin.setResolvedHighlights(
+        this.currentDocPath,
+        new Set(
+          this.threads.filter((t) => t.status !== "open").map((t) => t.id),
+        ),
+      );
       this.render();
     } catch (err) {
       console.error("sheaf: list threads failed", err);
