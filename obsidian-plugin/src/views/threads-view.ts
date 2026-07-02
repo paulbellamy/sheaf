@@ -422,6 +422,14 @@ export class ThreadsView extends ItemView {
     if (!this.currentDocPath) return;
     try {
       this.threads = await this.plugin.client.listThreads(this.currentDocPath);
+      // Drop the editor's anchor highlights for threads that are no longer open
+      // (resolved/dismissed); re-adds them if a thread was reopened.
+      this.plugin.setResolvedHighlights(
+        this.currentDocPath,
+        new Set(
+          this.threads.filter((t) => t.status !== "open").map((t) => t.id),
+        ),
+      );
       this.render();
     } catch (err) {
       console.error("sheaf: list threads failed", err);
@@ -496,28 +504,48 @@ export class ThreadsView extends ItemView {
     presenceRow.style.justifyContent = "space-between";
     presenceRow.style.gap = "0.5em";
 
+    const acpConnected = this.plugin.acpConnected();
+    // An agent attached over the sheaf-server `role=agent` channel (a manual
+    // `claude mcp add` / Monitor watcher), as opposed to the ACP subprocess the
+    // plugin spawns itself. When one is present the plugin shouldn't also spawn
+    // its own — so we surface it and lock the Connect button.
+    const externalConnected = this.plugin.agentConnected && !acpConnected;
+    const anyConnected = acpConnected || externalConnected;
+
     const presence = presenceRow.createDiv();
     presence.setText(
-      this.agentConnected ? "● agent connected" : "○ no agent listening",
+      acpConnected
+        ? "● agent connected"
+        : externalConnected
+          ? "● External agent connected"
+          : "○ no agent listening",
     );
     presence.style.fontSize = "0.85em";
-    presence.style.opacity = this.agentConnected ? "1" : "0.6";
-    presence.style.color = this.agentConnected
+    presence.style.opacity = anyConnected ? "1" : "0.6";
+    presence.style.color = anyConnected
       ? "var(--text-success)"
       : "var(--text-muted)";
 
     // Connect/disconnect the plugin-managed ACP agent. Labelled by ACP state
     // specifically (not the combined presence) — it only controls the
     // subprocess the plugin spawns, not a manually-attached MCP agent.
-    const acpConnected = this.plugin.acpConnected();
     const acpBtn = presenceRow.createEl("button", {
       text: acpConnected ? "Disconnect" : "Connect agent",
     });
     acpBtn.style.fontSize = "0.8em";
     acpBtn.style.flexShrink = "0";
-    acpBtn.title = acpConnected
-      ? "Stop the ACP agent the plugin started"
-      : "Start the configured ACP agent (Settings → Sheaf → ACP agent)";
+    if (externalConnected) {
+      // An external agent already owns the channel — disable rather than let the
+      // user spawn a competing one.
+      acpBtn.disabled = true;
+      acpBtn.style.opacity = "0.5";
+      acpBtn.title =
+        "An external agent is already connected — disconnect it to spawn the plugin's own";
+    } else {
+      acpBtn.title = acpConnected
+        ? "Stop the ACP agent the plugin started"
+        : "Start the configured ACP agent (Settings → Sheaf → ACP agent)";
+    }
     acpBtn.addEventListener("click", () => {
       if (this.plugin.acpConnected()) {
         this.plugin.disconnectAcp();

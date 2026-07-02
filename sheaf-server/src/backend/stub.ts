@@ -1447,6 +1447,36 @@ export class StubBackend implements Backend {
     return this.loadThread(id);
   }
 
+  /**
+   * Batch full-detail read — mirrors {@link listThreads}'s filtering/order but
+   * returns the whole parsed `Thread` (messages, targets, anchors, drafts)
+   * instead of a summary. Single pass over the review docs, so it avoids the
+   * N+1 file scans a ListThreads + per-id ReadThread loop would incur.
+   */
+  async readThreads(opts: {
+    path?: DocPath;
+    thread_id?: ThreadId;
+    ref?: Ref;
+  }): Promise<Thread[]> {
+    const wantDraftId =
+      opts.ref === undefined || opts.ref === "main" ? undefined : opts.ref;
+    const out: Thread[] = [];
+    for (const file of await this.allReviewDocFiles()) {
+      if (opts.ref !== undefined && file.draftId !== wantDraftId) continue;
+      const raw = await this.readRawMaybe(file.abs);
+      if (raw === null) continue;
+      const { threads } = parseReviewDoc(raw, file.draftId);
+      for (const t of threads) {
+        if (opts.thread_id && t.id !== opts.thread_id) continue;
+        if (opts.path && !t.targets.some((tg) => tg.path === opts.path)) {
+          continue;
+        }
+        out.push(t);
+      }
+    }
+    return out.sort((a, b) => b.created - a.created);
+  }
+
   addThread(opts: {
     targets: ThreadAnchor[];
     message: string;

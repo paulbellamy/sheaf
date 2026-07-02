@@ -6,12 +6,34 @@ import {
   WidgetType,
 } from "@codemirror/view";
 import type { DecorationSet, ViewUpdate } from "@codemirror/view";
-import type { Range } from "@codemirror/state";
+import { StateEffect, StateField } from "@codemirror/state";
+import type { Extension, Range } from "@codemirror/state";
 import {
   scanReviewMarkup,
   splitEndmatter,
   type ReviewMarkerGroup,
 } from "sheaf-server/types";
+
+const EMPTY_IDS: ReadonlySet<string> = new Set();
+
+/**
+ * The ids of threads that are resolved/dismissed (status ≠ open) in the doc
+ * shown in this editor. A resolved thread's inline markup stays in the file
+ * (resolve doesn't rewrite the doc), so we drop just its anchor highlight to
+ * de-emphasize it. The plugin dispatches {@link setResolvedThreadIds} whenever
+ * it (re)loads a doc's threads; until then the set is empty and everything
+ * highlights as before.
+ */
+export const setResolvedThreadIds =
+  StateEffect.define<ReadonlySet<string>>();
+
+const resolvedThreadIdsField = StateField.define<ReadonlySet<string>>({
+  create: () => EMPTY_IDS,
+  update(value, tr) {
+    for (const e of tr.effects) if (e.is(setResolvedThreadIds)) return e.value;
+    return value;
+  },
+});
 
 /**
  * Live-Preview rendering for sheaf's inline RFM review markup. A sheaf note
@@ -83,6 +105,7 @@ const HIDDEN = Decoration.replace({});
 function decorateGroup(
   g: ReviewMarkerGroup,
   doc: string,
+  resolved: boolean,
 ): Range<Decoration>[] | null {
   const out: Range<Decoration>[] = [];
   let crossesLine = false;
@@ -98,7 +121,9 @@ function decorateGroup(
   switch (g.kind) {
     case "comment":
       hide(g.start, g.keptStart); // `{==`
-      mark(g.keptStart, g.keptEnd, "sheaf-rfm-anchor");
+      // A resolved/dismissed comment keeps its 💬 chip but loses the highlight
+      // — the conversation is done, so the anchor reads as plain prose.
+      if (!resolved) mark(g.keptStart, g.keptEnd, "sheaf-rfm-anchor");
       hide(
         g.keptEnd,
         g.end, // `==}{>>…<<}{#id}` → 💬
@@ -141,12 +166,14 @@ function buildDecorations(view: EditorView): DecorationSet {
   const touchesSelection = (from: number, to: number): boolean =>
     sel.ranges.some((r) => r.from <= to && r.to >= from);
 
+  const resolved = view.state.field(resolvedThreadIdsField, false) ?? EMPTY_IDS;
+
   const ranges: Range<Decoration>[] = [];
   for (const g of scanReviewMarkup(doc.slice(0, bodyLen))) {
     // Reveal the raw markup while the caret/selection is on it, so the group
     // stays editable — same as Obsidian LP unfolding a link you click into.
     if (touchesSelection(g.start, g.end)) continue;
-    const decos = decorateGroup(g, doc);
+    const decos = decorateGroup(g, doc, resolved.has(g.id));
     if (decos) ranges.push(...decos);
   }
   // `true` = let CM sort; replace + mark ranges are disjoint but interleaved.
@@ -154,11 +181,10 @@ function buildDecorations(view: EditorView): DecorationSet {
 }
 
 /**
- * The editor extension. Register once (see main.ts) alongside the flash field.
- * Rebuilds on edits, viewport moves, and selection changes (the last so the
- * reveal-on-caret behaviour tracks the cursor).
+ * The decorator. Rebuilds on edits, viewport moves, selection changes (so the
+ * reveal-on-caret behaviour tracks the cursor), and resolved-set changes.
  */
-export const reviewMarkupExtension = ViewPlugin.fromClass(
+const reviewMarkupPlugin = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;
 
@@ -172,7 +198,11 @@ export const reviewMarkupExtension = ViewPlugin.fromClass(
         u.viewportChanged ||
         u.selectionSet ||
         u.startState.field(editorLivePreviewField, false) !==
-          u.state.field(editorLivePreviewField, false)
+          u.state.field(editorLivePreviewField, false) ||
+        // Resolved-set changed (a thread was resolved/reopened) → repaint so the
+        // affected anchor gains or loses its highlight without a doc edit.
+        u.startState.field(resolvedThreadIdsField, false) !==
+          u.state.field(resolvedThreadIdsField, false)
       ) {
         this.decorations = buildDecorations(u.view);
       }
@@ -180,6 +210,15 @@ export const reviewMarkupExtension = ViewPlugin.fromClass(
   },
   { decorations: (v) => v.decorations },
 );
+
+/**
+ * The editor extension: the resolved-ids state field plus the decorator view
+ * plugin. Register once (see main.ts) alongside the flash field.
+ */
+export const reviewMarkupExtension: Extension = [
+  resolvedThreadIdsField,
+  reviewMarkupPlugin,
+];
 
 /**
  * Inject the review-markup CSS. Mirrors `mountFlashStyles` (flash.ts): the

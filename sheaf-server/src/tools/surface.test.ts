@@ -20,6 +20,7 @@ const DRAFT_TOOLS = ["Fork", "Propose", "Merge", "DeclineDraft", "DraftChanges"]
 const THREAD_TOOLS = [
   "ListThreads",
   "ReadThread",
+  "ReadThreads",
   "AddThread",
   "ReplyThread",
   "AttachDraftPayload",

@@ -400,6 +400,19 @@ export interface Backend {
 
   readThread(id: ThreadId): Promise<Thread>;
 
+  /**
+   * Full detail (messages, targets, anchors, attached drafts) for every thread
+   * matching the filter — the batch form of {@link readThread}. Lets a caller
+   * pull a doc's whole thread set in one round trip instead of `listThreads`
+   * plus a `readThread` per id. Same filter/order semantics as
+   * {@link listThreads}.
+   */
+  readThreads(opts: {
+    path?: DocPath;
+    thread_id?: ThreadId;
+    ref?: Ref;
+  }): Promise<Thread[]>;
+
   addThread(opts: {
     targets: ThreadAnchor[];
     message: string;

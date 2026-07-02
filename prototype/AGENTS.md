@@ -12,15 +12,18 @@ path — the MCP `ReadMe` tool returns the exact one-liner on connect:
 
 ```
 Monitor({
-  command: "while true; do curl -sN 'http://localhost:3000/api/ui/drafts/stream?role=agent' | sed -n -u 's/^data: //p'; sleep 1; done",
+  command: 'while true; do curl -sN "http://localhost:3000/api/ui/drafts/stream?role=agent" | sed -n -u "s/^data: //p" | while :; do IFS= read -r -t 10 line; rc=$?; if [ $rc = 0 ]; then buf+=("$line"); elif [ $rc -gt 128 ]; then [ ${#buf[@]} -gt 0 ] && { printf "%s\\n" "${buf[@]}"; buf=(); }; else [ ${#buf[@]} -gt 0 ] && printf "%s\\n" "${buf[@]}"; break; fi; done; sleep 1; done',
   description: "sheaf events",
   persistent: true,
 })
 ```
 
 Swap the URL if sheaf isn't on `localhost:3000`. Keep `?role=agent` — it's what
-makes the plugin show "agent connected". Each notification is one `BackendEvent`
-JSON line (`thread_changed`, `doc_changed`, `draft_changed`, `draft_state`,
+makes the plugin show "agent connected". The inner `read -t 10` loop **debounces**:
+it buffers events and only emits them after the stream has been quiet for 10s, so
+a user typing rapidly wakes you once with the whole batch instead of once per
+event. Each wake-up is therefore one or more `BackendEvent` JSON lines
+(`thread_changed`, `doc_changed`, `draft_changed`, `draft_state`,
 `draft_created`, `draft_merged`, `agent_presence`). On `thread_changed`, call
 `ListThreads` / `ReadThread` via MCP. Stop with `TaskStop` when done.
 

@@ -2,6 +2,7 @@ import {
   Editor,
   FileSystemAdapter,
   MarkdownView,
+  Menu,
   Notice,
   Plugin,
   TAbstractFile,
@@ -9,7 +10,9 @@ import {
   TFolder,
 } from "obsidian";
 
-import { cleanOffset } from "sheaf-server/types";
+import { cleanOffset, stripReviewMarkup } from "sheaf-server/types";
+
+import { locateSelection } from "./editor/anchor-text";
 
 import { SheafApiError, SheafClient } from "./sheaf-client";
 import { SheafEventStream, type BackendEvent } from "./sheaf-events";
@@ -29,6 +32,7 @@ import { flashField, flashRange, mountFlashStyles } from "./editor/flash";
 import {
   reviewMarkupExtension,
   mountReviewMarkupStyles,
+  setResolvedThreadIds,
 } from "./editor/review-markup";
 import type { EditorView } from "@codemirror/view";
 import { AcpController } from "./acp/controller";
@@ -108,14 +112,18 @@ export default class SheafPlugin extends Plugin {
       callback: () => void this.activateActivityView(),
     });
 
+    // checkCallback (not editorCallback) so the command — and its hotkey — are
+    // available in reading mode too, where there is no CodeMirror editor. The
+    // handler branches on the view's mode to capture the selection either way.
     this.addCommand({
       id: "sheaf-comment-for-agent",
       name: "Comment for agent",
       hotkeys: [{ modifiers: ["Mod", "Shift"], key: "M" }],
-      editorCallback: (editor, view) => {
-        if (view instanceof MarkdownView) {
-          this.openCommentModal(editor, view);
-        }
+      checkCallback: (checking) => {
+        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!view?.file) return false;
+        if (!checking) void this.commentFromActiveView(view);
+        return true;
       },
     });
 
@@ -174,6 +182,42 @@ export default class SheafPlugin extends Plugin {
         });
       }),
     );
+
+    // Reading mode has no CodeMirror editor, so `editor-menu` never fires there.
+    // Take over the context menu for a text selection inside a reading view to
+    // offer the same "Comment for agent" action (plus Copy, so the native
+    // affordance isn't lost).
+    this.registerDomEvent(document, "contextmenu", (evt) => {
+      const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+      if (!view?.file || view.getMode() !== "preview") return;
+      // Only take over right-clicks that land inside this reading view — a live
+      // selection can outlive the click, so right-clicking the panel, ribbon, or
+      // a modal input must not suppress the native menu or pop ours.
+      if (!view.containerEl.contains(evt.target as Node)) return;
+      const sel = view.containerEl.ownerDocument.getSelection();
+      if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+      const text = sel.toString();
+      if (!text.trim()) return;
+      // Only when the selection actually lives in this reading view.
+      if (!view.containerEl.contains(sel.getRangeAt(0).commonAncestorContainer)) {
+        return;
+      }
+      evt.preventDefault();
+      const menu = new Menu();
+      menu.addItem((item) =>
+        item
+          .setTitle("Sheaf: Comment for agent")
+          .setIcon("message-square")
+          .onClick(() => void this.composeReadingComment(view)),
+      );
+      menu.addItem((item) =>
+        item
+          .setTitle("Copy")
+          .setIcon("copy")
+          .onClick(() => void navigator.clipboard.writeText(text)),
+      );
+      menu.showAtMouseEvent(evt);
+    });
 
     // A vault rename moves the `.md` (threads travel inline with it), but the
     // target paths recorded in its endmatter, the version history, and the
@@ -255,6 +299,9 @@ export default class SheafPlugin extends Plugin {
   /** Stop the ACP agent the plugin started. */
   disconnectAcp(): void {
     this.acp.disconnect();
+    // Wipe the activity timeline — it described what the now-gone agent was
+    // doing, so the activity view shouldn't keep showing it.
+    this.acp.activity.clear();
     new Notice("Sheaf: ACP agent disconnected");
   }
 
@@ -538,6 +585,48 @@ export default class SheafPlugin extends Plugin {
     });
   }
 
+  /** Route a comment request to the capture path for the view's current mode. */
+  private async commentFromActiveView(view: MarkdownView): Promise<void> {
+    if (view.getMode() === "preview") {
+      await this.composeReadingComment(view);
+    } else {
+      this.openCommentModal(view.editor, view);
+    }
+  }
+
+  /**
+   * Comment flow for reading (preview) mode. There's no CodeMirror editor, so we
+   * read the DOM selection and pin it to the doc by locating the selected text
+   * in the clean prose (offsets are already in the clean-prose space the server
+   * anchors against). Falls back to a doc-level comment when the selection can't
+   * be pinned — it spans blocks/formatting, or the text can't be found.
+   */
+  private async composeReadingComment(view: MarkdownView): Promise<void> {
+    const file = view.file;
+    if (!file) {
+      new Notice("Open a markdown file first");
+      return;
+    }
+    const docPath = this.vaultPathToSheafPath(file.path);
+    const picked = readingSelection(view);
+    if (!picked) {
+      // No selection → doc-level comment, same as the editor path.
+      this.composeComment(docPath, null, "");
+      return;
+    }
+    const clean = stripReviewMarkup(await this.app.vault.cachedRead(file));
+    const range = locateSelection(clean, picked.text, picked.before);
+    if (!range) {
+      new Notice(
+        "Couldn't pin the highlight to the text — posting a doc-level comment instead.",
+        6000,
+      );
+      this.composeComment(docPath, null, picked.text);
+      return;
+    }
+    this.composeComment(docPath, range, picked.text);
+  }
+
   private openCommentModal(editor: Editor, view: MarkdownView): void {
     const file = view.file;
     if (!file) {
@@ -649,6 +738,27 @@ export default class SheafPlugin extends Plugin {
     return found;
   }
 
+  /**
+   * Tell every open editor for `docPath` which of its threads are
+   * resolved/dismissed, so their inline anchor highlights drop (the markup
+   * itself stays in the file — resolving doesn't rewrite the doc). Called by the
+   * threads panel whenever it (re)loads a doc's threads.
+   */
+  setResolvedHighlights(docPath: string, resolvedIds: ReadonlySet<string>): void {
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      const v = leaf.view;
+      if (
+        !(v instanceof MarkdownView) ||
+        !v.file ||
+        this.vaultPathToSheafPath(v.file.path) !== docPath
+      ) {
+        return;
+      }
+      const cm = (v.editor as unknown as { cm?: EditorView }).cm;
+      cm?.dispatch({ effects: setResolvedThreadIds.of(resolvedIds) });
+    });
+  }
+
   private computeCharRange(
     editor: Editor,
   ): { from: number; to: number } | null {
@@ -735,4 +845,41 @@ export default class SheafPlugin extends Plugin {
 function basename(p: string): string {
   const i = p.lastIndexOf("/");
   return i === -1 ? p : p.slice(i + 1);
+}
+
+/**
+ * The current text selection inside a reading view, plus the text preceding it
+ * within the same block (used to disambiguate a phrase that repeats). Null when
+ * there's no usable selection in this view.
+ */
+function readingSelection(
+  view: MarkdownView,
+): { text: string; before: string } | null {
+  const sel = view.containerEl.ownerDocument.getSelection();
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
+  const text = sel.toString();
+  if (!text.trim()) return null;
+  const range = sel.getRangeAt(0);
+  if (!view.containerEl.contains(range.commonAncestorContainer)) return null;
+  return { text, before: precedingBlockText(range) };
+}
+
+/** Rendered text from the start of the selection's block up to the selection. */
+function precedingBlockText(range: Range): string {
+  const start =
+    range.startContainer.nodeType === Node.ELEMENT_NODE
+      ? (range.startContainer as HTMLElement)
+      : range.startContainer.parentElement;
+  const block = start?.closest(
+    "p, li, h1, h2, h3, h4, h5, h6, blockquote, td, th, dd, dt, pre",
+  );
+  if (!block) return "";
+  const pre = range.cloneRange();
+  pre.selectNodeContents(block);
+  try {
+    pre.setEnd(range.startContainer, range.startOffset);
+  } catch {
+    return "";
+  }
+  return pre.toString();
 }
