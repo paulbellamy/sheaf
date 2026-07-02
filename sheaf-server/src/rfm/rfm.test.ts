@@ -4,6 +4,8 @@ import {
   cleanOffset,
   composeDoc,
   renderInlineMarkers,
+  resolveMarkerPlacements,
+  scanReviewMarkup,
   splitEndmatter,
   stripInlineMarkup,
   stripReviewMarkup,
@@ -78,6 +80,69 @@ describe("stripInlineMarkup", () => {
     const elapsed = Date.now() - start;
     expect(out).toBe(many); // no {#id} groups -> preserved verbatim
     expect(elapsed).toBeLessThan(2000);
+  });
+});
+
+describe("scanReviewMarkup", () => {
+  it("locates a comment group with its anchor, note, and id", () => {
+    const md = "Please revisit {==this sentence==}{>>Needs a source.<<}{#c1} now.";
+    const [g, ...rest] = scanReviewMarkup(md);
+    expect(rest).toHaveLength(0);
+    expect(g.kind).toBe("comment");
+    expect(g.id).toBe("c1");
+    expect(md.slice(g.keptStart, g.keptEnd)).toBe("this sentence");
+    expect(g.comment).toBe("Needs a source.");
+    expect(md.slice(g.start, g.end)).toBe(
+      "{==this sentence==}{>>Needs a source.<<}{#c1}",
+    );
+  });
+
+  it("handles a bare anchor whose body lives in the endmatter", () => {
+    const [g] = scanReviewMarkup("a {==anchor==}{#c1} b");
+    expect(g.kind).toBe("comment");
+    expect(g.comment).toBe("");
+    expect(g.id).toBe("c1");
+  });
+
+  it("joins multiple inline note blocks on one anchor", () => {
+    const [g] = scanReviewMarkup("x {==a==}{>>one<<}{>>two<<}{#c1} y");
+    expect(g.comment).toBe("one\n\ntwo");
+  });
+
+  it("reports the proposed text range for insertions and substitutions", () => {
+    const ins = scanReviewMarkup("a {++new++}{#s1} b")[0];
+    expect(ins.kind).toBe("insertion");
+    expect(ins.keptStart).toBe(ins.keptEnd); // nothing kept yet
+    expect("a {++new++}{#s1} b".slice(ins.newStart!, ins.newEnd!)).toBe("new");
+
+    const sub = scanReviewMarkup("a {~~old~>new~~}{#s2} b")[0];
+    expect(sub.kind).toBe("substitution");
+    const md = "a {~~old~>new~~}{#s2} b";
+    expect(md.slice(sub.keptStart, sub.keptEnd)).toBe("old");
+    expect(md.slice(sub.newStart!, sub.newEnd!)).toBe("new");
+  });
+
+  it("marks a deletion's kept (still-in-doc) text", () => {
+    const g = scanReviewMarkup("a {--gone--}{#s3} b")[0];
+    expect(g.kind).toBe("deletion");
+    expect("a {--gone--}{#s3} b".slice(g.keptStart, g.keptEnd)).toBe("gone");
+    expect(g.newStart).toBeNull();
+  });
+
+  it("skips markup inside code spans and fences, and hand-typed markup", () => {
+    expect(scanReviewMarkup("use `{==x==}{#c1}` here")).toEqual([]);
+    expect(
+      scanReviewMarkup("```\n{==x==}{>>c<<}{#c1}\n```"),
+    ).toEqual([]);
+    expect(scanReviewMarkup("a {==anchor==} b")).toEqual([]); // no {#id}
+  });
+
+  it("offsets round-trip against stripInlineMarkup's kept projection", () => {
+    const md = "keep {==A==}{>>c<<}{#c1} and {~~x~>y~~}{#s1} end";
+    const kept = scanReviewMarkup(md)
+      .map((g) => md.slice(g.keptStart, g.keptEnd))
+      .join("|");
+    expect(kept).toBe("A|x");
   });
 });
 
@@ -243,6 +308,25 @@ describe("renderInlineMarkers", () => {
     expect(strip(out)).toBe(prose);
   });
 
+  it("relocates a drifted marker to the NEAREST occurrence, not the first", () => {
+    // Two threads anchor the same phrase; both offsets have drifted (the slice
+    // there no longer equals the anchored text), forcing relocation.
+    const prose = "the cat sat on the cat mat";
+    const markers: InlineMarker[] = [
+      { id: "a", from: 1, to: 8, anchoredText: "the cat", kind: "comment", commentBody: "A" },
+      { id: "b", from: 16, to: 23, anchoredText: "the cat", kind: "comment", commentBody: "B" },
+    ];
+    const out = renderInlineMarkers(prose, markers);
+    // First-occurrence relocation would collapse both onto index 0 and drop one
+    // as an overlap; nearest keeps them on their own occurrences.
+    expect(out).toContain("{#a}");
+    expect(out).toContain("{#b}");
+    expect(out).toBe(
+      "{==the cat==}{>>A<<}{#a} sat on {==the cat==}{>>B<<}{#b} mat",
+    );
+    expect(strip(out)).toBe(prose);
+  });
+
   it("skips an unlocatable anchor (left in endmatter only)", () => {
     const prose = "nothing matches here";
     const markers: InlineMarker[] = [
@@ -319,6 +403,45 @@ describe("renderInlineMarkers", () => {
       { id: "t", from: 2, to: 7, anchoredText: "` y z", kind: "comment", commentBody: "n" },
     ];
     expect(renderInlineMarkers(prose, markers)).toBe(prose);
+  });
+});
+
+describe("resolveMarkerPlacements", () => {
+  it("returns fresh offsets unchanged (rebase is a no-op without drift)", () => {
+    const prose = "one two three four";
+    const markers: InlineMarker[] = [
+      { id: "a", from: 0, to: 3, anchoredText: "one", kind: "comment", commentBody: "c1" },
+      { id: "b", from: 8, to: 13, anchoredText: "three", kind: "comment", commentBody: "c2" },
+    ];
+    expect(resolveMarkerPlacements(prose, markers)).toEqual([
+      { id: "a", from: 0, to: 3 },
+      { id: "b", from: 8, to: 13 },
+    ]);
+  });
+
+  it("reports the rebased offset each drifted span landed on", () => {
+    const prose = "big the cat sat on the cat mat"; // shifted +4 from creation
+    const markers: InlineMarker[] = [
+      { id: "a", from: 0, to: 7, anchoredText: "the cat", kind: "comment", commentBody: "A" },
+      { id: "b", from: 15, to: 22, anchoredText: "the cat", kind: "comment", commentBody: "B" },
+    ];
+    const placed = resolveMarkerPlacements(prose, markers);
+    // a → nearest to 0 is the first "the cat" (now at 4); b → nearest to 15 is
+    // the second (at 19). Each rebases onto its own occurrence.
+    expect(placed).toEqual([
+      { id: "a", from: 4, to: 11 },
+      { id: "b", from: 19, to: 26 },
+    ]);
+    expect(prose.slice(4, 11)).toBe("the cat");
+    expect(prose.slice(19, 26)).toBe("the cat");
+  });
+
+  it("omits a marker with no inline span (unlocatable / endmatter-only)", () => {
+    const prose = "nothing matches";
+    const markers: InlineMarker[] = [
+      { id: "a", from: 0, to: 6, anchoredText: "absent", kind: "comment", commentBody: "c" },
+    ];
+    expect(resolveMarkerPlacements(prose, markers)).toEqual([]);
   });
 });
 

@@ -58,59 +58,148 @@ function matchIdRef(md: string, offset: number): number | null {
   return m ? offset + m[0].length : null;
 }
 
+/** The four sheaf-injected marker shapes, keyed by their opening delimiter. */
+export type ReviewMarkerKind =
+  | "comment" // {==anchor==}{>>note<<}…{#id}
+  | "insertion" // {++new++}{#id}
+  | "deletion" // {--old--}{#id}
+  | "substitution"; // {~~old~>new~~}{#id}
+
 /**
- * Match a complete sheaf-injected marker group at `offset`, returning the
- * clean-text (`[keptStart, keptEnd)`, the "as-is" projection) and the group's
- * end. Every marker sheaf renders ends in a `{#id}`; requiring that terminator
- * is what leaves hand-typed CriticMarkup (a bare `{==x==}` with no id) literal.
+ * A fully-parsed marker group — the structure a renderer needs to hide the
+ * delimiters and style the parts. All fields are byte offsets into the same
+ * body string. `[keptStart, keptEnd)` is the clean-prose projection (what
+ * `stripInlineMarkup` keeps); `[newStart, newEnd)` is the proposed text an
+ * insertion/substitution introduces (null for comment/deletion). `comment` is
+ * the joined inline `{>>…<<}` note text (empty when a comment's body lives only
+ * in the endmatter, as sheaf's own writer emits).
  */
-function matchMarkerGroup(
+export interface ReviewMarkerGroup {
+  kind: ReviewMarkerKind;
+  /** Offset of the opening `{`. */
+  start: number;
+  /** Offset just past the closing `{#id}`. */
+  end: number;
+  /** Document-local id from the trailing `{#id}`. */
+  id: string;
+  keptStart: number;
+  keptEnd: number;
+  comment: string;
+  newStart: number | null;
+  newEnd: number | null;
+}
+
+/**
+ * Parse a complete sheaf-injected marker group at `offset` into its full
+ * structure, or return null if `offset` doesn't begin one. Every marker sheaf
+ * renders ends in a `{#id}`; requiring that terminator is what leaves
+ * hand-typed CriticMarkup (a bare `{==x==}` with no id) literal.
+ */
+function parseMarkerGroup(
   body: string,
   offset: number,
-): { keptStart: number; keptEnd: number; end: number } | null {
+): ReviewMarkerGroup | null {
+  const idAt = (pos: number): { id: string; end: number } | null => {
+    const end = matchIdRef(body, pos);
+    // `{#id}` → strip the `{#` prefix and `}` suffix to get the bare id.
+    return end === null ? null : { id: body.slice(pos + 2, end - 1), end };
+  };
+
   if (body.startsWith("{==", offset)) {
     const close = body.indexOf("==}", offset + 3);
     if (close === -1) return null;
     let pos = close + 3;
+    const notes: string[] = [];
     while (body.startsWith("{>>", pos)) {
       const c = body.indexOf("<<}", pos + 3);
       if (c === -1) return null;
+      notes.push(body.slice(pos + 3, c));
       pos = c + 3;
     }
-    const idEnd = matchIdRef(body, pos);
-    return idEnd === null
-      ? null
-      : { keptStart: offset + 3, keptEnd: close, end: idEnd };
+    const ref = idAt(pos);
+    if (!ref) return null;
+    return {
+      kind: "comment",
+      start: offset,
+      end: ref.end,
+      id: ref.id,
+      keptStart: offset + 3,
+      keptEnd: close,
+      comment: notes.join("\n\n"),
+      newStart: null,
+      newEnd: null,
+    };
   }
   if (body.startsWith("{~~", offset)) {
     const sep = body.indexOf("~>", offset + 3);
     const close = sep === -1 ? -1 : body.indexOf("~~}", sep + 2);
     if (sep === -1 || close === -1) return null;
-    const idEnd = matchIdRef(body, close + 3);
-    // keep the old side
-    return idEnd === null
-      ? null
-      : { keptStart: offset + 3, keptEnd: sep, end: idEnd };
+    const ref = idAt(close + 3);
+    if (!ref) return null;
+    // keep the old side; the new side is the proposed replacement
+    return {
+      kind: "substitution",
+      start: offset,
+      end: ref.end,
+      id: ref.id,
+      keptStart: offset + 3,
+      keptEnd: sep,
+      comment: "",
+      newStart: sep + 2,
+      newEnd: close,
+    };
   }
   if (body.startsWith("{++", offset)) {
     const close = body.indexOf("++}", offset + 3);
     if (close === -1) return null;
-    const idEnd = matchIdRef(body, close + 3);
-    // drop: a pending insertion isn't in the doc yet
-    return idEnd === null
-      ? null
-      : { keptStart: offset + 3, keptEnd: offset + 3, end: idEnd };
+    const ref = idAt(close + 3);
+    if (!ref) return null;
+    // drop: a pending insertion isn't in the doc yet (empty kept range)
+    return {
+      kind: "insertion",
+      start: offset,
+      end: ref.end,
+      id: ref.id,
+      keptStart: offset + 3,
+      keptEnd: offset + 3,
+      comment: "",
+      newStart: offset + 3,
+      newEnd: close,
+    };
   }
   if (body.startsWith("{--", offset)) {
     const close = body.indexOf("--}", offset + 3);
     if (close === -1) return null;
-    const idEnd = matchIdRef(body, close + 3);
+    const ref = idAt(close + 3);
+    if (!ref) return null;
     // keep: a pending deletion is still in the doc
-    return idEnd === null
-      ? null
-      : { keptStart: offset + 3, keptEnd: close, end: idEnd };
+    return {
+      kind: "deletion",
+      start: offset,
+      end: ref.end,
+      id: ref.id,
+      keptStart: offset + 3,
+      keptEnd: close,
+      comment: "",
+      newStart: null,
+      newEnd: null,
+    };
   }
   return null;
+}
+
+/**
+ * Match a complete sheaf-injected marker group at `offset`, returning just the
+ * clean-text (`[keptStart, keptEnd)`, the "as-is" projection) and the group's
+ * end — the minimal shape the strip/offset-mapping pass needs. Delegates to
+ * `parseMarkerGroup` so the delimiter grammar has a single definition.
+ */
+function matchMarkerGroup(
+  body: string,
+  offset: number,
+): { keptStart: number; keptEnd: number; end: number } | null {
+  const g = parseMarkerGroup(body, offset);
+  return g ? { keptStart: g.keptStart, keptEnd: g.keptEnd, end: g.end } : null;
 }
 
 /**
@@ -267,6 +356,26 @@ export function stripInlineMarkup(body: string): string {
     parts.push(body.slice(seg.keptStart, seg.keptEnd));
   }
   return parts.join("");
+}
+
+/**
+ * Locate every sheaf-injected marker group in a body, in document order, with
+ * full structure (see `ReviewMarkerGroup`). Shares `scanSegments`' code/fence
+ * awareness, so a marker inside inline code or a fence is skipped exactly as
+ * `stripInlineMarkup` skips it — a renderer keying off this can't decorate
+ * (and so visually "activate") literal example markup. Offsets are into `body`
+ * as given; pass `splitEndmatter(md).body` to avoid scanning the YAML tail.
+ */
+export function scanReviewMarkup(body: string): ReviewMarkerGroup[] {
+  const groups: ReviewMarkerGroup[] = [];
+  for (const seg of scanSegments(body)) {
+    // `scanSegments` emits each marker group as one non-code segment spanning
+    // exactly [start, group.end); re-parse it for the full structure.
+    if (seg.code || body[seg.start] !== "{") continue;
+    const g = parseMarkerGroup(body, seg.start);
+    if (g && g.end === seg.end) groups.push(g);
+  }
+  return groups;
 }
 
 /**
@@ -489,25 +598,56 @@ function renderMarker(text: string, m: InlineMarker): string {
 }
 
 /**
- * Markers whose anchor can't be located (or would corrupt the round-trip) are
- * skipped — they still live in the endmatter, just without an inline span.
- * Guarantees `stripInlineMarkup(renderInlineMarkers(prose, …)) === prose` for
- * any prose that contained no review markup to begin with.
+ * Index of the occurrence of `needle` in `hay` whose start is closest to
+ * `near`, or -1 if `needle` is empty / absent. This is the design's §5 anchor
+ * resolution ("the nearest occurrence wins"): when a thread's stored offset has
+ * drifted, we relocate to the copy of its anchored text nearest where it used
+ * to be — *not* the first copy in the doc. First-occurrence relocation is what
+ * lets two threads on a repeated phrase collapse onto the same span (and one
+ * lose its inline marker) the moment any *other* thread's edit re-projects the
+ * doc. Ties resolve to the earlier occurrence.
  */
-export function renderInlineMarkers(
-  prose: string,
-  markers: InlineMarker[],
-): string {
-  type Placed = { from: number; to: number; text: string; m: InlineMarker };
-  const placed: Placed[] = [];
+function nearestOccurrence(hay: string, needle: string, near: number): number {
+  if (needle.length === 0) return -1;
+  let best = -1;
+  let bestDist = Infinity;
+  for (let i = hay.indexOf(needle); i !== -1; i = hay.indexOf(needle, i + 1)) {
+    const dist = Math.abs(i - near);
+    if (dist < bestDist) {
+      best = i;
+      bestDist = dist;
+    }
+  }
+  return best;
+}
+
+interface Placement {
+  from: number;
+  to: number;
+  m: InlineMarker;
+}
+
+/**
+ * Resolve each marker to a concrete, non-overlapping `[from, to)` span in
+ * `prose` — the shared core of `renderInlineMarkers` (which stringifies the
+ * result) and `resolveMarkerPlacements` (which feeds the offset rebase). A
+ * marker keeps its stored offsets when the slice there still equals its
+ * anchored text; otherwise it relocates to the nearest occurrence. Markers that
+ * can't be located, would corrupt the strip round-trip, or land inside code, or
+ * overlap an already-accepted span, are dropped (they stay endmatter-only).
+ * Accepted spans are returned sorted by `from` descending, ready for
+ * right-to-left splicing.
+ */
+function placeMarkers(prose: string, markers: InlineMarker[]): Placement[] {
+  const candidates: Placement[] = [];
   const code = codeRanges(prose);
   for (const m of markers) {
     let from = m.from;
     let to = m.to;
     if (prose.slice(from, to) !== m.anchoredText) {
       // Offsets drifted (or were never resolved against this prose). Relocate
-      // by the first verbatim occurrence of the anchored text.
-      const at = m.anchoredText.length > 0 ? prose.indexOf(m.anchoredText) : -1;
+      // to the occurrence of the anchored text nearest the remembered offset.
+      const at = nearestOccurrence(prose, m.anchoredText, m.from);
       if (at === -1) continue;
       from = at;
       to = at + m.anchoredText.length;
@@ -518,17 +658,55 @@ export function renderInlineMarkers(
     // literal — breaking the round-trip. Leave such threads endmatter-only.
     if (m.anchoredText.includes("`")) continue;
     if (code.some(([s, e]) => from < e && s < to)) continue;
-    placed.push({ from, to, text: m.anchoredText, m });
+    candidates.push({ from, to, m });
   }
-  // Insert right-to-left so earlier offsets stay valid; drop any overlap with a
-  // span already accepted (nested markers would break the strip round-trip).
-  placed.sort((a, b) => b.from - a.from);
-  const accepted: Placed[] = [];
-  let out = prose;
-  for (const p of placed) {
+  // Accept right-to-left; drop any overlap with a span already accepted (nested
+  // markers would break the strip round-trip).
+  candidates.sort((a, b) => b.from - a.from);
+  const accepted: Placement[] = [];
+  for (const p of candidates) {
     if (accepted.some((q) => p.from < q.to && q.from < p.to)) continue;
     accepted.push(p);
-    out = out.slice(0, p.from) + renderMarker(p.text, p.m) + out.slice(p.to);
+  }
+  return accepted;
+}
+
+/**
+ * Markers whose anchor can't be located (or would corrupt the round-trip) are
+ * skipped — they still live in the endmatter, just without an inline span.
+ * Guarantees `stripInlineMarkup(renderInlineMarkers(prose, …)) === prose` for
+ * any prose that contained no review markup to begin with.
+ */
+export function renderInlineMarkers(
+  prose: string,
+  markers: InlineMarker[],
+): string {
+  let out = prose;
+  // Accepted spans come back `from`-descending, so each splice leaves the
+  // offsets of the spans not yet inserted valid.
+  for (const p of placeMarkers(prose, markers)) {
+    out = out.slice(0, p.from) + renderMarker(p.m.anchoredText, p.m) + out.slice(p.to);
   }
   return out;
+}
+
+/** Where each marker's inline span actually landed (id → resolved offsets),
+ *  keyed by the marker's `id`. Markers left endmatter-only are absent. Callers
+ *  use this to rebase a thread's stored offsets onto the current prose so the
+ *  fast `rel_pos` path (design §5 step 1) keeps hitting after edits. */
+export interface MarkerPlacement {
+  id: string;
+  from: number;
+  to: number;
+}
+
+export function resolveMarkerPlacements(
+  prose: string,
+  markers: InlineMarker[],
+): MarkerPlacement[] {
+  // `placeMarkers` returns spans `from`-descending (for right-to-left splicing);
+  // hand callers a stable document-order list instead.
+  return placeMarkers(prose, markers)
+    .map((p) => ({ id: p.m.id, from: p.from, to: p.to }))
+    .sort((a, b) => a.from - b.from);
 }

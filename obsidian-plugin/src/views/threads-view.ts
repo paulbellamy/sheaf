@@ -7,7 +7,11 @@ import {
   Notice,
 } from "obsidian";
 import type { EditorView } from "@codemirror/view";
-import { remapRenamedPath, stripReviewMarkup } from "sheaf-server/types";
+import {
+  remapRenamedPath,
+  scanReviewMarkup,
+  stripReviewMarkup,
+} from "sheaf-server/types";
 import type SheafPlugin from "../main";
 import type { Thread, ThreadDraftBody } from "../sheaf-client";
 import { renderCommandRow } from "../command-row";
@@ -155,22 +159,34 @@ export class ThreadsView extends ItemView {
 
     const anchored = target.anchor.anchored_text;
     if (!anchored) return;
-    // Drift is judged against the *clean* prose (`this.docText`), but the raw
-    // editor value still contains the anchored text inside the endmatter's
-    // stored `anchored_text:` copy — so searching the raw value for a drifted
-    // thread would scroll into the YAML block, contradicting the "⚠ anchor
-    // drifted" badge on this very card. Bail with the same notice instead.
-    if (isDrifted(thread, this.docText)) {
-      new Notice("Anchor drifted — text not in doc", 4000);
-      return;
-    }
     const docText = editor.getValue();
-    const idx = docText.indexOf(anchored);
-    if (idx === -1) {
-      new Notice("Anchor drifted — text not in doc", 4000);
-      return;
+
+    // Prefer the thread's OWN inline span: its marker group ends in `{#<id>}`,
+    // so it's unique even when the anchored phrase repeats elsewhere in the doc.
+    // A bare `indexOf(anchored)` would jump to the first copy — which may be a
+    // different thread's anchor (or the `anchored_text:` echo in the endmatter).
+    const own = scanReviewMarkup(docText).find((g) => g.id === thread.id);
+    let idx: number;
+    let to: number;
+    if (own) {
+      idx = own.keptStart;
+      to = own.keptEnd;
+    } else {
+      // No inline span (orphaned). Drift is judged against the *clean* prose
+      // (`this.docText`); the raw value still holds the anchored text in the
+      // endmatter's `anchored_text:` echo, so searching it for a drifted thread
+      // would scroll into the YAML — bail with the same notice as the badge.
+      if (isDrifted(thread, this.docText)) {
+        new Notice("Anchor drifted — text not in doc", 4000);
+        return;
+      }
+      idx = docText.indexOf(anchored);
+      if (idx === -1) {
+        new Notice("Anchor drifted — text not in doc", 4000);
+        return;
+      }
+      to = idx + anchored.length;
     }
-    const to = idx + anchored.length;
     const fromPos = editor.offsetToPos(idx);
     const toPos = editor.offsetToPos(to);
     editor.scrollIntoView({ from: fromPos, to: toPos }, true);

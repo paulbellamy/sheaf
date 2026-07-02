@@ -26,6 +26,10 @@ import { ThreadsView, VIEW_TYPE_SHEAF_THREADS } from "./views/threads-view";
 import { ActivityView, VIEW_TYPE_SHEAF_ACTIVITY } from "./views/activity-view";
 import { buildPanelRequestMessage } from "./review";
 import { flashField, flashRange, mountFlashStyles } from "./editor/flash";
+import {
+  reviewMarkupExtension,
+  mountReviewMarkupStyles,
+} from "./editor/review-markup";
 import type { EditorView } from "@codemirror/view";
 import { AcpController } from "./acp/controller";
 import type { ActivityStore } from "./acp/activity-store";
@@ -70,13 +74,19 @@ export default class SheafPlugin extends Plugin {
       (leaf) => new ActivityView(leaf, this),
     );
 
-    // Backs the transient highlight when a thread card is clicked (flash.ts).
-    // updateOptions() flushes the field into any editor already open when the
-    // plugin loads — registerEditorExtension alone only reaches editors opened
-    // afterward. mountFlashStyles injects the CSS (no separate styles.css).
+    // CM6 editor extensions:
+    //  - flashField backs the transient highlight when a thread card is clicked
+    //    (flash.ts).
+    //  - reviewMarkupExtension hides/prettifies the inline RFM review markup in
+    //    Live Preview (review-markup.ts).
+    // updateOptions() flushes them into any editor already open when the plugin
+    // loads — registerEditorExtension alone only reaches editors opened
+    // afterward. The mount* helpers inject the CSS (no separate styles.css).
     this.registerEditorExtension(flashField);
+    this.registerEditorExtension(reviewMarkupExtension);
     this.app.workspace.updateOptions();
     this.register(mountFlashStyles());
+    this.register(mountReviewMarkupStyles());
 
     this.addRibbonIcon("message-square", "Sheaf threads", () => {
       void this.activateThreadsView();

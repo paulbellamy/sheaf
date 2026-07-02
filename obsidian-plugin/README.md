@@ -66,6 +66,19 @@ to "agent connected".
 5. Watch the right-panel threads view and your editor. Within seconds the
    agent should pick up the thread, edit the doc, and tick the thread off.
 
+## Inline review markup
+
+Sheaf stores each comment and suggested change as [CriticMarkup](../docs/roughdraft-review-markup.md)
+right in the prose — `{==anchor==}{>>note<<}{#c1}` for a comment,
+`{~~old~>new~~}{#s1}` for a suggested edit, and so on. Raw, those delimiters are
+noise. In **Live Preview** the plugin hides the syntax and renders the parts:
+the anchor text is highlighted with a small 💬 chip (hover it for the note),
+suggested insertions are underlined, and deletions/replaced text are struck
+through. Put the cursor on a span and its raw markup reveals itself for editing,
+exactly like Obsidian unfolds a link — and **Source mode** shows everything
+verbatim. Markup inside code spans/fences, or hand-typed CriticMarkup with no
+`{#id}`, is left literal.
+
 ## Panel review (virtual comments)
 
 Instead of one comment, ask the agent to review the whole doc as a panel of
@@ -87,6 +100,5 @@ reviewer roles:
 ## Status
 
 Throwaway prototype. Set `isDesktopOnly: true`. No mobile support, no auth,
-no draft UI, no inline anchor highlights yet (planned). The point is to
-feel out the human+agent racing UX; expect rough edges and last-write-wins
-on concurrent saves.
+no draft UI. The point is to feel out the human+agent racing UX; expect rough
+edges and last-write-wins on concurrent saves.
