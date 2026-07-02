@@ -215,6 +215,18 @@ export class ActivityStore {
   }
 
   /**
+   * Drop every doc's activity. Used when the user disconnects the ACP agent —
+   * the timeline described what *that* agent was doing, so it shouldn't linger
+   * once the agent is gone. (Distinct from a crash/reconnect, which keep the
+   * history; see the field doc on the controller.)
+   */
+  clear(): void {
+    if (this.docs.size === 0) return;
+    this.docs.clear();
+    this.emit();
+  }
+
+  /**
    * The subprocess emitted output (stdout/stderr) — a coarse liveness ping.
    * Emit-free: it only feeds the stall derivation, and the UI's periodic tick
    * recomputes state, so a chatty stderr stream doesn't trigger re-render storms.

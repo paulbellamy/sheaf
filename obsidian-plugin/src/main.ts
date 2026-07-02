@@ -255,6 +255,9 @@ export default class SheafPlugin extends Plugin {
   /** Stop the ACP agent the plugin started. */
   disconnectAcp(): void {
     this.acp.disconnect();
+    // Wipe the activity timeline — it described what the now-gone agent was
+    // doing, so the activity view shouldn't keep showing it.
+    this.acp.activity.clear();
     new Notice("Sheaf: ACP agent disconnected");
   }
 
