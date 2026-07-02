@@ -1,4 +1,8 @@
-import { scanReviewMarkup, type ReviewMarkerGroup } from "sheaf-server/types";
+import {
+  scanReviewMarkup,
+  splitEndmatter,
+  type ReviewMarkerGroup,
+} from "sheaf-server/types";
 
 /**
  * Reading-mode (preview) rendering for sheaf's inline RFM review markup.
@@ -24,10 +28,25 @@ import { scanReviewMarkup, type ReviewMarkerGroup } from "sheaf-server/types";
  *
  * Anything that doesn't match cleanly is left untouched — the worst case is the
  * raw markup showing, exactly as it did before this processor existed.
+ *
+ * Known limitations (all degrade to raw markup, never crash):
+ *   - Resolved/dismissed threads keep their anchor highlight here; Live Preview
+ *     drops it (it has the resolved-set plumbed in, this post-processor can't
+ *     know thread status from the rendered element).
+ *   - A *literal* insertion/deletion (`{++…++}`/`{--…--}`) whose text carries
+ *     inline markdown splits across nodes and stays raw. Sheaf's writer only
+ *     emits comments and substitutions inline, so these are hand-typed only.
+ *   - Smart-punctuation/typography settings that rewrite `--` etc. can stop a
+ *     literal shape from matching. Again, hand-typed only.
  */
 
 /** The trailing `{#id}` id grammar, mirrored from the RFM scanner. */
 const ID = "[A-Za-z][A-Za-z0-9_-]*";
+
+/** Anchored, compiled once: a comment's `}{>>note<<}…{#id}` and a sub's `}{#id}`. */
+const COMMENT_TAIL_RE = new RegExp(`^\\}((?:\\{>>[\\s\\S]*?<<\\})*)\\{#(${ID})\\}`);
+const SUB_TAIL_RE = new RegExp(`^\\}\\{#(${ID})\\}`);
+const NOTE_RE = /\{>>([\s\S]*?)<<\}/g;
 
 /**
  * A styled fragment of a decorated marker group. Pure data (no DOM) so the
@@ -98,9 +117,9 @@ export function textToParts(text: string): RenderPart[] {
 export function parseCommentTail(
   text: string,
 ): { note: string; id: string; consumed: number } | null {
-  const m = new RegExp(`^\\}((?:\\{>>[\\s\\S]*?<<\\})*)\\{#(${ID})\\}`).exec(text);
+  const m = COMMENT_TAIL_RE.exec(text);
   if (!m) return null;
-  const notes = [...m[1].matchAll(/\{>>([\s\S]*?)<<\}/g)].map((x) => x[1]);
+  const notes = [...m[1].matchAll(NOTE_RE)].map((x) => x[1]);
   return { note: notes.join("\n\n"), id: m[2], consumed: m[0].length };
 }
 
@@ -111,7 +130,7 @@ export function parseCommentTail(
 export function parseSubTail(
   text: string,
 ): { id: string; consumed: number } | null {
-  const m = new RegExp(`^\\}\\{#(${ID})\\}`).exec(text);
+  const m = SUB_TAIL_RE.exec(text);
   return m ? { id: m[1], consumed: m[0].length } : null;
 }
 
@@ -161,12 +180,26 @@ function isText(node: Node | null): node is Text {
 /**
  * Comment shape: `{`<mark>anchor</mark>`}{>>note<<}{#id}`. Replace the `<mark>`
  * with the anchor span the editor uses and swap the delimiter tail for a chip.
+ *
+ * The tail can span several sibling nodes: if the note carried inline markdown
+ * (`*em*`, a link) Obsidian rendered it into child elements, splitting the text
+ * node. Accumulate following siblings' text until the tail parses — bailing the
+ * instant the run can't be a comment tail, so a genuine `==highlight==` (whose
+ * `<mark>` is followed by ordinary prose, not `}…{#id}`) is left alone.
  */
-function decorateMarkComment(mark: HTMLElement): void {
+function decorateMarkComment(mark: Element): void {
   const prev = mark.previousSibling;
-  const next = mark.nextSibling;
-  if (!isText(prev) || !isText(next) || !prev.data.endsWith("{")) return;
-  const tail = parseCommentTail(next.data);
+  if (!isText(prev) || !prev.data.endsWith("{")) return;
+  const sibs: ChildNode[] = [];
+  let acc = "";
+  let tail: ReturnType<typeof parseCommentTail> = null;
+  for (let s = mark.nextSibling; s; s = s.nextSibling) {
+    sibs.push(s);
+    acc += s.textContent ?? "";
+    if (acc.length > 0 && !acc.startsWith("}")) return; // not a comment tail
+    tail = parseCommentTail(acc);
+    if (tail) break;
+  }
   if (!tail) return;
   const doc = mark.ownerDocument;
   prev.data = prev.data.slice(0, -1); // drop the opening `{`
@@ -174,15 +207,31 @@ function decorateMarkComment(mark: HTMLElement): void {
   anchor.className = "sheaf-rfm-anchor";
   while (mark.firstChild) anchor.appendChild(mark.firstChild);
   mark.replaceWith(anchor);
-  next.data = next.data.slice(tail.consumed); // drop `}{>>note<<}{#id}`
+  // Drop the consumed tail: fully-consumed siblings go; the boundary node (a
+  // text node — the tail's delimiters are plain text) keeps its post-tail rest.
+  let consumed = tail.consumed;
+  for (const s of sibs) {
+    const len = s.textContent?.length ?? 0;
+    if (consumed >= len) {
+      consumed -= len;
+      s.remove();
+    } else {
+      if (isText(s)) s.data = s.data.slice(consumed);
+      else s.remove();
+      break;
+    }
+  }
   anchor.after(buildCommentChip(tail.id, tail.note, doc));
 }
 
 /**
- * Substitution shape: `{`<del>old~>new</del>`}{#id}`. Split the strikethrough
- * on the `~>` separator into a struck old side and an underlined new side.
+ * Substitution shape: `{`<del>old~>new</del>`}{#id}` (the strikethrough element
+ * is `<del>` or, depending on the renderer, `<s>`). Split it on the `~>`
+ * separator into a struck old side and an underlined new side. Reading
+ * `textContent` flattens any inline markdown in the old/new text, so a
+ * formatted replacement still resolves (it renders as plain text).
  */
-function decorateDelSub(del: HTMLElement): void {
+function decorateDelSub(del: Element): void {
   const prev = del.previousSibling;
   const next = del.nextSibling;
   if (!isText(prev) || !isText(next) || !prev.data.endsWith("{")) return;
@@ -218,14 +267,43 @@ function decorateTextNodes(root: HTMLElement): void {
   }
 }
 
+/** Minimal shape of Obsidian's `MarkdownPostProcessorContext` we consume. */
+export interface SectionInfoProvider {
+  getSectionInfo(
+    el: HTMLElement,
+  ): { text: string; lineStart: number; lineEnd: number } | null;
+}
+
+// The endmatter boundary is a whole-doc computation; consecutive blocks in a
+// render pass share the same source string, so memoize the last one.
+let memoText: string | null = null;
+let memoBodyLines = 0;
+function bodyLineCount(text: string): number {
+  if (text !== memoText) {
+    memoText = text;
+    memoBodyLines = splitEndmatter(text).body.split("\n").length;
+  }
+  return memoBodyLines;
+}
+
 /**
  * Decorate one rendered markdown block (the element a markdown post-processor is
- * handed). Wrapper shapes first — they consume the `<mark>`/`<del>` siblings —
- * then the literal-text sweep over what remains. `querySelectorAll` snapshots,
- * so mutating as we go is safe.
+ * handed). Wrapper shapes first — they consume the `<mark>`/`<del>`/`<s>`
+ * siblings — then the literal-text sweep over what remains. `querySelectorAll`
+ * snapshots, so mutating as we go is safe.
+ *
+ * `ctx` lets us skip blocks that render the doc's `\n---\n<yaml>` review
+ * endmatter — its thread bodies aren't prose to decorate. Mirrors the CM6 path,
+ * which scans only `splitEndmatter(doc).body`. When section info is missing
+ * (some render contexts return null) we decorate anyway — no worse than before.
  */
-export function decorateReadingReviewMarkup(root: HTMLElement): void {
+export function decorateReadingReviewMarkup(
+  root: HTMLElement,
+  ctx?: SectionInfoProvider,
+): void {
+  const info = ctx?.getSectionInfo(root);
+  if (info && info.lineStart >= bodyLineCount(info.text)) return;
   root.querySelectorAll("mark").forEach((m) => decorateMarkComment(m));
-  root.querySelectorAll("del").forEach((d) => decorateDelSub(d));
+  root.querySelectorAll("del, s").forEach((d) => decorateDelSub(d));
   decorateTextNodes(root);
 }

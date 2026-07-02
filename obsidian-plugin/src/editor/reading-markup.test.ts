@@ -23,6 +23,12 @@ describe("parseCommentTail", () => {
     expect(r).toEqual({ note: "", id: "c3", consumed: 6 });
   });
 
+  it("handles the writer's empty-note shape `{>><<}`", () => {
+    // renderMarker always emits `{>>…<<}` — even an empty body is `{>><<}`.
+    const r = parseCommentTail("}{>><<}{#c4} rest");
+    expect(r).toEqual({ note: "", id: "c4", consumed: 12 });
+  });
+
   it("returns null when the text isn't a comment tail", () => {
     expect(parseCommentTail("}{#c3")).toBeNull(); // unterminated id
     expect(parseCommentTail("plain text")).toBeNull();
