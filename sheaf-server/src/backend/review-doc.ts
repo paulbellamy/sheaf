@@ -10,10 +10,12 @@
 import {
   composeDoc,
   renderInlineMarkers,
+  resolveMarkerPlacements,
   splitEndmatter,
   stripReviewMarkup,
   type Endmatter,
   type InlineMarker,
+  type MarkerPlacement,
 } from "../rfm/index";
 import { threadOnDiskSchema } from "../persistence-schemas";
 import type { DocPath, DraftId, Thread, ThreadDraftBody } from "./index";
@@ -101,18 +103,33 @@ export function serializeReviewDoc(
       });
     }
   }
+  // Rebase each thread's stored offsets onto where its span actually landed in
+  // *this* prose, so the next read's fast `rel_pos` path (design §5 step 1)
+  // still matches instead of falling back to a text search — which is what lets
+  // an edit to one thread perturb the resolved position of another.
+  const placed = new Map(
+    resolveMarkerPlacements(prose, markers).map((p) => [p.id, p]),
+  );
   const body = renderInlineMarkers(prose, markers);
-  return composeDoc(body, threadsToEndmatter(threads));
+  return composeDoc(body, threadsToEndmatter(threads, placed, homePath));
 }
 
-function threadsToEndmatter(threads: Thread[]): Endmatter | null {
+function threadsToEndmatter(
+  threads: Thread[],
+  placed: Map<string, MarkerPlacement>,
+  homePath: DocPath,
+): Endmatter | null {
   const comments: Record<string, unknown> = {};
   const suggestions: Record<string, unknown> = {};
   for (const t of threads) {
     const proposesChange = t.messages.some(
       (m) => m.draft || (m.draft_options && m.draft_options.length > 0),
     );
-    (proposesChange ? suggestions : comments)[t.id] = threadRecord(t);
+    (proposesChange ? suggestions : comments)[t.id] = threadRecord(
+      t,
+      placed.get(t.id),
+      homePath,
+    );
   }
   const endmatter: Endmatter = {};
   if (Object.keys(comments).length > 0) endmatter.comments = comments;
@@ -120,16 +137,45 @@ function threadsToEndmatter(threads: Thread[]): Endmatter | null {
   return Object.keys(endmatter).length > 0 ? endmatter : null;
 }
 
-/** `id` (the map key) and `draft_id` (location-derived) are omitted; `by`/`at`
- *  mirror the root message for roughdraft interop and are ignored on read. */
-function threadRecord(t: Thread): Record<string, unknown> {
+function encodeRelPos(from: number, to: number): string {
+  return Buffer.from(JSON.stringify({ from, to }), "utf8").toString("base64");
+}
+
+/**
+ * `id` (the map key) and `draft_id` (location-derived) are omitted; `by`/`at`
+ * mirror the root message for roughdraft interop and are ignored on read.
+ *
+ * When `placement` is set, the home-path range target's `rel_pos` is rewritten
+ * to the span's resolved offsets (the rebase; see `serializeReviewDoc`). Done
+ * on a shallow copy so the caller's thread objects are never mutated. Offsets
+ * that didn't drift re-encode to the identical bytes, so a no-drift save stays
+ * byte-for-byte stable.
+ */
+function threadRecord(
+  t: Thread,
+  placement: MarkerPlacement | undefined,
+  homePath: DocPath,
+): Record<string, unknown> {
   const root = t.messages[0];
+  const targets = placement
+    ? t.targets.map((tg) =>
+        tg.scope === "range" && tg.path === homePath
+          ? {
+              ...tg,
+              anchor: {
+                ...tg.anchor,
+                rel_pos: encodeRelPos(placement.from, placement.to),
+              },
+            }
+          : tg,
+      )
+    : t.targets;
   return {
     by: root?.author ?? "agent",
     at: new Date(root?.ts ?? t.created).toISOString(),
     status: t.status,
     created: t.created,
-    targets: t.targets,
+    targets,
     messages: t.messages,
   };
 }
