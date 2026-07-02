@@ -190,6 +190,10 @@ export default class SheafPlugin extends Plugin {
     this.registerDomEvent(document, "contextmenu", (evt) => {
       const view = this.app.workspace.getActiveViewOfType(MarkdownView);
       if (!view?.file || view.getMode() !== "preview") return;
+      // Only take over right-clicks that land inside this reading view — a live
+      // selection can outlive the click, so right-clicking the panel, ribbon, or
+      // a modal input must not suppress the native menu or pop ours.
+      if (!view.containerEl.contains(evt.target as Node)) return;
       const sel = view.containerEl.ownerDocument.getSelection();
       if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
       const text = sel.toString();
