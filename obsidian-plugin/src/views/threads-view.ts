@@ -1012,11 +1012,38 @@ export class ThreadsView extends ItemView {
         }
       });
     } else {
-      const status = card.createDiv();
+      const closedRow = card.createDiv();
+      closedRow.style.display = "flex";
+      closedRow.style.alignItems = "center";
+      closedRow.style.justifyContent = "space-between";
+      closedRow.style.gap = "0.5em";
+      closedRow.style.marginTop = "0.25em";
+
+      const status = closedRow.createDiv();
       status.setText(`✓ ${thread.status}`);
       status.style.fontSize = "0.75em";
       status.style.opacity = "0.5";
-      status.style.marginTop = "0.25em";
+
+      // "Unresolve" resurrects a thread the agent (or a hasty Resolve) closed
+      // too eagerly: flip it back to open so it re-enters the queue and the
+      // agent can pick it up again. Non-destructive and reversible — a
+      // re-resolve puts it right back.
+      const reopen = closedRow.createEl("button", { text: "Unresolve" });
+      reopen.style.fontSize = "0.8em";
+      reopen.style.flexShrink = "0";
+      reopen.title = "Reopen this thread and put it back in the queue";
+      reopen.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        try {
+          await this.plugin.client.reopenThread(thread.id);
+          new Notice("Thread reopened");
+          await this.refreshCurrent();
+        } catch (err) {
+          console.error("sheaf: reopen failed", err);
+          const msg = err instanceof Error ? err.message : String(err);
+          new Notice(`Sheaf: ${msg}`, 8000);
+        }
+      });
     }
   }
 

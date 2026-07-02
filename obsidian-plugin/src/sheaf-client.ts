@@ -169,6 +169,21 @@ export class SheafClient {
     }
   }
 
+  /**
+   * "Unresolve" a resolved thread — resurrect it back to open. The escape hatch
+   * for when the agent (or a hasty Resolve click) closed a thread that still
+   * needed attention. Thread-on-doc threads reopen as a plain outstanding item
+   * (no payload); the emitted `thread_changed` wakes the connected agent so it
+   * can pick the thread back up.
+   */
+  async reopenThread(threadId: string): Promise<void> {
+    const url = `${this.baseUrl}/api/ui/threads/${threadId}/reopen`;
+    const res = await requestUrl({ url, method: "POST", throw: false });
+    if (res.status >= 400) {
+      throw new SheafApiError(describeError(res.status, res.json), res.status, res.json);
+    }
+  }
+
   async getStyleConfig(): Promise<StyleConfig> {
     const url = `${this.baseUrl}/api/ui/style/config`;
     const res = await requestUrl({ url, method: "GET", throw: false });
