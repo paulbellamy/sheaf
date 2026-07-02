@@ -8,15 +8,22 @@ import { minimalEdit } from "../editor/minimal-edit";
  * adapter's native form). Parent folders are created on write so the hidden
  * `.sheaf/ycrdt/` snapshot mirror materializes on demand.
  *
- * Text writes are *editor-aware*: when the target doc is open in a markdown
- * editor, the new content is reconciled into that editor as a minimal change
- * and saved through the view, instead of stomping the file on disk. A raw
- * `adapter.write` to an open file reads to Obsidian as an *external*
+ * Text writes are *editor-aware*: when the target doc is open in a live
+ * markdown editor, the new content is reconciled into that editor as a minimal
+ * change and saved through the view, instead of stomping the file on disk. A
+ * raw `adapter.write` to an open file reads to Obsidian as an *external*
  * modification, and its reconcile moves the cursor/viewport to the changed
  * region — so every agent edit would yank the user to wherever the agent is
  * writing. Routing through the editor keeps the user's cursor and scroll where
- * they are (see {@link minimalEdit}). Docs that aren't open fall back to a
- * plain disk write.
+ * they are (see {@link minimalEdit}).
+ *
+ * Only *source* views (Source and Live Preview — where the CM6 editor is the
+ * live buffer and there's a cursor to preserve) take this path. Reading mode
+ * and closed docs fall back to a plain disk write: there's no cursor to keep,
+ * and going through the disk keeps the `.md` persisted before DocStore writes
+ * the `.ycrdt` snapshot. Saving a reading-mode view could instead flush its
+ * stale in-memory buffer, landing a `.ycrdt` ahead of the `.md` — the exact
+ * drift the ordering invariant guards against.
  */
 export function obsidianVaultFs(app: App): VaultFs {
   const adapter = app.vault.adapter;
@@ -24,7 +31,7 @@ export function obsidianVaultFs(app: App): VaultFs {
     exists: (p) => adapter.exists(p),
     readText: (p) => adapter.read(p),
     async writeText(p, data) {
-      const views = openViewsFor(app, p);
+      const views = openEditorViewsFor(app, p);
       if (views.length > 0) {
         for (const view of views) reconcileEditor(view, data);
         // Persist through the view so Obsidian sees its own write (no
@@ -47,13 +54,21 @@ export function obsidianVaultFs(app: App): VaultFs {
   };
 }
 
-/** Open markdown views showing the vault-relative doc `p`. */
-function openViewsFor(app: App, p: string): MarkdownView[] {
+/**
+ * Open *source-mode* markdown views showing the vault-relative doc `p` — i.e.
+ * those whose CM6 editor is the live buffer (Source and Live Preview). Reading
+ * views are excluded: they have no cursor to preserve and their editor buffer
+ * may be stale, so writes to them go through the disk path instead.
+ */
+function openEditorViewsFor(app: App, p: string): MarkdownView[] {
   return app.workspace
     .getLeavesOfType("markdown")
     .map((leaf) => leaf.view)
     .filter(
-      (v): v is MarkdownView => v instanceof MarkdownView && v.file?.path === p,
+      (v): v is MarkdownView =>
+        v instanceof MarkdownView &&
+        v.file?.path === p &&
+        v.getMode() === "source",
     );
 }
 
