@@ -8,7 +8,8 @@ import {
   type AcpAgentSpec,
   type AcpEffort,
 } from "./registry";
-import { makeToVaultPath, obsidianVaultFs } from "./vault-fs";
+import { obsidianVaultFs } from "./vault-fs";
+import { makeToVaultPath } from "./vault-path";
 import { requestAcpPermission } from "../views/acp-permission-modal";
 import {
   textBlock,
@@ -59,7 +60,7 @@ export class AcpController {
     const myGen = this.generation;
     const effortEnv = spec.effortEnv?.(effort) ?? {};
 
-    const docs = new DocStore(obsidianVaultFs(this.deps.app.vault.adapter));
+    const docs = new DocStore(obsidianVaultFs(this.deps.app));
     const base = serverUrl.replace(/\/$/, "");
 
     this.agent = spawnAcpAgent(

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { makeToVaultPath } from "./vault-fs";
+import { makeToVaultPath } from "./vault-path";
 
 /**
  * The absolute→vault-relative mapper is security-relevant: it's what stops the
