@@ -26,7 +26,13 @@ export type {
 
 export { defaultStyleConfig } from "../style/profile";
 export { remapRenamedPath } from "../paths";
-export { stripReviewMarkup, cleanOffset } from "../rfm/index";
+export {
+  stripReviewMarkup,
+  cleanOffset,
+  scanReviewMarkup,
+  splitEndmatter,
+} from "../rfm/index";
+export type { ReviewMarkerGroup, ReviewMarkerKind } from "../rfm/index";
 
 export type Ref = "main" | string;
 

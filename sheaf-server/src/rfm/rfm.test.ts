@@ -4,6 +4,7 @@ import {
   cleanOffset,
   composeDoc,
   renderInlineMarkers,
+  scanReviewMarkup,
   splitEndmatter,
   stripInlineMarkup,
   stripReviewMarkup,
@@ -78,6 +79,69 @@ describe("stripInlineMarkup", () => {
     const elapsed = Date.now() - start;
     expect(out).toBe(many); // no {#id} groups -> preserved verbatim
     expect(elapsed).toBeLessThan(2000);
+  });
+});
+
+describe("scanReviewMarkup", () => {
+  it("locates a comment group with its anchor, note, and id", () => {
+    const md = "Please revisit {==this sentence==}{>>Needs a source.<<}{#c1} now.";
+    const [g, ...rest] = scanReviewMarkup(md);
+    expect(rest).toHaveLength(0);
+    expect(g.kind).toBe("comment");
+    expect(g.id).toBe("c1");
+    expect(md.slice(g.keptStart, g.keptEnd)).toBe("this sentence");
+    expect(g.comment).toBe("Needs a source.");
+    expect(md.slice(g.start, g.end)).toBe(
+      "{==this sentence==}{>>Needs a source.<<}{#c1}",
+    );
+  });
+
+  it("handles a bare anchor whose body lives in the endmatter", () => {
+    const [g] = scanReviewMarkup("a {==anchor==}{#c1} b");
+    expect(g.kind).toBe("comment");
+    expect(g.comment).toBe("");
+    expect(g.id).toBe("c1");
+  });
+
+  it("joins multiple inline note blocks on one anchor", () => {
+    const [g] = scanReviewMarkup("x {==a==}{>>one<<}{>>two<<}{#c1} y");
+    expect(g.comment).toBe("one\n\ntwo");
+  });
+
+  it("reports the proposed text range for insertions and substitutions", () => {
+    const ins = scanReviewMarkup("a {++new++}{#s1} b")[0];
+    expect(ins.kind).toBe("insertion");
+    expect(ins.keptStart).toBe(ins.keptEnd); // nothing kept yet
+    expect("a {++new++}{#s1} b".slice(ins.newStart!, ins.newEnd!)).toBe("new");
+
+    const sub = scanReviewMarkup("a {~~old~>new~~}{#s2} b")[0];
+    expect(sub.kind).toBe("substitution");
+    const md = "a {~~old~>new~~}{#s2} b";
+    expect(md.slice(sub.keptStart, sub.keptEnd)).toBe("old");
+    expect(md.slice(sub.newStart!, sub.newEnd!)).toBe("new");
+  });
+
+  it("marks a deletion's kept (still-in-doc) text", () => {
+    const g = scanReviewMarkup("a {--gone--}{#s3} b")[0];
+    expect(g.kind).toBe("deletion");
+    expect("a {--gone--}{#s3} b".slice(g.keptStart, g.keptEnd)).toBe("gone");
+    expect(g.newStart).toBeNull();
+  });
+
+  it("skips markup inside code spans and fences, and hand-typed markup", () => {
+    expect(scanReviewMarkup("use `{==x==}{#c1}` here")).toEqual([]);
+    expect(
+      scanReviewMarkup("```\n{==x==}{>>c<<}{#c1}\n```"),
+    ).toEqual([]);
+    expect(scanReviewMarkup("a {==anchor==} b")).toEqual([]); // no {#id}
+  });
+
+  it("offsets round-trip against stripInlineMarkup's kept projection", () => {
+    const md = "keep {==A==}{>>c<<}{#c1} and {~~x~>y~~}{#s1} end";
+    const kept = scanReviewMarkup(md)
+      .map((g) => md.slice(g.keptStart, g.keptEnd))
+      .join("|");
+    expect(kept).toBe("A|x");
   });
 });
 

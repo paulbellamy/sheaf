@@ -58,59 +58,148 @@ function matchIdRef(md: string, offset: number): number | null {
   return m ? offset + m[0].length : null;
 }
 
+/** The four sheaf-injected marker shapes, keyed by their opening delimiter. */
+export type ReviewMarkerKind =
+  | "comment" // {==anchor==}{>>note<<}…{#id}
+  | "insertion" // {++new++}{#id}
+  | "deletion" // {--old--}{#id}
+  | "substitution"; // {~~old~>new~~}{#id}
+
 /**
- * Match a complete sheaf-injected marker group at `offset`, returning the
- * clean-text (`[keptStart, keptEnd)`, the "as-is" projection) and the group's
- * end. Every marker sheaf renders ends in a `{#id}`; requiring that terminator
- * is what leaves hand-typed CriticMarkup (a bare `{==x==}` with no id) literal.
+ * A fully-parsed marker group — the structure a renderer needs to hide the
+ * delimiters and style the parts. All fields are byte offsets into the same
+ * body string. `[keptStart, keptEnd)` is the clean-prose projection (what
+ * `stripInlineMarkup` keeps); `[newStart, newEnd)` is the proposed text an
+ * insertion/substitution introduces (null for comment/deletion). `comment` is
+ * the joined inline `{>>…<<}` note text (empty when a comment's body lives only
+ * in the endmatter, as sheaf's own writer emits).
  */
-function matchMarkerGroup(
+export interface ReviewMarkerGroup {
+  kind: ReviewMarkerKind;
+  /** Offset of the opening `{`. */
+  start: number;
+  /** Offset just past the closing `{#id}`. */
+  end: number;
+  /** Document-local id from the trailing `{#id}`. */
+  id: string;
+  keptStart: number;
+  keptEnd: number;
+  comment: string;
+  newStart: number | null;
+  newEnd: number | null;
+}
+
+/**
+ * Parse a complete sheaf-injected marker group at `offset` into its full
+ * structure, or return null if `offset` doesn't begin one. Every marker sheaf
+ * renders ends in a `{#id}`; requiring that terminator is what leaves
+ * hand-typed CriticMarkup (a bare `{==x==}` with no id) literal.
+ */
+function parseMarkerGroup(
   body: string,
   offset: number,
-): { keptStart: number; keptEnd: number; end: number } | null {
+): ReviewMarkerGroup | null {
+  const idAt = (pos: number): { id: string; end: number } | null => {
+    const end = matchIdRef(body, pos);
+    // `{#id}` → strip the `{#` prefix and `}` suffix to get the bare id.
+    return end === null ? null : { id: body.slice(pos + 2, end - 1), end };
+  };
+
   if (body.startsWith("{==", offset)) {
     const close = body.indexOf("==}", offset + 3);
     if (close === -1) return null;
     let pos = close + 3;
+    const notes: string[] = [];
     while (body.startsWith("{>>", pos)) {
       const c = body.indexOf("<<}", pos + 3);
       if (c === -1) return null;
+      notes.push(body.slice(pos + 3, c));
       pos = c + 3;
     }
-    const idEnd = matchIdRef(body, pos);
-    return idEnd === null
-      ? null
-      : { keptStart: offset + 3, keptEnd: close, end: idEnd };
+    const ref = idAt(pos);
+    if (!ref) return null;
+    return {
+      kind: "comment",
+      start: offset,
+      end: ref.end,
+      id: ref.id,
+      keptStart: offset + 3,
+      keptEnd: close,
+      comment: notes.join("\n\n"),
+      newStart: null,
+      newEnd: null,
+    };
   }
   if (body.startsWith("{~~", offset)) {
     const sep = body.indexOf("~>", offset + 3);
     const close = sep === -1 ? -1 : body.indexOf("~~}", sep + 2);
     if (sep === -1 || close === -1) return null;
-    const idEnd = matchIdRef(body, close + 3);
-    // keep the old side
-    return idEnd === null
-      ? null
-      : { keptStart: offset + 3, keptEnd: sep, end: idEnd };
+    const ref = idAt(close + 3);
+    if (!ref) return null;
+    // keep the old side; the new side is the proposed replacement
+    return {
+      kind: "substitution",
+      start: offset,
+      end: ref.end,
+      id: ref.id,
+      keptStart: offset + 3,
+      keptEnd: sep,
+      comment: "",
+      newStart: sep + 2,
+      newEnd: close,
+    };
   }
   if (body.startsWith("{++", offset)) {
     const close = body.indexOf("++}", offset + 3);
     if (close === -1) return null;
-    const idEnd = matchIdRef(body, close + 3);
-    // drop: a pending insertion isn't in the doc yet
-    return idEnd === null
-      ? null
-      : { keptStart: offset + 3, keptEnd: offset + 3, end: idEnd };
+    const ref = idAt(close + 3);
+    if (!ref) return null;
+    // drop: a pending insertion isn't in the doc yet (empty kept range)
+    return {
+      kind: "insertion",
+      start: offset,
+      end: ref.end,
+      id: ref.id,
+      keptStart: offset + 3,
+      keptEnd: offset + 3,
+      comment: "",
+      newStart: offset + 3,
+      newEnd: close,
+    };
   }
   if (body.startsWith("{--", offset)) {
     const close = body.indexOf("--}", offset + 3);
     if (close === -1) return null;
-    const idEnd = matchIdRef(body, close + 3);
+    const ref = idAt(close + 3);
+    if (!ref) return null;
     // keep: a pending deletion is still in the doc
-    return idEnd === null
-      ? null
-      : { keptStart: offset + 3, keptEnd: close, end: idEnd };
+    return {
+      kind: "deletion",
+      start: offset,
+      end: ref.end,
+      id: ref.id,
+      keptStart: offset + 3,
+      keptEnd: close,
+      comment: "",
+      newStart: null,
+      newEnd: null,
+    };
   }
   return null;
+}
+
+/**
+ * Match a complete sheaf-injected marker group at `offset`, returning just the
+ * clean-text (`[keptStart, keptEnd)`, the "as-is" projection) and the group's
+ * end — the minimal shape the strip/offset-mapping pass needs. Delegates to
+ * `parseMarkerGroup` so the delimiter grammar has a single definition.
+ */
+function matchMarkerGroup(
+  body: string,
+  offset: number,
+): { keptStart: number; keptEnd: number; end: number } | null {
+  const g = parseMarkerGroup(body, offset);
+  return g ? { keptStart: g.keptStart, keptEnd: g.keptEnd, end: g.end } : null;
 }
 
 /**
@@ -267,6 +356,26 @@ export function stripInlineMarkup(body: string): string {
     parts.push(body.slice(seg.keptStart, seg.keptEnd));
   }
   return parts.join("");
+}
+
+/**
+ * Locate every sheaf-injected marker group in a body, in document order, with
+ * full structure (see `ReviewMarkerGroup`). Shares `scanSegments`' code/fence
+ * awareness, so a marker inside inline code or a fence is skipped exactly as
+ * `stripInlineMarkup` skips it — a renderer keying off this can't decorate
+ * (and so visually "activate") literal example markup. Offsets are into `body`
+ * as given; pass `splitEndmatter(md).body` to avoid scanning the YAML tail.
+ */
+export function scanReviewMarkup(body: string): ReviewMarkerGroup[] {
+  const groups: ReviewMarkerGroup[] = [];
+  for (const seg of scanSegments(body)) {
+    // `scanSegments` emits each marker group as one non-code segment spanning
+    // exactly [start, group.end); re-parse it for the full structure.
+    if (seg.code || body[seg.start] !== "{") continue;
+    const g = parseMarkerGroup(body, seg.start);
+    if (g && g.end === seg.end) groups.push(g);
+  }
+  return groups;
 }
 
 /**
