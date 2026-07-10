@@ -36,7 +36,9 @@ describe("buildSheafApp over a real socket", () => {
   });
 
   afterEach(async () => {
-    await app.close();
+    // The close()-with-live-SSE test closes the app itself; a second close
+    // rejects, so tolerate it here.
+    await app.close().catch(() => {});
     await fs.rm(root, { recursive: true, force: true });
   });
 
@@ -88,6 +90,40 @@ describe("buildSheafApp over a real socket", () => {
     expect(text).toContain(":");
     await reader.cancel();
     ctrl.abort();
+  });
+
+  it("close() ends live SSE streams instead of hanging on them", async () => {
+    // Regression: hijacked SSE replies are invisible to Fastify's shutdown,
+    // so `close()` used to wait forever on a connected stream. The Obsidian
+    // host's stop→start restart then left the old app alive with the agent's
+    // Monitor still subscribed to the *old* backend — kept open by the
+    // keep-alive ping, never reconnecting, silently missing every event
+    // emitted on the restarted instance (user replies included).
+    const res = await fetch(`${base}/api/ui/drafts/stream?role=agent`, {
+      headers: { accept: "text/event-stream" },
+    });
+    expect(res.status).toBe(200);
+    const reader = res.body!.getReader();
+    await reader.read(); // primed frame — connection fully established
+
+    const closed = app.close().then(() => "closed" as const);
+    const hung = new Promise<"hung">((r) => setTimeout(() => r("hung"), 3000));
+    expect(await Promise.race([closed, hung])).toBe("closed");
+
+    // The client must observe EOF so its reconnect loop re-attaches to the
+    // restarted server rather than waiting on a zombie connection.
+    const eof = (async () => {
+      while (true) {
+        const { done } = await reader.read();
+        if (done) return true;
+      }
+    })();
+    expect(
+      await Promise.race([
+        eof,
+        new Promise<false>((r) => setTimeout(() => r(false), 3000)),
+      ]),
+    ).toBe(true);
   });
 });
 
