@@ -1028,11 +1028,13 @@ describe("backend.subscribe agent_presence (Phase E)", () => {
     const events: BackendEvent[] = [];
     backend.subscribe((e) => events.push(e), { role: "ui" });
 
-    expect(events).toHaveLength(1);
+    // presence replay plus the stream_reset every fresh subscribe receives
+    expect(events).toHaveLength(2);
     expect(events[0]).toMatchObject({
       kind: "agent_presence",
       connected: false,
     });
+    expect(events[1]).toMatchObject({ kind: "stream_reset" });
   });
 
   it("does not double-fire when a second agent subscribes (still connected)", () => {
@@ -1098,6 +1100,96 @@ describe("emit does not echo agent-origin mutations back to the agent", () => {
 
     // Only the user's addThread should reach the agent — not its own reply.
     expect(agentEvents.filter((e) => e.kind === "thread_changed")).toHaveLength(1);
+  });
+});
+
+describe("resumable event stream (sinceId replay)", () => {
+  let root: string;
+  let backend: StubBackend;
+  const docPath = "workspaces/ws/docs/a.md";
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-resume-"));
+    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "hello world",
+    );
+    backend = new StubBackend(root);
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("replays events missed between unsubscribe and resubscribe", async () => {
+    let lastId: string | undefined;
+    const unsub = backend.subscribe((_e, id) => {
+      if (id) lastId = id;
+    });
+    await backend.writeDoc(docPath, "main", "v2");
+    expect(lastId).toBeDefined();
+    unsub();
+
+    // Missed while disconnected.
+    await backend.writeDoc(docPath, "main", "v3");
+
+    const resumed: BackendEvent[] = [];
+    backend.subscribe((e) => resumed.push(e), { sinceId: lastId });
+    expect(resumed.filter((e) => e.kind === "doc_changed")).toHaveLength(1);
+    expect(resumed.filter((e) => e.kind === "stream_reset")).toHaveLength(0);
+  });
+
+  it("does not replay agent-origin events to a resumed agent subscriber", async () => {
+    let lastId: string | undefined;
+    const unsub = backend.subscribe(
+      (_e, id) => {
+        if (id) lastId = id;
+      },
+      { role: "agent" },
+    );
+    await backend.writeDoc(docPath, "main", "v2");
+    unsub();
+
+    // Missed while disconnected: one of the agent's own, one from the user.
+    await backend.writeDoc(docPath, "main", "v3", undefined, "agent");
+    await backend.writeDoc(docPath, "main", "v4");
+
+    const resumed: BackendEvent[] = [];
+    backend.subscribe((e) => resumed.push(e), {
+      role: "agent",
+      sinceId: lastId,
+    });
+    // Only the user-origin write is replayed — same rule as live delivery.
+    expect(resumed.filter((e) => e.kind === "doc_changed")).toHaveLength(1);
+  });
+
+  it("sends stream_reset for an id from another backend instance", async () => {
+    const events: BackendEvent[] = [];
+    backend.subscribe((e) => events.push(e), { sinceId: "deadbeef.3" });
+    expect(events.filter((e) => e.kind === "stream_reset")).toHaveLength(1);
+    expect(events.filter((e) => e.kind === "doc_changed")).toHaveLength(0);
+  });
+
+  it("sends stream_reset when the resume position fell out of the buffer", async () => {
+    let firstId: string | undefined;
+    const unsub = backend.subscribe((_e, id) => {
+      firstId = firstId ?? id;
+    });
+    await backend.writeDoc(docPath, "main", "v2");
+    unsub();
+
+    // Push the first id past the replay-buffer horizon.
+    for (let i = 0; i < 300; i++) {
+      await backend.writeDoc(docPath, "main", `v${i + 3}`);
+    }
+
+    const events: BackendEvent[] = [];
+    backend.subscribe((e) => events.push(e), { sinceId: firstId });
+    expect(events.filter((e) => e.kind === "stream_reset")).toHaveLength(1);
+    expect(events.filter((e) => e.kind === "doc_changed")).toHaveLength(0);
   });
 });
 

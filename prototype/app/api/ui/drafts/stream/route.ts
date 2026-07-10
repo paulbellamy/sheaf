@@ -17,6 +17,12 @@ export const runtime = "nodejs";
 export async function GET(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const role = url.searchParams.get("role") === "agent" ? "agent" : "ui";
+  // Resume position: the standard SSE header (EventSource sends it on
+  // reconnect automatically), with `?since=` as the curl-friendly fallback.
+  const lastEventId =
+    req.headers.get("last-event-id") ??
+    url.searchParams.get("since") ??
+    undefined;
 
   if (!reserveSseClient()) {
     return new Response("too many SSE clients", { status: 503 });
@@ -35,7 +41,7 @@ export async function GET(req: Request): Promise<Response> {
           }
         },
       };
-      const cleanup = pipeEvents(backend(), sink, { role });
+      const cleanup = pipeEvents(backend(), sink, { role, lastEventId });
       req.signal.addEventListener("abort", cleanup);
     },
   });

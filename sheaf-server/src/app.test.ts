@@ -92,6 +92,79 @@ describe("buildSheafApp over a real socket", () => {
     ctrl.abort();
   });
 
+  it("resumes a reconnect from Last-Event-ID without a gap", async () => {
+    // First connection: catch the id of a thread_changed frame.
+    const res1 = await fetch(`${base}/api/ui/drafts/stream?role=agent`, {
+      headers: { accept: "text/event-stream" },
+    });
+    const reader1 = res1.body!.getReader();
+    const decoder = new TextDecoder();
+    let buf1 = "";
+    const post = (msg: string) =>
+      fetch(`${base}/api/ui/threads`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          path: "workspaces/ws/docs/a.md",
+          targets: [{ scope: "doc" }],
+          message: msg,
+        }),
+      });
+    await post("first");
+    let lastId: string | undefined;
+    while (!lastId) {
+      const { value, done } = await reader1.read();
+      if (done) break;
+      buf1 += decoder.decode(value, { stream: true });
+      const m = [...buf1.matchAll(/^id: (\S+)$/gm)];
+      lastId = m.at(-1)?.[1];
+    }
+    expect(lastId).toBeDefined();
+    await reader1.cancel();
+
+    // Missed while disconnected.
+    await post("second — missed");
+
+    // Reconnect with Last-Event-ID: the missed event is replayed, no reset.
+    const res2 = await fetch(`${base}/api/ui/drafts/stream?role=agent`, {
+      headers: {
+        accept: "text/event-stream",
+        "last-event-id": lastId!,
+      },
+    });
+    const reader2 = res2.body!.getReader();
+    let buf2 = "";
+    while (!buf2.includes("thread_changed")) {
+      const { value, done } = await reader2.read();
+      if (done) break;
+      buf2 += decoder.decode(value, { stream: true });
+    }
+    expect(buf2).toContain("thread_changed");
+    expect(buf2).not.toContain("stream_reset");
+    await reader2.cancel();
+  });
+
+  it("sends stream_reset when the resume position can't be honored", async () => {
+    // An id minted by "another instance" (unknown epoch) → explicit reset,
+    // so a restart gap is never silent.
+    const res = await fetch(`${base}/api/ui/drafts/stream?role=agent`, {
+      headers: {
+        accept: "text/event-stream",
+        "last-event-id": "deadbeef.42",
+      },
+    });
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    while (!buf.includes("stream_reset")) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+    }
+    expect(buf).toContain('{"kind":"stream_reset"}');
+    await reader.cancel();
+  });
+
   it("close() ends live SSE streams instead of hanging on them", async () => {
     // Regression: hijacked SSE replies are invisible to Fastify's shutdown,
     // so `close()` used to wait forever on a connected stream. The Obsidian

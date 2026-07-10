@@ -803,6 +803,13 @@ export default class SheafPlugin extends Plugin {
         this.refreshAgentPresence();
         this.settingTab?.onAgentPresenceChanged();
         break;
+      case "stream_reset":
+        // The stream can't prove continuity (fresh connect, or a reconnect
+        // after the embedded server restarted) — events may have been
+        // missed, so re-sync the panel from the store.
+        if (view) void view.refreshCurrent();
+        this.updateStatusBar();
+        break;
       default:
         // draft_* events: prototype doesn't show drafts in UX. Ignore.
         break;

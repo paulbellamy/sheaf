@@ -310,6 +310,13 @@ export function buildSheafApp(
 
   app.get("/api/ui/drafts/stream", (req, reply) => {
     const role = q(req, "role") === "agent" ? "agent" : "ui";
+    // Resume position: the standard SSE header (EventSource sends it on
+    // reconnect automatically), with `?since=` as the curl-friendly fallback.
+    const lastEventIdHeader = req.headers["last-event-id"];
+    const lastEventId =
+      (typeof lastEventIdHeader === "string" && lastEventIdHeader !== ""
+        ? lastEventIdHeader
+        : undefined) ?? q(req, "since");
     if (!reserveSseClient()) {
       reply.code(503).send("too many SSE clients");
       return;
@@ -333,7 +340,7 @@ export function buildSheafApp(
       write: (chunk) => reply.raw.write(chunk),
       close: () => reply.raw.end(),
     };
-    const cleanup = pipeEvents(backend, sink, { role });
+    const cleanup = pipeEvents(backend, sink, { role, lastEventId });
     liveSseCleanups.add(cleanup);
     req.raw.on("close", () => {
       liveSseCleanups.delete(cleanup);

@@ -51,8 +51,10 @@ export function VersionDropdown({ path, currentVersion }: Props) {
     void load();
     const unsubscribe = subscribeBackendEvents((event) => {
       if (
-        event.kind === "draft_merged" &&
-        event.target_paths.includes(path)
+        (event.kind === "draft_merged" &&
+          event.target_paths.includes(path)) ||
+        // continuity lost (reconnect after a server restart) — re-sync
+        event.kind === "stream_reset"
       ) {
         void load();
       }

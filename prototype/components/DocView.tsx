@@ -103,9 +103,11 @@ export function DocView({
     if (!docRef || docRef === "main") return;
     return subscribeBackendEvents((event) => {
       if (
-        event.kind === "draft_changed" &&
-        event.draft_id === docRef &&
-        event.path === path
+        (event.kind === "draft_changed" &&
+          event.draft_id === docRef &&
+          event.path === path) ||
+        // continuity lost (reconnect after a server restart) — re-sync
+        event.kind === "stream_reset"
       ) {
         void load();
       }

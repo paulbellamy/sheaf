@@ -197,11 +197,19 @@ independently; each is an event of the form:
 {"kind":"thread_changed","thread_id":"thrd_...","target_paths":["notes/foo.md"]}
 {"kind":"doc_changed","path":"notes/foo.md"}
 {"kind":"agent_presence","connected":true}
+{"kind":"stream_reset"}
 \`\`\`
 
 Branch on \`kind\`:
-- **thread_changed** — the user posted (or you resolved) a thread. Investigate.
-- **doc_changed** — a write landed on a doc; usually emitted by your own Edit/Write. Ignore unless you're tracking concurrent activity.
+- **thread_changed** — the user posted a thread or a reply. Investigate.
+  (Your own thread mutations are not echoed back to this stream.)
+- **doc_changed** — a write landed on a doc from outside your session (your
+  own Edit/Write is not echoed back). Ignore unless you're tracking
+  concurrent activity.
+- **stream_reset** — the stream can't prove continuity with what you've
+  already seen: sent on every fresh connect, and on a reconnect after the
+  server restarted. Events may have been missed while you were disconnected,
+  so re-run \`ListThreads\` and work whatever is open.
 - **agent_presence** — connection lifecycle for the watcher itself. Ignore.
 
 Other event kinds may arrive (\`draft_*\`); they're not part of this workflow
@@ -365,6 +373,7 @@ it:
   the draft-review workflow this prototype doesn't use. (\`AttachDraftPayload\`
   is *not* in that list: it's how you present options — see the loop above.)
 - Don't write to \`.\`-prefixed paths (dotfiles, \`.drafts/\`, \`.obsidian/\`) — those are rejected.
-- Don't loop on \`doc_changed\` events you emitted yourself.
+- Don't loop on \`doc_changed\` events — your own edits are never echoed back,
+  so one always means outside activity, not your write landing.
 
 That's the whole workflow. Subscribe, react, edit, resolve.`;

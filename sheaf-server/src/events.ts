@@ -45,6 +45,11 @@ function releaseSseClient(): void {
  * Wire a reserved SSE connection to the backend event stream. The caller must
  * have called `reserveSseClient()` first (and returned 503 if it was false).
  *
+ * Mutation events are written with their SSE `id:` field; pass the client's
+ * `Last-Event-ID` (or `?since=`) as `opts.lastEventId` and the backend
+ * replays what the connection missed — or sends a `stream_reset` when it
+ * can't prove continuity, so a gap is never silent.
+ *
  * Returns a cleanup function to call on client disconnect; it is idempotent,
  * stops the keep-alive, unsubscribes, releases the reserved slot, and closes
  * the sink.
@@ -52,7 +57,7 @@ function releaseSseClient(): void {
 export function pipeEvents(
   backend: Backend,
   sink: SseSink,
-  opts: { role: "ui" | "agent" },
+  opts: { role: "ui" | "agent"; lastEventId?: string },
 ): () => void {
   let closed = false;
   let queued = 0;
@@ -72,7 +77,7 @@ export function pipeEvents(
     }
   };
 
-  const send = (event: BackendEvent) => {
+  const send = (event: BackendEvent, eventId?: string) => {
     if (closed) return;
     if (queued >= MAX_QUEUED_EVENTS) {
       // Drop slow consumer — their EventSource will reconnect.
@@ -81,7 +86,8 @@ export function pipeEvents(
     }
     try {
       queued += 1;
-      sink.write(`data: ${JSON.stringify(event)}\n\n`);
+      const idField = eventId ? `id: ${eventId}\n` : "";
+      sink.write(`${idField}data: ${JSON.stringify(event)}\n\n`);
       // naive drain: SSE has no client ack, so treat each enqueue as
       // "delivered soon" and decrement a little later via a microtask. A
       // coarse back-pressure hint, not a correctness guarantee.
@@ -100,7 +106,10 @@ export function pipeEvents(
     // sink already gone — nothing to do
   }
 
-  unsubscribe = backend.subscribe(send, { role: opts.role });
+  unsubscribe = backend.subscribe(send, {
+    role: opts.role,
+    sinceId: opts.lastEventId,
+  });
 
   // `subscribe` can emit synchronously (presence replay), so `send` — and thus
   // `cleanup` — may already have run while `unsubscribe` was still the no-op.

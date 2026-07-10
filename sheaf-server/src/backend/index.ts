@@ -495,10 +495,18 @@ export interface Backend {
    * from agent subscribers (the MCP/event-watcher session). Only `"agent"`
    * subscribers count toward `agent_presence`; otherwise a single browser
    * tab would mark itself as a connected agent.
+   *
+   * Mutation events carry a resume id (`eventId`, the SSE `id:` field);
+   * lifecycle events (`agent_presence`, `stream_reset`) don't. Pass the last
+   * id seen as `sinceId` to resume: everything emitted after it (that the
+   * role would have received) is replayed from an in-memory buffer. When the
+   * position can't be honored — no `sinceId`, a different backend instance,
+   * or the id has fallen out of the buffer — the subscriber gets one
+   * `stream_reset` instead, meaning "re-sync from the store".
    */
   subscribe(
-    listener: (event: BackendEvent) => void,
-    opts?: { role?: "ui" | "agent" },
+    listener: (event: BackendEvent, eventId?: string) => void,
+    opts?: { role?: "ui" | "agent"; sinceId?: string },
   ): () => void;
 }
 
@@ -574,6 +582,17 @@ export const backendEventSchema = z.discriminatedUnion("kind", [
      * connect so they render "last seen" without waiting for a transition).
      */
     last_seen: z.number().optional(),
+  }),
+  z.object({
+    /**
+     * The stream cannot prove continuity with the subscriber's last-seen
+     * position: sent once on every fresh subscribe (no `sinceId`), and on a
+     * reconnect whose `sinceId` is from another backend instance or has
+     * fallen out of the replay buffer. Consumers must treat it as "events
+     * may have been missed" and re-sync from the store (`ListThreads`, a
+     * refetch) rather than trusting the stream alone.
+     */
+    kind: z.literal("stream_reset"),
   }),
 ]);
 
