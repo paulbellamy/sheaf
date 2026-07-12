@@ -33,7 +33,9 @@ export function DocRail({
       if (
         event.kind === "draft_created" ||
         event.kind === "draft_changed" ||
-        event.kind === "draft_state"
+        event.kind === "draft_state" ||
+        // continuity lost (reconnect after a server restart) — re-sync
+        event.kind === "stream_reset"
       ) {
         schedule();
       }

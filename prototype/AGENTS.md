@@ -24,8 +24,11 @@ it buffers events and only emits them after the stream has been quiet for 10s, s
 a user typing rapidly wakes you once with the whole batch instead of once per
 event. Each wake-up is therefore one or more `BackendEvent` JSON lines
 (`thread_changed`, `doc_changed`, `draft_changed`, `draft_state`,
-`draft_created`, `draft_merged`, `agent_presence`). On `thread_changed`, call
-`ListThreads` / `ReadThread` via MCP. Stop with `TaskStop` when done.
+`draft_created`, `draft_merged`, `agent_presence`, `stream_reset`). On
+`thread_changed`, call `ListThreads` / `ReadThread` via MCP. On
+`stream_reset` (sent on connect, and on a reconnect the server can't prove
+gapless — e.g. after a restart), events may have been missed: re-run
+`ListThreads` and work whatever is open. Stop with `TaskStop` when done.
 
 # Drafts are agent-originated
 

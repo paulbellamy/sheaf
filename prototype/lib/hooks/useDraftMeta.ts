@@ -93,6 +93,9 @@ export function useDraftMeta(docRef: string | undefined): {
         // Another draft just landed on main; recompute `versions_behind`
         // for this still-open draft.
         void load();
+      } else if (event.kind === "stream_reset") {
+        // Continuity lost (reconnect after a server restart) — re-sync.
+        void load();
       }
     });
     return () => {

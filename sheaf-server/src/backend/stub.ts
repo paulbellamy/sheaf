@@ -240,6 +240,14 @@ async function copyFileNoFollow(src: string, dest: string): Promise<void> {
   await writeFileNoFollow(dest, content);
 }
 
+/**
+ * Replay-buffer depth for resumable SSE subscriptions. Sized for the gap a
+ * reconnect loop actually spans (about a second, plus a debounce window) —
+ * a subscriber further behind than this gets a `stream_reset` and re-syncs
+ * from the store.
+ */
+const MAX_REPLAY_EVENTS = 256;
+
 export class StubBackend implements Backend {
   private root: string;
   /**
@@ -254,15 +262,29 @@ export class StubBackend implements Backend {
   private styleConfigPath: string;
   private opLogCache: OpLog | null = null;
   private lockChain: Promise<unknown> = Promise.resolve();
-  private subscribers = new Set<(event: BackendEvent) => void>();
+  private subscribers = new Set<(event: BackendEvent, eventId?: string) => void>();
   /**
    * Subset of `subscribers` registered with `role: "agent"`. Tracked so the
    * `agent_presence` event reflects watcher/MCP sessions only — UI tabs
    * don't mark themselves as connected agents.
    */
-  private agentSubscribers = new Set<(event: BackendEvent) => void>();
+  private agentSubscribers = new Set<(event: BackendEvent, eventId?: string) => void>();
   /** Unix-ms of the last moment an agent subscriber was registered. */
   private agentLastSeen: number | undefined;
+  /**
+   * Resumable-stream state. Every mutation event gets an id
+   * `<epoch>.<seq>` (the SSE `id:` field) and a slot in a bounded replay
+   * buffer, so a subscriber that reconnects with `sinceId` gets the events
+   * it missed instead of a silent gap. The epoch is random per backend
+   * instance: an id minted by a previous instance (embedded-server restart)
+   * is detectably non-resumable and yields a `stream_reset` instead of a
+   * wrong replay. Lifecycle events (`agent_presence`, `stream_reset`) are
+   * connection state, not mutations — they get no id and aren't buffered
+   * (current presence is already replayed to fresh UI subscribers).
+   */
+  private streamEpoch = randomUUID().slice(0, 8);
+  private streamSeq = 0;
+  private eventLog: { seq: number; origin: Origin; event: BackendEvent }[] = [];
   /**
    * Per-doc monotonic version counter. Initialized to 1 the first time a doc
    * with prose is read on main; bumped on draft accept (Phase I wires the
@@ -286,8 +308,8 @@ export class StubBackend implements Backend {
   }
 
   subscribe(
-    listener: (event: BackendEvent) => void,
-    opts?: { role?: "ui" | "agent" },
+    listener: (event: BackendEvent, eventId?: string) => void,
+    opts?: { role?: "ui" | "agent"; sinceId?: string },
   ): () => void {
     const role = opts?.role ?? "ui";
     this.subscribers.add(listener);
@@ -311,6 +333,25 @@ export class StubBackend implements Backend {
         /* listener errors must not break callers */
       }
     }
+    // Resume or reset. Replay everything after `sinceId` that this role
+    // would have received live; when the position can't be honored (no id,
+    // another instance's epoch, or evicted from the buffer), send one
+    // `stream_reset` so the consumer knows to re-sync from the store instead
+    // of trusting the stream.
+    try {
+      const resumeFrom = this.resumePoint(opts?.sinceId);
+      if (resumeFrom === null) {
+        listener({ kind: "stream_reset" });
+      } else {
+        for (const entry of this.eventLog) {
+          if (entry.seq <= resumeFrom) continue;
+          if (entry.origin === "agent" && role === "agent") continue;
+          listener(entry.event, `${this.streamEpoch}.${entry.seq}`);
+        }
+      }
+    } catch {
+      /* listener errors must not break callers */
+    }
     return () => {
       this.subscribers.delete(listener);
       if (role === "agent") {
@@ -328,7 +369,32 @@ export class StubBackend implements Backend {
     };
   }
 
+  /**
+   * Seq of the last event the subscriber has proven it saw, or null when the
+   * stream can't resume from `sinceId` (absent, minted by another instance's
+   * epoch, or already evicted from the bounded buffer).
+   */
+  private resumePoint(sinceId: string | undefined): number | null {
+    if (!sinceId) return null;
+    const dot = sinceId.lastIndexOf(".");
+    if (dot === -1 || sinceId.slice(0, dot) !== this.streamEpoch) return null;
+    const seq = Number(sinceId.slice(dot + 1));
+    if (!Number.isInteger(seq) || seq < 0 || seq > this.streamSeq) return null;
+    // Everything after `seq` must still be buffered for the replay to be gapless.
+    const oldestBuffered = this.eventLog[0]?.seq ?? this.streamSeq + 1;
+    return seq >= oldestBuffered - 1 ? seq : null;
+  }
+
   private emit(event: BackendEvent, origin: Origin = "ui"): void {
+    // Mutation events get a resume id and a replay-buffer slot; presence is
+    // connection lifecycle, replayed as current state on subscribe instead.
+    let eventId: string | undefined;
+    if (event.kind !== "agent_presence") {
+      this.streamSeq += 1;
+      eventId = `${this.streamEpoch}.${this.streamSeq}`;
+      this.eventLog.push({ seq: this.streamSeq, origin, event });
+      if (this.eventLog.length > MAX_REPLAY_EVENTS) this.eventLog.shift();
+    }
     for (const listener of this.subscribers) {
       // Don't echo an agent's own mutations back to agent subscribers: the
       // event-watcher would otherwise wake the agent on its own edits and
@@ -337,7 +403,7 @@ export class StubBackend implements Backend {
       // reach everyone, including the agent.
       if (origin === "agent" && this.agentSubscribers.has(listener)) continue;
       try {
-        listener(event);
+        listener(event, eventId);
       } catch {
         // listener errors must not break callers
       }

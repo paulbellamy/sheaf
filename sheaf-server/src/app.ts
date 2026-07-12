@@ -292,8 +292,31 @@ export function buildSheafApp(
 
   /* ----------------------------------------------------- SSE event stream -- */
 
+  // Live SSE connections, ended on app.close(). Hijacked replies are invisible
+  // to Fastify's shutdown: without this, `close()` waits forever on the open
+  // stream sockets. The Obsidian host's stop→start restart then leaves the old
+  // app alive with every subscriber bound to the *old* backend — the keep-alive
+  // ping holds the agent's Monitor connection open, so it never reconnects and
+  // silently misses every event emitted on the new instance. Closing the
+  // streams here gives clients an EOF, and their reconnect loops re-attach to
+  // the restarted server.
+  // `preClose` (not `onClose`) because Fastify's own server-close — which
+  // waits for the sockets these streams hold open — runs before onClose hooks.
+  const liveSseCleanups = new Set<() => void>();
+  app.addHook("preClose", async () => {
+    for (const cleanup of [...liveSseCleanups]) cleanup();
+    liveSseCleanups.clear();
+  });
+
   app.get("/api/ui/drafts/stream", (req, reply) => {
     const role = q(req, "role") === "agent" ? "agent" : "ui";
+    // Resume position: the standard SSE header (EventSource sends it on
+    // reconnect automatically), with `?since=` as the curl-friendly fallback.
+    const lastEventIdHeader = req.headers["last-event-id"];
+    const lastEventId =
+      (typeof lastEventIdHeader === "string" && lastEventIdHeader !== ""
+        ? lastEventIdHeader
+        : undefined) ?? q(req, "since");
     if (!reserveSseClient()) {
       reply.code(503).send("too many SSE clients");
       return;
@@ -317,8 +340,12 @@ export function buildSheafApp(
       write: (chunk) => reply.raw.write(chunk),
       close: () => reply.raw.end(),
     };
-    const cleanup = pipeEvents(backend, sink, { role });
-    req.raw.on("close", cleanup);
+    const cleanup = pipeEvents(backend, sink, { role, lastEventId });
+    liveSseCleanups.add(cleanup);
+    req.raw.on("close", () => {
+      liveSseCleanups.delete(cleanup);
+      cleanup();
+    });
   });
 
   /* ------------------------------------------------------------- MCP API -- */

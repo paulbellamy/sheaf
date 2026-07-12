@@ -150,7 +150,10 @@ export function useServerThreads(
     void load();
 
     const unsubscribe = subscribeBackendEvents((event) => {
-      if (event.kind === "thread_changed") void load();
+      // stream_reset = the stream can't prove continuity (reconnect after a
+      // server restart); events may have been missed, so re-sync.
+      if (event.kind === "thread_changed" || event.kind === "stream_reset")
+        void load();
     });
     return () => {
       // advance the sequence so any in-flight response is discarded

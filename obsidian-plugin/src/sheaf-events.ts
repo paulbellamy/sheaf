@@ -14,7 +14,13 @@ export type BackendEvent =
       target_paths: string[];
       versions: Array<{ path: string; from: number; to: number }>;
     }
-  | { kind: "agent_presence"; connected: boolean; last_seen?: number };
+  | { kind: "agent_presence"; connected: boolean; last_seen?: number }
+  /**
+   * The stream can't prove continuity with our last-seen position (fresh
+   * connect, or a reconnect after the server restarted). Events may have
+   * been missed — consumers should re-sync from the REST API.
+   */
+  | { kind: "stream_reset" };
 
 export type EventListener = (event: BackendEvent) => void;
 
@@ -29,6 +35,13 @@ export class SheafEventStream {
   private stopped = false;
   private backoffMs = 500;
   private readonly maxBackoffMs = 15_000;
+  /**
+   * Last SSE `id:` seen, sent back as `Last-Event-ID` on reconnect so the
+   * server replays what we missed. When it can't (server restarted, buffer
+   * outrun), it sends a `stream_reset` event instead — either way a
+   * reconnect gap is never silent.
+   */
+  private lastEventId: string | null = null;
 
   constructor(
     private baseUrl: string,
@@ -60,10 +73,14 @@ export class SheafEventStream {
     while (!this.stopped) {
       this.abort = new AbortController();
       try {
+        const headers: Record<string, string> = {
+          accept: "text/event-stream",
+        };
+        if (this.lastEventId) headers["last-event-id"] = this.lastEventId;
         const res = await fetch(
           `${this.baseUrl}/api/ui/drafts/stream?role=ui`,
           {
-            headers: { accept: "text/event-stream" },
+            headers,
             signal: this.abort.signal,
           },
         );
@@ -83,6 +100,11 @@ export class SheafEventStream {
             const frame = buf.slice(0, sep);
             buf = buf.slice(sep + 2);
             for (const line of frame.split("\n")) {
+              if (line.startsWith("id:")) {
+                const id = line.slice(3).trim();
+                if (id) this.lastEventId = id;
+                continue;
+              }
               if (!line.startsWith("data:")) continue;
               const payload = line.slice(5).trimStart();
               if (!payload) continue;
