@@ -74,6 +74,34 @@ describe("buildSheafApp over a real socket", () => {
     expect(body.result?.serverInfo?.name).toBe("sheaf");
   });
 
+  it("ReadMe serves an immediate (non-debounced) event-watch command", async () => {
+    // Regression: the Monitor one-liner must stream each SSE event as it
+    // arrives. A `read -t N` quiet-window debounce (once shipped here) held a
+    // posted comment's `thread_changed` until the stream idled — and because
+    // the quiet timer reset on every event, a user who kept working starved
+    // delivery indefinitely, so the connected agent never woke. Guard against
+    // a reprise of that debounce in the served guide.
+    const transport = new StreamableHTTPClientTransport(
+      new URL(`${base}/api/mcp`),
+    );
+    const client = new Client({ name: "readme-test", version: "0.0.0" });
+    await client.connect(transport);
+    try {
+      const res = (await client.callTool({
+        name: "ReadMe",
+        arguments: {},
+      })) as { content: { type: string; text: string }[] };
+      const text = res.content.map((c) => c.text).join("\n");
+      // Streams each `data:` line the instant it arrives, then reconnects.
+      expect(text).toContain('sed -n -u "s/^data: //p"; sleep 1; done');
+      // Must not reintroduce the starving quiet-window buffer.
+      expect(text).not.toContain("read -r -t");
+      expect(text).not.toContain("buf+=");
+    } finally {
+      await client.close();
+    }
+  });
+
   it("streams SSE events with a primed connection frame", async () => {
     const ctrl = new AbortController();
     const res = await fetch(`${base}/api/ui/drafts/stream?role=ui`, {
