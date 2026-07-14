@@ -27,7 +27,7 @@ export function buildPanelRequestMessage(personas: ReviewPersona[]): string {
 
   return [
     PANEL_REVIEW_MARKER,
-    "Run a panel review of this doc. Channel each role below and post your feedback as separate, anchored threads — author each `review:<id>`, one thread per substantive point. Stay silent where a role has nothing material to add; a short sharp panel beats an exhaustive one.",
+    "Run a panel review of this doc. For each role below, launch a clean subagent with the doc and only that role's brief so the perspectives stay independent, then synthesize the findings — drop weak or duplicate points — and post the survivors as separate, anchored threads, authored `review:<id>`, one thread per substantive point. Stay silent where a role has nothing material to add; a short sharp panel beats an exhaustive one.",
     "Do not edit the doc and do not resolve the review threads you create — they are mine to address or dismiss.",
     "",
     "Roles:",
