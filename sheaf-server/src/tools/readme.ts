@@ -338,17 +338,24 @@ the roles, each as \`review:<id> — <Name>: <brief>\`.
 1. \`ReplyThread(request_thread, "running panel review")\` so the user sees you
    picked it up.
 2. \`Read\` the doc.
-3. For **each role**, channel that perspective and decide what — if anything —
-   is worth raising. Silence is golden: a role with nothing material to add
-   posts nothing. A short, sharp panel beats an exhaustive one — aim for a few
-   high-value comments overall, not a quota per role.
-4. Post each point as its **own new thread**, anchored to the passage it's
-   about and authored as the role:
+3. For **each role**, launch a **clean sub-agent** (e.g. the Task tool) — one
+   per role, in parallel if you can. Give it the doc text and *only* that
+   role's brief: no other roles, no other roles' findings, so each perspective
+   stays independent. Ask it to return its findings as a list of
+   (exact passage quote, comment) pairs — or nothing. Silence is golden: a
+   role with nothing material to add returns nothing. (Sheaf can't spawn the
+   sub-agents; that's yours to run.)
+4. **Synthesize** the findings yourself: drop weak or duplicate points, and
+   where roles overlap keep the sharpest framing. A short, sharp panel beats
+   an exhaustive one — aim for a few high-value comments overall, not a quota
+   per role.
+5. Post each surviving point as its **own new thread**, anchored to the
+   passage it's about and authored as the role:
    \`AddThread({ targets:[{ path, char_range:{ from, to } }], message:"…", author:"review:<id>" })\`.
-   Compute \`char_range\` from the doc text you read; keep each comment to the
-   one passage it concerns. A genuinely doc-wide point can use a \`scope:"doc"\`
-   target instead.
-5. When done, \`ReplyThread\` the request thread with a one-line tally ("posted
+   Locate the sub-agent's quoted passage in the doc text you read to compute
+   \`char_range\`; keep each comment to the one passage it concerns. A genuinely
+   doc-wide point can use a \`scope:"doc"\` target instead.
+6. When done, \`ReplyThread\` the request thread with a one-line tally ("posted
    5 comments: 2 sre, 1 security, 2 newcomer") and \`ResolveThread\` it.
 
 **During a panel review you do not edit the doc, and you do not resolve the
