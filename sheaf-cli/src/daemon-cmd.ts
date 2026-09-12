@@ -16,20 +16,7 @@ import {
 } from "sheaf-server/daemon";
 
 import type { RunContext } from "./commands";
-import { loadConfig } from "./config";
 import { EXIT, type ExitCode } from "./io";
-import { resolveVault } from "./vault";
-
-/** Resolve the target vault the same way every command does. */
-function targetVault(ctx: RunContext): string {
-  const config = loadConfig(ctx.io.env);
-  return resolveVault({
-    flag: ctx.globals.vault,
-    env: ctx.io.env,
-    config,
-    cwd: ctx.io.cwd,
-  });
-}
 
 /** Sleep `ms` without blocking the event loop. */
 function delay(ms: number): Promise<void> {
@@ -38,8 +25,7 @@ function delay(ms: number): Promise<void> {
 
 /** `sheaf daemon status`: report running/stopped plus the daemon's address. */
 export async function daemonStatusCommand(ctx: RunContext): Promise<ExitCode> {
-  const { out, io } = ctx;
-  const vault = targetVault(ctx);
+  const { out, io, vault } = ctx;
   const info = readDaemon(vault, io.env);
   const running = info ? await isDaemonAlive(vault, io.env) : false;
 
@@ -78,8 +64,7 @@ export async function daemonStatusCommand(ctx: RunContext): Promise<ExitCode> {
  * it does; says so and exits 0 when nothing was running.
  */
 export async function daemonStopCommand(ctx: RunContext): Promise<ExitCode> {
-  const { out, io } = ctx;
-  const vault = targetVault(ctx);
+  const { out, io, vault } = ctx;
   const info = readDaemon(vault, io.env);
   const running = info ? await isDaemonAlive(vault, io.env) : false;
 

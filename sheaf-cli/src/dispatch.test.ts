@@ -96,16 +96,16 @@ describe("per-command help", () => {
 });
 
 describe("dispatch to stubs", () => {
+  // `docs` (step 6) and `events follow` (step 3) are wired now, so they're
+  // deliberately absent here — they're covered by their own live-daemon tests.
   it.each([
     [["mcp"], 4],
     [["mcp", "install"], 5],
-    [["docs"], 6],
     [["read", "notes.md"], 6],
     [["grep", "foo"], 6],
     [["glob", "**/*.md"], 6],
     [["thread", "list"], 6],
     [["thread", "show", "thrd_x"], 6],
-    [["events", "follow"], 3],
   ])("`%s` stubs with its step number, exit 1", async (argv, step) => {
     const { io, stdout, stderr } = makeIo();
     expect(await run(argv as string[], io)).toBe(1);
@@ -115,7 +115,7 @@ describe("dispatch to stubs", () => {
 
   it("emits stub errors as JSON under --format json", async () => {
     const { io, stdout, stderr } = makeIo();
-    expect(await run(["docs", "--format", "json"], io)).toBe(1);
+    expect(await run(["read", "notes.md", "--format", "json"], io)).toBe(1);
     expect(JSON.parse(stdout())).toEqual({
       error: "not implemented (step 6)",
       code: "not_implemented",

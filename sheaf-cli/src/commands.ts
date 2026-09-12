@@ -11,6 +11,8 @@
 import type { Globals, OptionDef } from "./args";
 import type { ExitCode, Io, Output } from "./io";
 import { daemonStatusCommand, daemonStopCommand } from "./daemon-cmd";
+import { docsCommand } from "./docs";
+import { eventsFollowCommand } from "./events";
 import { serveCommand } from "./serve";
 
 /** Everything a command handler receives. */
@@ -18,6 +20,13 @@ export interface RunContext {
   globals: Globals;
   out: Output;
   io: Io;
+  /**
+   * The resolved, realpath'd target vault (precedence: `--vault` › `$SHEAF_
+   * VAULT` › config › cwd). Resolved once by the dispatcher before a handler
+   * runs, so every client command — `connectDaemon(ctx.vault, ctx.io.env)`,
+   * `followEvents({ vault: ctx.vault, … })` — reads one and the same string.
+   */
+  vault: string;
   /** Parsed flag values (globals + this command's own), from the strict pass. */
   values: Record<string, unknown>;
   /** Positionals after the resolved command path (command-specific args). */
@@ -129,6 +138,7 @@ export const REGISTRY: Record<string, CommandSpec> = {
     summary: "List documents in the vault",
     usage: "sheaf docs",
     step: 6,
+    run: docsCommand,
   },
 
   read: {
@@ -227,6 +237,7 @@ export const REGISTRY: Record<string, CommandSpec> = {
         usage: "sheaf events follow [--role agent|ui] [--since ID]",
         step: 3,
         options: { role: { type: "string" }, since: { type: "string" } },
+        run: eventsFollowCommand,
       },
     },
   },

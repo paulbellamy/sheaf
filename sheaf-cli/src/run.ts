@@ -7,6 +7,7 @@
  */
 import { globalsFromValues, parseCommand, preParse } from "./args";
 import { REGISTRY, type CommandSpec, type RunContext } from "./commands";
+import { loadConfig } from "./config";
 import { printCommandHelp, printRootHelp } from "./help";
 import {
   CliError,
@@ -17,6 +18,7 @@ import {
   usageError,
   type Io,
 } from "./io";
+import { resolveVault } from "./vault";
 import { VERSION } from "./version";
 
 interface Located {
@@ -117,15 +119,28 @@ export async function run(argv: string[], io: Io = processIo()): Promise<number>
       throw usageError(`unknown subcommand: ${located.path[0]} ${commandArgs[0]}`);
     }
 
-    const ctx: RunContext = {
-      globals,
-      out,
-      io,
-      values: parsed.values,
-      positionals: commandArgs,
-      argv,
-    };
-    if (located.spec.run) return await located.spec.run(ctx);
+    if (located.spec.run) {
+      // Every runnable command is a vault-scoped client, so resolve the target
+      // vault once here (precedence: `--vault` › `$SHEAF_VAULT` › config › cwd)
+      // and hand it down. Stubs (no `run`) don't need it, so they never trigger
+      // a "vault not found" before their own "not implemented".
+      const vault = resolveVault({
+        flag: globals.vault,
+        env: io.env,
+        config: loadConfig(io.env),
+        cwd: io.cwd,
+      });
+      const ctx: RunContext = {
+        globals,
+        out,
+        io,
+        vault,
+        values: parsed.values,
+        positionals: commandArgs,
+        argv,
+      };
+      return await located.spec.run(ctx);
+    }
 
     // Step 1: no handler wired yet. Surface the parsed flags under SHEAF_DEBUG
     // so the wiring can be verified before the real handler exists.

@@ -71,6 +71,7 @@ function makeCtx(
     globals: { vault, format, noDaemon: false, help: false, version: false },
     out: new Output(io, format),
     io,
+    vault,
     values,
     positionals: [],
     argv: [],

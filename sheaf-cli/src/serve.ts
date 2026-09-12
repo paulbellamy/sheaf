@@ -55,7 +55,6 @@ import {
 import type { RunContext } from "./commands";
 import { ensureSheafHome, loadConfig, logsDir } from "./config";
 import { EXIT, usageError, type ExitCode } from "./io";
-import { resolveVault } from "./vault";
 import { VERSION } from "./version";
 
 /** Idle-exit default: 30 minutes with no MCP request and no open SSE stream. */
@@ -476,14 +475,8 @@ function assertLoopbackHost(host: string): void {
 
 /** `run` handler for `sheaf serve`. Blocks until the daemon shuts down. */
 export async function serveCommand(ctx: RunContext): Promise<ExitCode> {
-  const { globals, out, io } = ctx;
+  const { out, io, vault } = ctx;
   const config = loadConfig(io.env);
-  const vault = resolveVault({
-    flag: globals.vault,
-    env: io.env,
-    config,
-    cwd: io.cwd,
-  });
 
   const tools = parseTools(ctx.values.tools);
   const host =
