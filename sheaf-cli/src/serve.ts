@@ -367,11 +367,17 @@ export async function startServer(
     // --- Backend + app. ---
     const backend = new StubBackend(vault, vault);
     const startedAt = Date.now();
+    // The daemon's real origin, filled in once `listen()` picks the ephemeral
+    // port. Handed to `buildSheafApp` as a getter (resolved per request, well
+    // after boot) so the MCP ReadMe's curl fallback names the address the agent
+    // actually reached rather than a guessed port.
+    let boundUrl: string | undefined;
     app = buildSheafApp(backend, {
       tools: opts.tools,
       allowedOrigins: opts.allowedOrigins,
       health: { vault, startedAt, version: opts.version },
       forceCloseConnections: true,
+      publicUrl: () => boundUrl,
     });
 
     // --- Idle-exit accounting. A live SSE stream keeps the daemon up; else it
@@ -398,6 +404,8 @@ export async function startServer(
     await app.listen({ port: requestedPort, host });
     if (shuttingDown) throw new Error("interrupted during boot");
     const port = (app.server.address() as AddressInfo).port;
+    // Now that the port is known, expose the real origin to the MCP ReadMe.
+    boundUrl = daemonBaseUrl({ host, port });
 
     // P2.3: never overwrite a live foreign daemon's record. If one already
     // owns this vault, back off before registering (so we don't clobber it).

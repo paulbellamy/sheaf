@@ -1,13 +1,29 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 /**
+ * Fallback origin for the ReadMe's raw-curl event loop when no `publicUrl` is
+ * threaded in (an embedding host that predates the daemon, or a standalone
+ * `sheaf mcp --no-daemon` with no HTTP server at all). This is the Obsidian
+ * plugin's historical default port; it's only a hint for the curl *fallback* —
+ * the guide leads with `sheaf events follow`, which needs no address.
+ */
+const DEFAULT_PUBLIC_URL = "http://localhost:31415";
+
+/**
  * ReadMe — the agent calls this once on connect to learn the workflow.
  *
  * Self-contained on purpose: no skill install, no external script, no
  * AGENTS.md lookup. Everything the agent needs to react to user comments
  * and edit the doc lives in this string.
+ *
+ * `publicUrl` is the daemon's *actual* bound origin (`http://host:port`),
+ * threaded down from `buildSheafApp` via `buildServer` so the curl fallback in
+ * the event-subscription section points at the real server rather than a
+ * guessed port. Omitted by embedding hosts and the standalone path, in which
+ * case {@link DEFAULT_PUBLIC_URL} stands in.
  */
-export function registerReadMe(server: McpServer): void {
+export function registerReadMe(server: McpServer, publicUrl?: string): void {
+  const text = renderReadMe(publicUrl);
   server.registerTool(
     "ReadMe",
     {
@@ -18,12 +34,22 @@ export function registerReadMe(server: McpServer): void {
       annotations: { destructiveHint: false, openWorldHint: false, readOnlyHint: true },
     },
     async () => ({
-      content: [{ type: "text", text: README }],
+      content: [{ type: "text", text }],
     }),
   );
 }
 
-const README = `# Sheaf MCP — operating guide
+/**
+ * Build the operating-guide string, interpolating the daemon's real origin into
+ * the curl fallback. Exported so a test can assert the served text without
+ * standing up a transport.
+ */
+export function renderReadMe(publicUrl?: string): string {
+  const base = publicUrl ?? DEFAULT_PUBLIC_URL;
+  return README_TEMPLATE.replace("__SHEAF_PUBLIC_URL__", base);
+}
+
+const README_TEMPLATE = `# Sheaf MCP — operating guide
 
 You're connected to sheaf. A user is editing a markdown doc somewhere
 (typically in Obsidian via the sheaf plugin). When they highlight a passage
@@ -165,33 +191,47 @@ show "agent working", so this convention also keeps the UI honest.
 
 ## Subscribe to events
 
-Run this once with the \`Monitor\` tool. It connects to the SSE event stream and
-prints one line per event **the moment it arrives** — \`Monitor\` wakes you on
-each line, so you react to a comment as soon as it's posted:
+Run this once with the \`Monitor\` tool. It tails the live event stream and
+prints one JSON event per line **the moment it arrives** — \`Monitor\` wakes you
+on each line, so you react to a comment as soon as it's posted:
 
 \`\`\`
 Monitor({
-  command: 'while true; do curl -sN "http://localhost:31415/api/ui/drafts/stream?role=agent" | sed -n -u "s/^data: //p"; sleep 1; done',
+  command: 'sheaf events follow --role agent',
+  description: "sheaf events",
+  persistent: true,
+})
+\`\`\`
+
+\`sheaf events follow\` speaks to the same daemon this MCP server runs in. It
+emits **one BackendEvent JSON object per line** (the keep-alive pings are
+dropped for you) and reconnects across daemon restarts on its own, so nothing
+here needs a retry loop. The \`--role agent\` flag is what makes the user's
+plugin show "agent connected" in its status bar — keep it.
+
+Don't add a debounce/quiet-window buffer around it (\`read -t N\` accumulating
+into a batch): the events are discrete user actions, not keystroke spam, so
+buffering just delays every wake-up — and because the quiet timer resets on each
+event, a user who keeps working starves the buffer and you never wake at all.
+\`Monitor\` already groups lines that land within the same instant into one
+notification, so a burst stays a single wake-up without any buffering.
+
+**Fallback (no \`sheaf\` CLI on PATH).** If you connected straight to the daemon
+over HTTP and can't run the CLI, tail the SSE stream with curl against the
+**same host:port you reached this MCP server on** instead:
+
+\`\`\`
+Monitor({
+  command: 'while true; do curl -sN "__SHEAF_PUBLIC_URL__/api/ui/drafts/stream?role=agent" | sed -n -u "s/^data: //p"; sleep 1; done',
   description: "sheaf events",
   persistent: true,
 })
 \`\`\`
 
 \`sed\` keeps only the \`data:\` lines — dropping the keep-alive \`: ping\`
-comments — and strips the prefix, leaving one JSON event per line. On
-disconnect (e.g. the server restarts) the loop reconnects (\`sleep 1\`).
-
-Don't add a debounce/quiet-window buffer here (\`read -t N\` accumulating into a
-batch): the events are discrete user actions, not keystroke spam, so buffering
-just delays every wake-up — and because the quiet timer resets on each event, a
-user who keeps working starves the buffer and you never wake at all. \`Monitor\`
-already groups lines that land within the same instant into one notification,
-so a burst stays a single wake-up without any buffering.
-
-Use the **same host:port you reached this MCP server on** — the example uses
-the Obsidian-plugin default (\`localhost:31415\`); the web prototype runs on
-\`localhost:3000\`. The \`role=agent\` query param is what makes the user's
-plugin show "agent connected" in its status bar — keep it.
+comments — and strips the prefix, leaving one JSON event per line, exactly like
+\`sheaf events follow\`. On disconnect (e.g. the server restarts) the loop
+reconnects (\`sleep 1\`). Keep \`role=agent\` here too.
 
 A single wake-up may still carry **one or more** event lines (several can land
 in the same instant — e.g. a rename that moves many threads at once). Handle

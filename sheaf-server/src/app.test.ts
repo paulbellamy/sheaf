@@ -75,12 +75,12 @@ describe("buildSheafApp over a real socket", () => {
   });
 
   it("ReadMe serves an immediate (non-debounced) event-watch command", async () => {
-    // Regression: the Monitor one-liner must stream each SSE event as it
-    // arrives. A `read -t N` quiet-window debounce (once shipped here) held a
-    // posted comment's `thread_changed` until the stream idled — and because
-    // the quiet timer reset on every event, a user who kept working starved
-    // delivery indefinitely, so the connected agent never woke. Guard against
-    // a reprise of that debounce in the served guide.
+    // Regression: the Monitor command must stream each event as it arrives. A
+    // `read -t N` quiet-window debounce (once shipped here) held a posted
+    // comment's `thread_changed` until the stream idled — and because the quiet
+    // timer reset on every event, a user who kept working starved delivery
+    // indefinitely, so the connected agent never woke. Guard against a reprise
+    // of that debounce in the served guide.
     const transport = new StreamableHTTPClientTransport(
       new URL(`${base}/api/mcp`),
     );
@@ -92,7 +92,10 @@ describe("buildSheafApp over a real socket", () => {
         arguments: {},
       })) as { content: { type: string; text: string }[] };
       const text = res.content.map((c) => c.text).join("\n");
-      // Streams each `data:` line the instant it arrives, then reconnects.
+      // Leads with the CLI tail, which emits one event per line and reconnects
+      // on its own (step 4 replaced the hard-coded-port curl one-liner).
+      expect(text).toContain("sheaf events follow --role agent");
+      // The curl fallback still streams each `data:` line the instant it lands.
       expect(text).toContain('sed -n -u "s/^data: //p"; sleep 1; done');
       // Must not reintroduce the starving quiet-window buffer.
       expect(text).not.toContain("read -r -t");

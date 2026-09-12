@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { parseCommand } from "./args";
+import { REGISTRY } from "./commands";
 import { run } from "./run";
 import { VERSION } from "./version";
 import type { Io } from "./io";
@@ -96,10 +98,10 @@ describe("per-command help", () => {
 });
 
 describe("dispatch to stubs", () => {
-  // `docs` (step 6) and `events follow` (step 3) are wired now, so they're
-  // deliberately absent here — they're covered by their own live-daemon tests.
+  // `docs` (step 6), `events follow` (step 3), and `mcp` (step 4, the bridge)
+  // are wired now, so they're deliberately absent here — each is covered by its
+  // own tests. `mcp install` (step 5) is still a stub.
   it.each([
-    [["mcp"], 4],
     [["mcp", "install"], 5],
     [["read", "notes.md"], 6],
     [["grep", "foo"], 6],
@@ -163,14 +165,20 @@ describe("per-command flags parse (proven via SHEAF_DEBUG)", () => {
     expect(debug).toContain('"as":"agent"');
   });
 
-  it("mcp --doc PATH is the bridge (not a stray subcommand)", async () => {
-    const { io, stderr } = makeIo({ SHEAF_DEBUG: "1" });
-    expect(await run(["mcp", "--doc", "notes.md"], io)).toBe(1);
-    const debug = stderr();
-    expect(debug).toContain("command=mcp");
-    expect(debug).toContain('"doc":"notes.md"');
-    // No leftover positional was mistaken for a subcommand.
-    expect(debug).toContain("positionals=[]");
+  it("mcp --doc PATH parses as the runnable bridge, not a stray subcommand", () => {
+    // `mcp` is a runnable group whose `run` starts the (blocking) stdio bridge,
+    // so we assert at the parse layer rather than executing the handler: with
+    // `--doc` as a flag on the group, `notes.md` is its value — not a leftover
+    // positional that would be mistaken for a `mcp <subcommand>`.
+    expect(REGISTRY.mcp.runnable).toBe(true);
+    expect(typeof REGISTRY.mcp.run).toBe("function");
+    const { values, positionals } = parseCommand(
+      ["mcp", "--doc", "notes.md"],
+      REGISTRY.mcp.options,
+    );
+    expect(values.doc).toBe("notes.md");
+    // Only the command word itself remains a positional — nothing stray.
+    expect(positionals).toEqual(["mcp"]);
   });
 });
 

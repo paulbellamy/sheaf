@@ -117,6 +117,16 @@ export function buildSheafApp(
      * (Obsidian, Next) keep Fastify's graceful-drain behavior.
      */
     forceCloseConnections?: boolean;
+    /**
+     * The server's real, reachable origin (`http://host:port`), passed through
+     * to `buildServer` so the MCP ReadMe's curl fallback names the actual
+     * address. Accepts a getter as well as a string because a daemon binds an
+     * *ephemeral* port: `sheaf serve` builds the app before it knows the port,
+     * so it hands in `() => daemonBaseUrl(...)` and fills the value in after
+     * `listen()`. Resolved per request (well after boot), so a getter that
+     * returns `undefined` early is harmless. Omitted by embedding hosts.
+     */
+    publicUrl?: string | (() => string | undefined);
   } = {},
 ): FastifyInstance {
   const app = Fastify({
@@ -426,7 +436,17 @@ export function buildSheafApp(
         sessionIdGenerator: undefined,
         enableJsonResponse: true,
       });
-      const server = buildServer(backend, { tools: opts.tools, docScope });
+      // Resolve `publicUrl` lazily (it may be a getter over an ephemeral port
+      // that only becomes known after `listen()`); by request time it's set.
+      const publicUrl =
+        typeof opts.publicUrl === "function"
+          ? opts.publicUrl()
+          : opts.publicUrl;
+      const server = buildServer(backend, {
+        tools: opts.tools,
+        docScope,
+        publicUrl,
+      });
       await server.connect(transport);
       reply.raw.on("close", () => {
         void server.close().catch(() => {});

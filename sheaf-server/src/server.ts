@@ -39,6 +39,14 @@ export interface BuildServerOptions {
    * global behavior unchanged. See docs/sheaf-acp-v0.1.md §3.1.
    */
   docScope?: string;
+  /**
+   * The server's real, reachable origin (`http://host:port`), interpolated into
+   * the ReadMe's raw-curl event-loop fallback so it points at the actual daemon
+   * rather than a guessed port. `sheaf serve` threads its bound address through
+   * `buildSheafApp`; embedding hosts and the standalone bridge omit it, and the
+   * ReadMe falls back to a sensible default. See `tools/readme.ts`.
+   */
+  publicUrl?: string;
 }
 
 /**
@@ -55,7 +63,7 @@ export function buildServer(
   backend: Backend = getBackend(),
   opts: BuildServerOptions = {},
 ): McpServer {
-  const { tools = "full", docScope } = opts;
+  const { tools = "full", docScope, publicUrl } = opts;
   const server = new McpServer(
     {
       name: "sheaf",
@@ -68,7 +76,7 @@ export function buildServer(
     },
   );
 
-  registerReadMe(server);
+  registerReadMe(server, publicUrl);
   registerRead(server, backend);
   registerWrite(server, backend);
   registerEdit(server, backend);

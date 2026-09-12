@@ -13,6 +13,7 @@ import type { ExitCode, Io, Output } from "./io";
 import { daemonStatusCommand, daemonStopCommand } from "./daemon-cmd";
 import { docsCommand } from "./docs";
 import { eventsFollowCommand } from "./events";
+import { mcpBridgeCommand } from "./mcp";
 import { serveCommand } from "./serve";
 
 /** Everything a command handler receives. */
@@ -130,6 +131,10 @@ export const REGISTRY: Record<string, CommandSpec> = {
     runnable: true,
     // `--no-daemon` is a global flag, so it already parses here.
     options: { doc: { type: "string" }, ...TOOLS },
+    // Running `mcp` (no subcommand) starts the stdio bridge. It is the one
+    // command allowed to auto-spawn a daemon, and the one place `--no-daemon`
+    // is meaningful (its standalone escape hatch), so it is NOT `needsDaemon`.
+    run: mcpBridgeCommand,
     subcommands: {
       install: {
         name: "install",
