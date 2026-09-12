@@ -98,11 +98,10 @@ describe("per-command help", () => {
 });
 
 describe("dispatch to stubs", () => {
-  // `docs` (step 6), `events follow` (step 3), and `mcp` (step 4, the bridge)
-  // are wired now, so they're deliberately absent here — each is covered by its
-  // own tests. `mcp install` (step 5) is still a stub.
+  // `docs` (step 6), `events follow` (step 3), `mcp` (step 4, the bridge), and
+  // `mcp install` (step 5) are wired now, so they're deliberately absent here —
+  // each is covered by its own tests.
   it.each([
-    [["mcp", "install"], 5],
     [["read", "notes.md"], 6],
     [["grep", "foo"], 6],
     [["glob", "**/*.md"], 6],
@@ -113,6 +112,14 @@ describe("dispatch to stubs", () => {
     expect(await run(argv as string[], io)).toBe(1);
     expect(stderr().trim()).toBe(`not implemented (step ${step})`);
     expect(stdout()).toBe("");
+  });
+
+  it("`mcp install` is wired (an unknown client is a usage error, exit 2)", async () => {
+    // Proves the step-5 handler runs — an unknown client name fails in
+    // selectClients (exit 2) before any home/fs access, so this stays hermetic.
+    const { io, stderr } = makeIo();
+    expect(await run(["mcp", "install", "bogus"], io)).toBe(2);
+    expect(stderr()).toContain("unknown client");
   });
 
   it("emits stub errors as JSON under --format json", async () => {

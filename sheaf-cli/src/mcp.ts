@@ -122,8 +122,27 @@ function errMessage(e: unknown): string {
   return String(e);
 }
 
+/**
+ * Absolute path to THIS binary's entry file.
+ *
+ * esbuild bundles every first-party module into one `bin/sheaf.js`, so
+ * `import.meta.url` in the shipped binary points at that file no matter which
+ * source module this helper lives in (see build.mjs). A GUI MCP host has no
+ * PATH and no cwd, so both consumers of this — the bridge's daemon auto-spawn
+ * (`spawnDaemon`) and `sheaf mcp install` (which writes the invocation into an
+ * agent's config) — need exactly this absolute path. Kept here, exported and
+ * shared, so the `import.meta.url` derivation exists in one place only.
+ *
+ * (Under vitest the source `.ts` is loaded directly, so this resolves to
+ * `src/mcp.ts`; tests that assert the written invocation therefore compute the
+ * expected path from this same helper rather than hard-coding `bin/sheaf.js`.)
+ */
+export function sheafBinPath(): string {
+  return fileURLToPath(import.meta.url);
+}
+
 /** Validate `--tools`; anything but the two surfaces is a usage error (exit 2). */
-function parseTools(value: unknown): ToolSurface | undefined {
+export function parseTools(value: unknown): ToolSurface | undefined {
   if (value === undefined) return undefined;
   if (value === "full" || value === "thread-only") return value;
   throw usageError(
@@ -345,7 +364,7 @@ function spawnDaemon(
   tools: ToolSurface | undefined,
   log: (line: string) => void,
 ): ChildProcess | undefined {
-  const selfPath = fileURLToPath(import.meta.url);
+  const selfPath = sheafBinPath();
   const args = [selfPath, "serve", "--vault", vault];
   if (tools) args.push("--tools", tools);
   try {

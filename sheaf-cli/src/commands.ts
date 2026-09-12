@@ -14,6 +14,7 @@ import { daemonStatusCommand, daemonStopCommand } from "./daemon-cmd";
 import { docsCommand } from "./docs";
 import { eventsFollowCommand } from "./events";
 import { mcpBridgeCommand } from "./mcp";
+import { mcpInstallCommand } from "./mcp-install";
 import { serveCommand } from "./serve";
 
 /** Everything a command handler receives. */
@@ -139,9 +140,24 @@ export const REGISTRY: Record<string, CommandSpec> = {
       install: {
         name: "install",
         summary: "Install sheaf as an MCP server in an agent's config",
-        usage: "sheaf mcp install [client...] [--name NAME] [--dry-run]",
+        usage:
+          "sheaf mcp install [client...] [--name NAME] [--tools full|thread-only] [--dry-run]",
+        details:
+          "Writes an absolute stdio invocation (command: node, args: <abs bin/sheaf.js> mcp\n" +
+          "--vault <abs vault>) into each client's config, upserting only the `--name` entry\n" +
+          "(default `sheaf`) and preserving every other server/key. Clients: claude (project\n" +
+          "`<vault>/.mcp.json`), claude-desktop (macOS), codex (`~/.codex/config.toml`).\n" +
+          "No client arg installs into every detected client; --dry-run prints the diff and\n" +
+          "writes nothing. This command needs no daemon and never spawns or connects to one.",
         step: 5,
-        options: { name: { type: "string" }, "dry-run": { type: "boolean" } },
+        // `--tools` (shared TOOLS fragment) is appended to the written args; it
+        // is not a global, so it must be declared here to parse on `install`.
+        options: {
+          name: { type: "string" },
+          "dry-run": { type: "boolean" },
+          ...TOOLS,
+        },
+        run: mcpInstallCommand,
       },
     },
   },
