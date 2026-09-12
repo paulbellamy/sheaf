@@ -9,7 +9,8 @@
     "./types": "./src/backend/index.ts",
     "./app": "./src/app.ts",
     "./ydoc": "./src/ydoc/sync.ts",
-    "./home": "./src/home.ts"
+    "./home": "./src/home.ts",
+    "./daemon": "./src/daemon.ts"
   },
   "main": "./src/index.ts",
   "types": "./src/index.ts",

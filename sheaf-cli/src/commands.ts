@@ -10,6 +10,8 @@
  */
 import type { Globals, OptionDef } from "./args";
 import type { ExitCode, Io, Output } from "./io";
+import { daemonStatusCommand, daemonStopCommand } from "./daemon-cmd";
+import { serveCommand } from "./serve";
 
 /** Everything a command handler receives. */
 export interface RunContext {
@@ -77,6 +79,7 @@ export const REGISTRY: Record<string, CommandSpec> = {
       ...TOOLS,
       "allow-origin": { type: "string", multiple: true },
     },
+    run: serveCommand,
   },
 
   daemon: {
@@ -90,12 +93,14 @@ export const REGISTRY: Record<string, CommandSpec> = {
         summary: "Show the daemon's status for the vault",
         usage: "sheaf daemon status",
         step: 2,
+        run: daemonStatusCommand,
       },
       stop: {
         name: "stop",
         summary: "Stop the running daemon (SIGTERM)",
         usage: "sheaf daemon stop",
         step: 2,
+        run: daemonStopCommand,
       },
     },
   },

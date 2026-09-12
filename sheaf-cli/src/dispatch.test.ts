@@ -97,9 +97,6 @@ describe("per-command help", () => {
 
 describe("dispatch to stubs", () => {
   it.each([
-    [["serve"], 2],
-    [["daemon", "status"], 2],
-    [["daemon", "stop"], 2],
     [["mcp"], 4],
     [["mcp", "install"], 5],
     [["docs"], 6],
@@ -180,6 +177,18 @@ describe("usage errors (exit 2)", () => {
     const { io, stderr } = makeIo();
     expect(await run(["thread"], io)).toBe(2);
     expect(stderr()).toContain("`thread` requires a subcommand");
+  });
+
+  it("`daemon` with no subcommand is a usage error", async () => {
+    const { io, stderr } = makeIo();
+    expect(await run(["daemon"], io)).toBe(2);
+    expect(stderr()).toContain("`daemon` requires a subcommand");
+  });
+
+  it("`daemon` with a bad subcommand is a usage error", async () => {
+    const { io, stderr } = makeIo();
+    expect(await run(["daemon", "bogus"], io)).toBe(2);
+    expect(stderr()).toContain("unknown subcommand: daemon bogus");
   });
 
   it("runnable group with a stray positional is a bad subcommand, not the bridge", async () => {

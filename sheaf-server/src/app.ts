@@ -98,13 +98,29 @@ function resolveDocScope(req: FastifyRequest): string | undefined {
 
 export function buildSheafApp(
   backend: Backend = getBackend(),
-  opts: { allowedOrigins?: string[]; tools?: ToolSurface } = {},
+  opts: {
+    allowedOrigins?: string[];
+    tools?: ToolSurface;
+    /**
+     * Daemon identity reported by `GET /api/health`. `sheaf serve` threads it
+     * in so liveness probes can confirm this server owns the *expected* vault
+     * (a pid-reuse-proof check — see `isDaemonAlive` in `./daemon`). Optional so
+     * the embedding hosts (Obsidian, Next) and existing tests keep working; when
+     * omitted, `vault`/`version` are absent and `startedAt` is the app's own
+     * construction time.
+     */
+    health?: { vault: string; startedAt: number; version: string };
+  } = {},
 ): FastifyInstance {
   const app = Fastify({
     logger: false,
     // Thread bodies / draft payloads can approach 1 MB; give headroom.
     bodyLimit: 8 * 1024 * 1024,
   });
+
+  // Fallback so `/api/health` always answers with a plausible `startedAt` even
+  // when no explicit daemon identity was supplied.
+  const healthStartedAt = opts.health?.startedAt ?? Date.now();
 
   // Browser origins trusted to read responses cross-origin. The only one in
   // the shipped plugin is Obsidian's renderer (its SSE uses `fetch`); the REST
@@ -348,10 +364,38 @@ export function buildSheafApp(
     });
   });
 
+  /* ------------------------------------------------------------- health -- */
+
+  // Liveness + identity probe. `sheaf daemon status`/`stop` and `isDaemonAlive`
+  // (see `./daemon`) hit this: a discovery file alone can't distinguish a live
+  // daemon from a stale record left by a crashed one whose pid has since been
+  // reused, so callers confirm `vault` matches the realpath they expect.
+  app.get("/api/health", (_req, reply) => {
+    reply.code(200).send({
+      vault: opts.health?.vault,
+      pid: process.pid,
+      startedAt: healthStartedAt,
+      version: opts.health?.version,
+    });
+  });
+
   /* ------------------------------------------------------------- MCP API -- */
 
+  // A GET to /api/mcp would drive the transport's server→client SSE stream, but
+  // this server is stateless (`enableJsonResponse: true`, `listChanged: false`)
+  // and never initiates messages, so that stream is pure overhead: each `sheaf
+  // mcp` bridge's post-`initialized` auto GET would otherwise strand a live
+  // `buildServer` + socket for the bridge's whole lifetime. Return 405 instead —
+  // the MCP client tolerates it and simply forgoes the (empty) stream.
+  app.get("/api/mcp", (_req, reply) => {
+    reply
+      .code(405)
+      .header("allow", "POST, DELETE")
+      .send({ error: "method not allowed", code: "method_not_allowed" });
+  });
+
   app.route({
-    method: ["GET", "POST", "DELETE"],
+    method: ["POST", "DELETE"],
     url: "/api/mcp",
     handler: async (req, reply) => {
       // Per-connection doc scope (ACP per-session MCP registration, §3.1).

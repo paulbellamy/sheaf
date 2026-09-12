@@ -278,6 +278,57 @@ describe("buildSheafApp request hardening", () => {
   });
 });
 
+describe("health + MCP method handling", () => {
+  let root: string;
+  let app: ReturnType<typeof buildSheafApp>;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-health-"));
+    app = buildSheafApp(new StubBackend(root), {
+      health: { vault: root, startedAt: 1234, version: "9.9.9" },
+    });
+    await app.ready();
+  });
+
+  afterEach(async () => {
+    await app.close();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("GET /api/health reports the daemon identity", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/health",
+      headers: { host: "127.0.0.1:31415" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      vault: string;
+      pid: number;
+      startedAt: number;
+      version: string;
+    };
+    expect(body.vault).toBe(root);
+    expect(body.pid).toBe(process.pid);
+    expect(body.startedAt).toBe(1234);
+    expect(body.version).toBe("9.9.9");
+  });
+
+  it("GET /api/mcp is 405 with an Allow header (POST/DELETE only)", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/mcp",
+      headers: { host: "127.0.0.1:31415" },
+    });
+    expect(res.statusCode).toBe(405);
+    expect(res.headers["allow"]).toContain("POST");
+    expect(res.json()).toEqual({
+      error: "method not allowed",
+      code: "method_not_allowed",
+    });
+  });
+});
+
 /**
  * End-to-end doc-scoping over the real MCP HTTP transport (the agent's actual
  * path): the per-connection scope arrives as `?doc=` or the `X-Sheaf-Doc`
