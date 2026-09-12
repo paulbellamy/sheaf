@@ -42,8 +42,16 @@ export interface CommandSpec {
   summary: string;
   /** Usage line shown at the top of the command's own `--help`. */
   usage: string;
+  /** Optional extra paragraph(s) shown under the summary in `--help`. */
+  details?: string;
   /** Plan step that implements this command (drives the stub message). */
   step: number;
+  /**
+   * True for a command that talks to the daemon. The dispatcher enforces the
+   * `--no-daemon` guard for these (exit 3) so a handler can't silently ignore
+   * the flag by forgetting to check it — a real risk as step 6 adds verbs.
+   */
+  needsDaemon?: boolean;
   /** This command's own `parseArgs` options, merged onto the globals. */
   options?: Record<string, OptionDef>;
   /**
@@ -138,6 +146,7 @@ export const REGISTRY: Record<string, CommandSpec> = {
     summary: "List documents in the vault",
     usage: "sheaf docs",
     step: 6,
+    needsDaemon: true,
     run: docsCommand,
   },
 
@@ -234,9 +243,21 @@ export const REGISTRY: Record<string, CommandSpec> = {
       follow: {
         name: "follow",
         summary: "Follow events as NDJSON",
-        usage: "sheaf events follow [--role agent|ui] [--since ID]",
+        usage:
+          "sheaf events follow [--role agent|ui] [--since ID] [--exit-on-disconnect]",
+        details:
+          "Prints one JSON event per line to stdout (always NDJSON, ignoring --format).\n" +
+          "--role defaults to 'ui'; pass 'agent' for the MCP agent watcher (it flips the\n" +
+          "plugin's \"agent connected\" status). By default it runs until interrupted,\n" +
+          "reconnecting across daemon restarts; --exit-on-disconnect exits instead when the\n" +
+          "daemon goes away (0 on a clean shutdown, non-zero on error).",
         step: 3,
-        options: { role: { type: "string" }, since: { type: "string" } },
+        needsDaemon: true,
+        options: {
+          role: { type: "string" },
+          since: { type: "string" },
+          "exit-on-disconnect": { type: "boolean" },
+        },
         run: eventsFollowCommand,
       },
     },

@@ -5,7 +5,12 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { connectDaemon } from "./client";
 import type { RunContext } from "./commands";
-import { eventsFollowCommand, followEvents } from "./events";
+import {
+  eventsFollowCommand,
+  followEvents,
+  ndjsonLine,
+  SseFrameParser,
+} from "./events";
 import { EXIT, Output, type Io } from "./io";
 import { startServer, type ServeHandle } from "./serve";
 
@@ -169,6 +174,93 @@ describe("followEvents", () => {
     }
   }, 25_000);
 
+  it("resumes in-epoch from a valid id without a stream_reset", async () => {
+    const { env, vault } = scratch();
+    const handle = await startServer({ vault, version: "test", env });
+    handles.push(handle);
+
+    // Phase 1: connect and capture a real resume id from a thread_changed.
+    let capturedId: string | undefined;
+    const linesA: string[] = [];
+    const diagsA: string[] = [];
+    const ctrlA = new AbortController();
+    const followA = followEvents({
+      vault,
+      env,
+      role: "ui",
+      signal: ctrlA.signal,
+      onData: (l) => linesA.push(l),
+      onDiagnostic: (l) => diagsA.push(l),
+      onResumeId: (id) => {
+        capturedId = id;
+      },
+      backoffBaseMs: 100,
+      backoffCapMs: 500,
+    });
+    try {
+      await waitFor(
+        () => diagsA.some((d) => d.startsWith("following")),
+        5000,
+        "connect A",
+      );
+      const c = await connectDaemon(vault, env);
+      try {
+        await c.rest("POST", "/api/ui/threads", { body: THREAD_BODY });
+      } finally {
+        await c.close();
+      }
+      await waitFor(
+        () => hasKind(linesA, "thread_changed") && capturedId !== undefined,
+        5000,
+        "a resume id",
+      );
+    } finally {
+      ctrlA.abort();
+      await followA;
+    }
+    expect(capturedId).toBeDefined();
+
+    // Phase 2: resume from that id against the SAME daemon (same epoch, id still
+    // in the replay buffer) → continuity is honored, so NO stream_reset.
+    const linesB: string[] = [];
+    const diagsB: string[] = [];
+    const ctrlB = new AbortController();
+    const followB = followEvents({
+      vault,
+      env,
+      role: "ui",
+      since: capturedId,
+      signal: ctrlB.signal,
+      onData: (l) => linesB.push(l),
+      onDiagnostic: (l) => diagsB.push(l),
+      backoffBaseMs: 100,
+      backoffCapMs: 500,
+    });
+    try {
+      await waitFor(
+        () => diagsB.some((d) => d.startsWith("following")),
+        5000,
+        "connect B",
+      );
+      const c = await connectDaemon(vault, env);
+      try {
+        await c.rest("POST", "/api/ui/threads", { body: THREAD_BODY });
+      } finally {
+        await c.close();
+      }
+      await waitFor(
+        () => hasKind(linesB, "thread_changed"),
+        5000,
+        "thread_changed on the resumed stream",
+      );
+    } finally {
+      ctrlB.abort();
+      await followB;
+    }
+    // The load-bearing assertion: a valid in-epoch resume does not reset.
+    expect(hasKind(linesB, "stream_reset")).toBe(false);
+  }, 20_000);
+
   it("throws a no-daemon CliError (exit 3) on the initial connect with no daemon", async () => {
     const { env, vault } = scratch();
     const controller = new AbortController();
@@ -181,6 +273,95 @@ describe("followEvents", () => {
         onData: () => {},
       }),
     ).rejects.toMatchObject({ code: "no_daemon", exitCode: EXIT.NO_DAEMON });
+  });
+
+  it("--exit-on-disconnect stops (does not retry forever) when the daemon shuts down", async () => {
+    const { env, vault } = scratch();
+    const handle = await startServer({ vault, version: "test", env });
+    handles.push(handle);
+
+    const diags: string[] = [];
+    const controller = new AbortController(); // deliberately never aborted
+    const followed = followEvents({
+      vault,
+      env,
+      role: "ui",
+      exitOnDisconnect: true,
+      signal: controller.signal,
+      onData: () => {},
+      onDiagnostic: (l) => diags.push(l),
+      backoffBaseMs: 100,
+      backoffCapMs: 500,
+    });
+
+    await waitFor(
+      () => diags.some((d) => d.startsWith("following")),
+      5000,
+      "connect",
+    );
+    await handle.close(); // clean shutdown ends the SSE stream
+
+    // The load-bearing behavior: it TERMINATES rather than looping forever. A
+    // clean EOF resolves (exit 0); if the socket errored it rejects with the
+    // daemon_disconnected code (non-zero) — both are acceptable, a hang is not.
+    const outcome = await Promise.race([
+      followed.then(
+        () => ({ kind: "resolved" as const }),
+        (e: unknown) => ({ kind: "rejected" as const, e }),
+      ),
+      delay(6000).then(() => ({ kind: "timeout" as const })),
+    ]);
+    expect(outcome.kind).not.toBe("timeout");
+    if (outcome.kind === "rejected") {
+      expect((outcome.e as { code?: string }).code).toBe("daemon_disconnected");
+    }
+  }, 15_000);
+});
+
+describe("SseFrameParser", () => {
+  it("parses CRLF frames, tracks id, and drops comment lines", () => {
+    const ids: string[] = [];
+    const data: string[] = [];
+    const p = new SseFrameParser(
+      (id) => ids.push(id),
+      (d) => data.push(d),
+    );
+    // A CRLF stream with a comment primer, an id, and two data frames.
+    p.push(": connected\r\n\r\n");
+    p.push('id: 7\r\ndata: {"kind":"thread_changed"}\r\n\r\n');
+    p.push(': ping\r\n\r\ndata: {"kind":"doc_changed"}\r\n\r\n');
+    expect(ids).toEqual(["7"]);
+    expect(data).toEqual([
+      '{"kind":"thread_changed"}',
+      '{"kind":"doc_changed"}',
+    ]);
+  });
+
+  it("reassembles a CRLF terminator split across chunk boundaries", () => {
+    const data: string[] = [];
+    const p = new SseFrameParser(
+      () => {},
+      (d) => data.push(d),
+    );
+    // The "\r\n\r\n" frame terminator is dribbled one byte at a time.
+    p.push('data: {"k":1}');
+    for (const c of "\r\n\r\n") p.push(c);
+    expect(data).toEqual(['{"k":1}']);
+  });
+});
+
+describe("ndjsonLine", () => {
+  it("compacts valid JSON (including multi-line) to a single line", () => {
+    expect(ndjsonLine('{"a":1}')).toBe('{"a":1}');
+    expect(ndjsonLine('{\n  "a": 1\n}')).toBe('{"a":1}');
+  });
+
+  it("drops empty and unparseable payloads", () => {
+    expect(ndjsonLine("")).toBeNull();
+    expect(ndjsonLine("   ")).toBeNull();
+    expect(ndjsonLine("not json")).toBeNull();
+    // Two objects in one payload is not one event → dropped.
+    expect(ndjsonLine('{"a":1}\n{"b":2}')).toBeNull();
   });
 });
 

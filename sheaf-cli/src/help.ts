@@ -51,6 +51,10 @@ export function printCommandHelp(
   out.text(`Usage: ${spec.usage}`);
   out.text();
   out.text(spec.summary);
+  if (spec.details) {
+    out.text();
+    for (const line of spec.details.split("\n")) out.text(line);
+  }
   if (spec.subcommands) {
     out.text();
     out.text("Subcommands:");

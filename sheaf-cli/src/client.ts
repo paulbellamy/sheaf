@@ -37,6 +37,9 @@ import type { Globals } from "./args";
 import { CliError, EXIT, noDaemonError } from "./io";
 import { VERSION } from "./version";
 
+/** Default per-request deadline so a wedged daemon can't hang a command forever. */
+const DEFAULT_REST_TIMEOUT_MS = 30_000;
+
 /** Options for a single {@link DaemonClient.rest} call. */
 export interface RestOptions {
   /** Query params appended to the path; `undefined` values are skipped. */
@@ -45,7 +48,12 @@ export interface RestOptions {
   body?: unknown;
   /** Extra request headers (merged over the defaults). */
   headers?: Record<string, string>;
-  /** Abort signal (e.g. a timeout or a cancelled command). */
+  /**
+   * Abort signal (e.g. a cancelled command). When omitted, a default 30s
+   * timeout applies — a daemon that answered `/api/health` at connect time but
+   * then wedges must not hang `sheaf docs` indefinitely. Pass an explicit signal
+   * to override the default entirely.
+   */
   signal?: AbortSignal;
 }
 
@@ -80,6 +88,12 @@ export class DaemonClient {
   private session: McpSession | undefined;
   private transport: StreamableHTTPClientTransport | undefined;
   private connecting: Promise<McpSession> | undefined;
+  /**
+   * Bumped by {@link close}. A connect in flight when close runs will, on
+   * resolving, see the generation moved and tear its transport down rather than
+   * memoizing a live connection nobody will ever close.
+   */
+  private generation = 0;
 
   constructor(readonly info: DaemonInfo) {
     this.base = daemonBaseUrl(info);
@@ -129,21 +143,34 @@ export class DaemonClient {
       headers["content-type"] = "application/json";
     }
 
+    // Default deadline unless the caller supplies its own signal.
+    const signal = opts.signal ?? AbortSignal.timeout(DEFAULT_REST_TIMEOUT_MS);
+
+    // Both the request AND the body read can fail (a mid-stream reset throws on
+    // `res.text()`, not on `fetch`), and both can be aborted, so they share one
+    // try. An abort/timeout is reported distinctly from a network failure.
     let res: Response;
+    let text: string;
     try {
-      res = await fetch(url, { method, headers, body, signal: opts.signal });
+      res = await fetch(url, { method, headers, body, signal });
+      text = await res.text();
     } catch (e) {
-      throw new CliError(
-        `cannot reach sheaf daemon at ${this.base}: ${errMessage(e)}`,
-        "daemon_unreachable",
-        EXIT.GENERIC,
-      );
+      if (isAbortLike(e)) {
+        const timedOut = (e as Error).name === "TimeoutError";
+        throw new CliError(
+          timedOut
+            ? `request to ${this.base}${path} timed out`
+            : `request to ${this.base}${path} was aborted`,
+          timedOut ? "timeout" : "aborted",
+          EXIT.GENERIC,
+        );
+      }
+      throw unreachableError(this.base, e);
     }
 
     // Parse the body once (tolerating an empty one — some mutations 200 with no
     // content). A JSON parse failure on an error response still surfaces the
     // status; on a success response it's a protocol violation worth reporting.
-    const text = await res.text();
     let parsed: unknown;
     if (text.length > 0) {
       try {
@@ -188,6 +215,7 @@ export class DaemonClient {
     if (this.session) return this.session;
     if (this.connecting) return this.connecting;
 
+    const myGeneration = this.generation;
     this.connecting = (async () => {
       const transport = new StreamableHTTPClientTransport(this.mcpUrl);
       const client = new Client(
@@ -209,12 +237,39 @@ export class DaemonClient {
           EXIT.GENERIC,
         );
       }
+      // close() ran while we were connecting: the transport we just opened would
+      // otherwise be memoized and leaked (nobody left to close it). Tear it down
+      // and fail this call rather than hand back a doomed session.
+      if (this.generation !== myGeneration) {
+        try {
+          await transport.close();
+        } catch {
+          /* best effort */
+        }
+        throw new CliError(
+          "MCP session was closed while connecting",
+          "mcp_closed",
+          EXIT.GENERIC,
+        );
+      }
       this.transport = transport;
+      const mcpUrl = this.mcpUrl;
       const session: McpSession = {
         client,
-        callTool: (name, args) =>
-          client.callTool({ name, arguments: args ?? {} }),
-        listTools: () => client.listTools(),
+        callTool: async (name, args) => {
+          try {
+            return await client.callTool({ name, arguments: args ?? {} });
+          } catch (e) {
+            throw mapMcpError(e, mcpUrl);
+          }
+        },
+        listTools: async () => {
+          try {
+            return await client.listTools();
+          } catch (e) {
+            throw mapMcpError(e, mcpUrl);
+          }
+        },
       };
       this.session = session;
       return session;
@@ -223,16 +278,19 @@ export class DaemonClient {
     try {
       return await this.connecting;
     } catch (e) {
-      this.connecting = undefined;
+      // Only clear if a concurrent close() hasn't already reset the slot.
+      if (this.generation === myGeneration) this.connecting = undefined;
       throw e;
     }
   }
 
   /**
    * Close the MCP transport if it was opened, so the process can exit cleanly
-   * (the REST path is stateless `fetch` — nothing to close there). Idempotent.
+   * (the REST path is stateless `fetch` — nothing to close there). Idempotent,
+   * and safe to call while a {@link mcp} connect is in flight (see `generation`).
    */
   async close(): Promise<void> {
+    this.generation += 1;
     const transport = this.transport;
     this.transport = undefined;
     this.session = undefined;
@@ -278,6 +336,35 @@ export function requireDaemonAllowed(globals: Globals, command: string): void {
       EXIT.NO_DAEMON,
     );
   }
+}
+
+/** True for a fetch aborted by a signal or a `AbortSignal.timeout` firing. */
+function isAbortLike(e: unknown): boolean {
+  return (
+    e instanceof Error &&
+    (e.name === "AbortError" || e.name === "TimeoutError")
+  );
+}
+
+/** A uniform "the daemon went away" error, used by both the REST and MCP paths. */
+function unreachableError(base: string, e: unknown): CliError {
+  return new CliError(
+    `cannot reach sheaf daemon at ${base}: ${errMessage(e)}`,
+    "daemon_unreachable",
+    EXIT.GENERIC,
+  );
+}
+
+/**
+ * Map an error thrown by an MCP tool/list call. A {@link CliError} passes
+ * through unchanged; anything else (a dead daemon surfaces as `TypeError: fetch
+ * failed`, a protocol error, a timeout) is wrapped the same way the REST path
+ * wraps a transport failure, so step-6 verbs get one consistent error shape
+ * instead of a raw fetch stack.
+ */
+function mapMcpError(e: unknown, mcpUrl: URL): CliError {
+  if (e instanceof CliError) return e;
+  return unreachableError(`${mcpUrl.protocol}//${mcpUrl.host}`, e);
 }
 
 /** Best-effort message extraction for wrapped transport/network errors. */

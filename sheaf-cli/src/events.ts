@@ -4,14 +4,18 @@
  * This is the client side of the SSE stream that `sheaf-server/src/events.ts`
  * produces. It exists distinct from that server module: the server *formats*
  * SSE frames onto a connection; this *consumes* them, unwraps each `data:`
- * payload, and prints one BackendEvent JSON object per line to stdout. The ReadMe
- * points agents at `sheaf events follow --role agent` as the first-class
- * replacement for the curl+sed watch loop (the `role=agent` param is what flips
- * the plugin's "agent connected" status), so `--role` defaults to `agent`.
+ * payload, and prints one BackendEvent JSON object per line to stdout.
+ *
+ * `--role` defaults to `ui`: a human tailing events should NOT flip the plugin's
+ * "agent connected" indicator. The MCP ReadMe's agent watcher (which replaces
+ * the old curl+sed loop) passes `--role agent` explicitly — that's the role that
+ * signals presence.
  *
  * The load-bearing behaviors (docs/sheaf-cli-v0.1.md "Output contract"):
- *   - Output is ALWAYS NDJSON — one event per line — regardless of `--format`.
- *     Pings and the connect primer (SSE `:` comment lines) are dropped.
+ *   - Output is ALWAYS NDJSON — one valid JSON object per line — regardless of
+ *     `--format`. Each payload is re-parsed and re-serialized so a multi-line or
+ *     empty `data:` frame can never break the one-event-per-line contract; SSE
+ *     `:` comment lines (the connect primer and `: ping` keep-alives) are dropped.
  *   - It runs until interrupted, reconnecting across daemon restarts. On each
  *     (re)connect it re-locates the daemon, because a restart lands on a fresh
  *     ephemeral port; it resends the last-seen SSE `id:` (seeded by `--since`)
@@ -22,7 +26,9 @@
  *     pure NDJSON.
  *   - No daemon on the *initial* connect ⇒ `noDaemonError` (exit 3); it never
  *     auto-spawns. A daemon that goes away *later* is treated as a transient
- *     outage and retried (a follow is a long-lived watcher).
+ *     outage and retried forever (a follow is a long-lived watcher) — unless
+ *     `--exit-on-disconnect` is set, which exits instead (0 on a clean daemon
+ *     shutdown, non-zero on an error) for scripts that want a bounded lifetime.
  *
  * The reconnect loop is factored into {@link followEvents}, which takes an
  * explicit `AbortSignal` and output callbacks, so it is unit-testable without a
@@ -33,7 +39,7 @@ import { daemonBaseUrl, findDaemon } from "sheaf-server/daemon";
 
 import type { RunContext } from "./commands";
 import { requireDaemonAllowed } from "./client";
-import { EXIT, noDaemonError, usageError, type ExitCode } from "./io";
+import { CliError, EXIT, noDaemonError, usageError, type ExitCode } from "./io";
 
 /** Base reconnect backoff, doubled per consecutive failure up to the cap. */
 const BACKOFF_BASE_MS = 1000;
@@ -54,10 +60,22 @@ export interface FollowOptions {
   since?: string;
   /** Aborting this stops the loop and returns cleanly. */
   signal: AbortSignal;
-  /** Sink for each event: one compact JSON string (no trailing newline). */
+  /** Sink for each event: one compact, re-serialized JSON string (no newline). */
   onData: (jsonLine: string) => void;
-  /** Sink for diagnostics (connect/reconnect notices). Optional. */
+  /** Sink for diagnostics (connect/reconnect notices, dropped payloads). Optional. */
   onDiagnostic?: (line: string) => void;
+  /**
+   * Called with the SSE resume cursor each time it advances (the `id:` of the
+   * last event delivered). Lets a caller checkpoint the position; the tests use
+   * it to drive an in-epoch resume.
+   */
+  onResumeId?: (id: string) => void;
+  /**
+   * Exit instead of retrying when the daemon goes away after the initial
+   * connect: a clean end-of-stream returns normally (exit 0), an error throws a
+   * {@link CliError} (non-zero). Default `false` → retry forever.
+   */
+  exitOnDisconnect?: boolean;
   /** Override the base backoff (ms) — tests use a small value. */
   backoffBaseMs?: number;
   /** Override the backoff cap (ms). */
@@ -76,9 +94,27 @@ export async function followEvents(opts: FollowOptions): Promise<void> {
   const cap = opts.backoffCapMs ?? BACKOFF_CAP_MS;
   const diag = opts.onDiagnostic ?? (() => {});
 
+  // Enforce the one-valid-JSON-object-per-line contract at the single point of
+  // emission: skip empty payloads, and drop (with a diagnostic) anything that
+  // isn't parseable JSON, so a multi-line/empty `data:` frame can't leak a
+  // malformed or blank line onto stdout.
+  const emit = (payload: string): void => {
+    if (payload.trim() === "") return; // empty data frame — silently skip
+    const line = ndjsonLine(payload);
+    if (line === null) {
+      diag(`dropping unparseable event payload`);
+      return;
+    }
+    opts.onData(line);
+  };
+
   // Resume cursor: the SSE `id:` of the last event we printed. Seeded by
   // `--since`; updated as events with ids arrive; resent on every reconnect.
   let lastId = opts.since;
+  const noteId = (id: string): void => {
+    lastId = id;
+    opts.onResumeId?.(id);
+  };
   let firstLocate = true;
   let failures = 0; // consecutive failures without a successful connect
 
@@ -86,6 +122,7 @@ export async function followEvents(opts: FollowOptions): Promise<void> {
     const info = await findDaemon(opts.vault, env);
     if (!info) {
       if (firstLocate) throw noDaemonError(opts.vault);
+      if (opts.exitOnDisconnect) throw disconnectedError(opts.vault);
       diag(`daemon unreachable; retrying`);
       await abortableDelay(backoffFor(failures, base, cap), opts.signal);
       failures += 1;
@@ -108,25 +145,30 @@ export async function followEvents(opts: FollowOptions): Promise<void> {
         onConnected: () => {
           established = true;
         },
-        onId: (id) => {
-          lastId = id;
-        },
-        onData: opts.onData,
+        onId: noteId,
+        onData: emit,
       });
       // A clean end-of-stream: the daemon closed the connection (shutdown /
-      // restart). Reconnect promptly.
+      // restart).
       if (opts.signal.aborted) break;
+      if (opts.exitOnDisconnect) {
+        diag(`daemon disconnected; exiting`);
+        return; // clean shutdown → exit 0
+      }
       diag(`stream ended; reconnecting`);
     } catch (e) {
       if (opts.signal.aborted) break;
+      if (opts.exitOnDisconnect) throw disconnectedError(opts.vault, e);
       diag(`stream error; reconnecting: ${errMessage(e)}`);
     }
 
     if (opts.signal.aborted) break;
-    // A stream that connected before dropping resets the backoff (fast
-    // reconnect after a restart); one that never connected backs off.
+    // Compute the delay from the CURRENT failure count, THEN advance it, so the
+    // first retry is always ~base whether it was a locate or a stream failure (a
+    // stream that connected before dropping resets the count → fast reconnect).
+    const delayMs = backoffFor(established ? 0 : failures, base, cap);
     failures = established ? 0 : failures + 1;
-    await abortableDelay(backoffFor(established ? 0 : failures, base, cap), opts.signal);
+    await abortableDelay(delayMs, opts.signal);
   }
 }
 
@@ -167,13 +209,12 @@ async function streamOnce(opts: {
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
-  let buffer = "";
+  const parser = new SseFrameParser(opts.onId, opts.onData);
   try {
     for (;;) {
       const { value, done } = await reader.read();
       if (done) return; // clean EOF → caller reconnects
-      buffer += decoder.decode(value, { stream: true });
-      buffer = drainFrames(buffer, opts.onId, opts.onData);
+      parser.push(decoder.decode(value, { stream: true }));
     }
   } finally {
     try {
@@ -185,45 +226,74 @@ async function streamOnce(opts: {
 }
 
 /**
- * Split off every complete SSE frame (`…\n\n`) from `buffer`, dispatch it, and
- * return the incomplete trailing remainder for the next chunk.
+ * Incremental SSE frame parser. Fed decoded text chunks (of any size — a frame,
+ * an `id:`, even a single byte may span calls); dispatches `onId` for each SSE
+ * `id:` and `onData` for each complete `data:` frame. Exported so the
+ * chunk-splitting / CRLF handling can be tested without a live socket.
+ *
+ * Line endings: it normalizes CRLF and lone CR to LF (the spec permits CRLF, and
+ * a proxy may rewrite ours), holding back a trailing lone `\r` between chunks so
+ * a `\r\n` split across a chunk boundary is never miscounted as two terminators.
  */
-function drainFrames(
-  buffer: string,
-  onId: (id: string) => void,
-  onData: (jsonLine: string) => void,
-): string {
-  let sep: number;
-  while ((sep = buffer.indexOf("\n\n")) !== -1) {
-    parseFrame(buffer.slice(0, sep), onId, onData);
-    buffer = buffer.slice(sep + 2);
+export class SseFrameParser {
+  /** LF-normalized text not yet consumed as a complete frame. */
+  private buffer = "";
+  /** A trailing `\r` from the previous chunk, possibly the start of a `\r\n`. */
+  private pendingCr = false;
+
+  constructor(
+    private readonly onId: (id: string) => void,
+    private readonly onData: (payload: string) => void,
+  ) {}
+
+  /** Feed the next decoded text chunk, dispatching any newly-complete frames. */
+  push(text: string): void {
+    let chunk = (this.pendingCr ? "\r" : "") + text;
+    this.pendingCr = chunk.endsWith("\r");
+    if (this.pendingCr) chunk = chunk.slice(0, -1);
+    this.buffer += chunk.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    let sep: number;
+    while ((sep = this.buffer.indexOf("\n\n")) !== -1) {
+      this.parseFrame(this.buffer.slice(0, sep));
+      this.buffer = this.buffer.slice(sep + 2);
+    }
   }
-  return buffer;
+
+  /**
+   * Parse one frame. Comment lines (`:` — the `: connected` primer and `: ping`
+   * keep-alives) are dropped; `id:` updates the resume cursor; `data:` lines are
+   * collected and, per the SSE spec, joined with `\n` (our events are single-
+   * line JSON, so this is normally one line) and handed to `onData`.
+   */
+  private parseFrame(frame: string): void {
+    const dataParts: string[] = [];
+    for (const line of frame.split("\n")) {
+      if (line === "" || line.startsWith(":")) continue; // blank or comment
+      const colon = line.indexOf(":");
+      const field = colon === -1 ? line : line.slice(0, colon);
+      let value = colon === -1 ? "" : line.slice(colon + 1);
+      if (value.startsWith(" ")) value = value.slice(1); // SSE strips one lead space
+      if (field === "id") this.onId(value);
+      else if (field === "data") dataParts.push(value);
+    }
+    if (dataParts.length > 0) this.onData(dataParts.join("\n"));
+  }
 }
 
 /**
- * Parse one SSE frame. Comment lines (`:` — the `: connected` primer and
- * `: ping` keep-alives) are dropped; `id:` updates the resume cursor; `data:`
- * lines are collected and, per the SSE spec, joined with `\n` (our events are
- * single-line JSON, so this is normally one line) and handed to `onData`.
+ * Enforce the NDJSON contract on one joined `data:` payload: re-parse and
+ * re-serialize to a single compact line. Returns `null` to drop the payload —
+ * empty (a bare `data:` frame) or not valid JSON (a multi-object or malformed
+ * frame) — so a blank or malformed line can never reach stdout. Exported for
+ * direct testing.
  */
-function parseFrame(
-  frame: string,
-  onId: (id: string) => void,
-  onData: (jsonLine: string) => void,
-): void {
-  const dataParts: string[] = [];
-  for (const raw of frame.split("\n")) {
-    const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
-    if (line === "" || line.startsWith(":")) continue; // blank or comment
-    const colon = line.indexOf(":");
-    const field = colon === -1 ? line : line.slice(0, colon);
-    let value = colon === -1 ? "" : line.slice(colon + 1);
-    if (value.startsWith(" ")) value = value.slice(1); // SSE strips one lead space
-    if (field === "id") onId(value);
-    else if (field === "data") dataParts.push(value);
+export function ndjsonLine(payload: string): string | null {
+  if (payload.trim() === "") return null;
+  try {
+    return JSON.stringify(JSON.parse(payload));
+  } catch {
+    return null;
   }
-  if (dataParts.length > 0) onData(dataParts.join("\n"));
 }
 
 /** Exponential backoff for the Nth consecutive failure, capped. */
@@ -257,12 +327,26 @@ function errMessage(e: unknown): string {
   return String(e);
 }
 
-/** Validate `--role`; anything but the two roles is a usage error (exit 2). */
+/**
+ * Validate `--role`; anything but the two roles is a usage error (exit 2).
+ * Defaults to `ui`: a human tailing must not flip the plugin's "agent connected"
+ * indicator. The agent watcher passes `--role agent` explicitly.
+ */
 function parseRole(value: unknown): FollowRole {
-  if (value === undefined) return "agent"; // ReadMe's agent-watcher default
+  if (value === undefined) return "ui";
   if (value === "agent" || value === "ui") return value;
   throw usageError(
     `--role must be 'agent' or 'ui' (got '${String(value)}')`,
+  );
+}
+
+/** The "daemon went away after connecting" error used by `--exit-on-disconnect`. */
+function disconnectedError(vault: string, e?: unknown): CliError {
+  const detail = e === undefined ? "" : `: ${errMessage(e)}`;
+  return new CliError(
+    `sheaf daemon for ${vault} disconnected${detail}`,
+    "daemon_disconnected",
+    EXIT.GENERIC,
   );
 }
 
@@ -277,9 +361,18 @@ export async function eventsFollowCommand(ctx: RunContext): Promise<ExitCode> {
   const role = parseRole(ctx.values.role);
   const since =
     typeof ctx.values.since === "string" ? ctx.values.since : undefined;
+  const exitOnDisconnect = ctx.values["exit-on-disconnect"] === true;
 
   const controller = new AbortController();
-  const onSigint = (): void => controller.abort();
+  // First Ctrl-C aborts the loop for a clean exit 0; a second (while we're mid
+  // reconnect/backoff) forces the conventional 130, so an impatient user can
+  // always get out.
+  let sigints = 0;
+  const onSigint = (): void => {
+    sigints += 1;
+    if (sigints >= 2) process.exit(130);
+    controller.abort();
+  };
   process.on("SIGINT", onSigint);
   try {
     await followEvents({
@@ -287,6 +380,7 @@ export async function eventsFollowCommand(ctx: RunContext): Promise<ExitCode> {
       env: ctx.io.env,
       role,
       since,
+      exitOnDisconnect,
       signal: controller.signal,
       // Always NDJSON on stdout, regardless of --format.
       onData: (line) => ctx.io.out(`${line}\n`),

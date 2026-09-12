@@ -10,6 +10,18 @@
  */
 import { run } from "./run";
 
+// EPIPE on stdout/stderr is the normal end of a pipe — `sheaf events follow |
+// head -1` closes the reader after one line, and the next write would otherwise
+// throw an unhandled `write EPIPE` and crash with exit 1. This is THE agent
+// idiom (the MCP ReadMe replaces its curl loop with `sheaf events follow`, often
+// piped), so a broken downstream pipe must be a clean exit 0, not a stack trace.
+const onPipeError = (e: NodeJS.ErrnoException): void => {
+  if (e.code === "EPIPE") process.exit(0);
+  throw e;
+};
+process.stdout.on("error", onPipeError);
+process.stderr.on("error", onPipeError);
+
 run(process.argv.slice(2))
   .then((code) => {
     process.exitCode = code;

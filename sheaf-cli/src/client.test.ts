@@ -56,17 +56,24 @@ describe("connectDaemon", () => {
 });
 
 describe("DaemonClient.rest error mapping", () => {
-  it("maps a non-2xx {error,code} body to a CliError preserving the code", async () => {
+  it("maps a non-2xx SheafError body to a CliError preserving the code", async () => {
     const { env, vault } = scratch();
     const handle = await startServer({ vault, version: "test", env });
     handles.push(handle);
 
     const client = await connectDaemon(vault, env);
     try {
-      // A malformed thread body → the handler returns a 4xx {error, code}.
+      // Reply to a malformed thread id → assertThreadId throws a SheafError,
+      // which serializes as {error, code:"invalid_thread_id"} (a real code,
+      // unlike a zod body-validation failure which has none).
       await expect(
-        client.rest("POST", "/api/ui/threads", { body: { bogus: true } }),
-      ).rejects.toMatchObject({ name: "CliError" });
+        client.rest("POST", "/api/ui/threads/bogus/reply", {
+          body: { message: "hi" },
+        }),
+      ).rejects.toMatchObject({
+        name: "CliError",
+        code: "invalid_thread_id",
+      });
     } finally {
       await client.close();
     }
@@ -115,25 +122,28 @@ describe("DaemonClient.mcp", () => {
     }
   });
 
-  it("close() tears the MCP transport down and lets the daemon idle-exit", async () => {
+  it("close() invalidates the memoized session (a later mcp() reconnects fresh)", async () => {
     const { env, vault } = scratch();
-    // Short idle window: once the client's MCP connection is gone and no SSE
-    // stream is open, the daemon must be free to idle-exit — proof that close()
-    // released the transport rather than leaving a live connection behind.
-    const handle = await startServer({ vault, version: "test", env, idleMs: 200 });
+    const handle = await startServer({ vault, version: "test", env });
     handles.push(handle);
 
     const client = await connectDaemon(vault, env);
-    const mcp = await client.mcp();
-    await mcp.callTool("ReadMe", {});
-    await client.close(); // must resolve without throwing
+    try {
+      const s1 = await client.mcp();
+      await s1.callTool("ReadMe", {});
 
-    const raced = await Promise.race([
-      handle.closed.then(() => "closed" as const),
-      new Promise<"timeout">((r) => setTimeout(() => r("timeout"), 3000)),
-    ]);
-    expect(raced).toBe("closed");
-  }, 10_000);
+      await client.close(); // tears down the transport + drops the memoized session
+
+      // A fresh mcp() after close must NOT hand back the closed session — it
+      // reconnects and returns a new object that still works.
+      const s2 = await client.mcp();
+      expect(s2).not.toBe(s1);
+      const { tools } = await s2.listTools();
+      expect(tools.map((t) => t.name)).toContain("ReadMe");
+    } finally {
+      await client.close();
+    }
+  });
 });
 
 describe("requireDaemonAllowed", () => {

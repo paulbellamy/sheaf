@@ -120,6 +120,18 @@ export async function run(argv: string[], io: Io = processIo()): Promise<number>
     }
 
     if (located.spec.run) {
+      // Enforce the `--no-daemon` guard centrally for every daemon-client
+      // command, so a handler can't silently ignore the flag by forgetting to
+      // check it (the per-handler `requireDaemonAllowed` stays as defense in
+      // depth). `--no-daemon` is only meaningful for `sheaf mcp` (step 4).
+      if (located.spec.needsDaemon && globals.noDaemon) {
+        throw new CliError(
+          `${["sheaf", ...located.path].join(" ")} requires a running daemon ` +
+            "(run `sheaf serve`); --no-daemon is only valid for `sheaf mcp`",
+          "no_daemon",
+          EXIT.NO_DAEMON,
+        );
+      }
       // Every runnable command is a vault-scoped client, so resolve the target
       // vault once here (precedence: `--vault` › `$SHEAF_VAULT` › config › cwd)
       // and hand it down. Stubs (no `run`) don't need it, so they never trigger

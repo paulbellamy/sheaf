@@ -124,6 +124,20 @@ describe("dispatch to stubs", () => {
   });
 });
 
+describe("--no-daemon enforcement (dispatcher, not per-handler)", () => {
+  it("rejects --no-daemon on a daemon-client command with exit 3", async () => {
+    const { io, stderr } = makeIo();
+    expect(await run(["docs", "--no-daemon"], io)).toBe(3);
+    expect(stderr()).toContain("only valid for `sheaf mcp`");
+  });
+
+  it("rejects --no-daemon on `events follow` with exit 3", async () => {
+    const { io, stderr } = makeIo();
+    expect(await run(["events", "follow", "--no-daemon"], io)).toBe(3);
+    expect(stderr()).toContain("requires a running daemon");
+  });
+});
+
 describe("per-command flags parse (proven via SHEAF_DEBUG)", () => {
   it("read <path> --ref REF", async () => {
     const { io, stderr } = makeIo({ SHEAF_DEBUG: "1" });
