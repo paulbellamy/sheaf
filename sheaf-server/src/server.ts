@@ -1,7 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { Backend } from "./backend/index";
-import { getBackend } from "./backend/factory";
 import { registerDeclineDraft } from "./tools/decline";
 import { registerDraftChanges } from "./tools/draft-changes";
 import { registerEdit } from "./tools/edit";
@@ -19,14 +18,15 @@ import { registerWorkspaceTools } from "./tools/workspaces";
 import { registerWrite } from "./tools/write";
 
 /**
- * Which tool surface to expose.
+ * Which tool surface to expose (selected via `sheaf serve`/`sheaf mcp
+ * --tools`).
  *
- * - `"full"` (default) — every tool, including the draft-workflow tools. Used
- *   by the web prototype, which drives the fork/propose/merge flow.
- * - `"thread-only"` — omits the draft-workflow tools (Fork, Propose, Merge,
- *   DeclineDraft, DraftChanges). Used by the Obsidian plugin, which runs in
- *   thread-on-doc mode and never touches drafts. The draft tools stay in the
- *   backend (the prototype needs them); they're just not registered here.
+ * - `"full"` (default) — every tool, including the draft-workflow tools
+ *   (Fork, Propose, Merge, DeclineDraft, DraftChanges) that drive the
+ *   fork/propose/merge flow.
+ * - `"thread-only"` — omits the draft-workflow tools, for callers that work in
+ *   thread-on-doc mode and never touch drafts. The draft tools stay in the
+ *   backend; they're just not registered on this surface.
  */
 export type ToolSurface = "full" | "thread-only";
 
@@ -60,15 +60,16 @@ export interface BuildServerOptions {
 /**
  * Build an MCP server instance with sheaf tools registered.
  *
- * Factory because the Streamable HTTP transport creates a fresh server per
- * request in stateless mode. The Backend itself is module-scoped and shared
- * across requests (see getBackend() in backend/factory.ts).
+ * A factory because the Streamable HTTP transport creates a fresh server per
+ * request in stateless mode. The caller supplies the `backend`, which is shared
+ * across those per-request servers so on-disk (and in-memory) state carries
+ * across requests.
  *
  * `opts.tools` selects the tool surface (see {@link ToolSurface}); it defaults
- * to `"full"` so existing callers (`buildServer()`) are unchanged.
+ * to `"full"`.
  */
 export function buildServer(
-  backend: Backend = getBackend(),
+  backend: Backend,
   opts: BuildServerOptions = {},
 ): McpServer {
   const { tools = "full", docScope, publicUrl, standalone } = opts;

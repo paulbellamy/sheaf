@@ -19,12 +19,11 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
-      # Typecheck every workspace package (sheaf-server, prototype, plugin).
+      # Typecheck both workspace packages (sheaf-server, sheaf-cli).
       - run: pnpm -r typecheck
-      # Tests live in sheaf-server (backend, MCP, and the Fastify app).
+      # Build the CLI bundle first: sheaf-cli's tests exec the built bin/sheaf.js.
+      - run: pnpm --filter sheaf-cli build
+      # Tests across the workspace (sheaf-server backend/MCP/app + sheaf-cli).
       - run: pnpm -r test
-      # Build the consumers.
-      - run: pnpm --filter prototype build
-      - run: pnpm --filter sheaf-obsidian build
-      # Build the CLI bundle and smoke-test that it runs.
-      - run: pnpm --filter sheaf-cli build && node sheaf-cli/bin/sheaf.js --version
+      # Smoke-test that the built CLI runs.
+      - run: node sheaf-cli/bin/sheaf.js --version

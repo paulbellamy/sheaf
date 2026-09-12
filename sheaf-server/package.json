@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Shared sheaf backend, MCP server, and HTTP API (Fastify). Imported by the Next prototype and the Obsidian plugin.",
+  "description": "Shared sheaf backend, MCP server, and HTTP API (Fastify). Consumed by the sheaf CLI (daemon + MCP bridge).",
   "exports": {
     ".": "./src/index.ts",
     "./types": "./src/backend/index.ts",

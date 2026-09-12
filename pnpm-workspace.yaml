@@ -1,5 +1,3 @@
 packages:
-  - prototype
-  - obsidian-plugin
   - sheaf-server
   - sheaf-cli

@@ -5,8 +5,21 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { StubBackend } from "../backend/stub";
 import { buildSheafApp } from "../app";
-import { getBackend, setBackend } from "../backend/factory";
-import type { BackendEvent } from "../backend";
+import type { Backend, BackendEvent } from "../backend";
+
+// Test-local backend registry. The old `getBackend`/`setBackend` module factory
+// is gone (the CLI/daemon constructs its backend directly), so these route-shim
+// tests hold the current backend here instead: each suite's `beforeEach` calls
+// `setBackend(backend)` and its `afterEach` calls `setBackend(null)`, and the
+// `dispatch` shim builds the app against whatever is set.
+let activeBackend: Backend | null = null;
+function setBackend(backend: Backend | null): void {
+  activeBackend = backend;
+}
+function getBackend(): Backend {
+  if (!activeBackend) throw new Error("test backend not set");
+  return activeBackend;
+}
 
 /**
  * The HTTP-route tests below predate the Fastify app: they were written

@@ -2,7 +2,7 @@
  * Backend interface for the sheaf MCP server.
  *
  * This interface is the boundary between MCP tool handlers and the storage
- * substrate. The prototype (stub.ts) implements it over the local filesystem
+ * substrate. `StubBackend` (stub.ts) implements it over the local filesystem
  * with no real CRDT or git; the production backend will plug in yjs, git,
  * and case-2 sync (design §4.2) without touching any tool code.
  *

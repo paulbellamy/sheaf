@@ -3,13 +3,12 @@
  *
  * This lives in `sheaf-server` (not `sheaf-cli`) on purpose: the invariant is
  * "exactly one live backend per vault, in exactly one process" (see
- * docs/sheaf-cli-v0.1.md). That process is *the daemon*, and any embedding host
- * that owns the backend for a vault — `sheaf serve` today, potentially Obsidian
- * or the Next prototype tomorrow — must be able to register as the daemon so CLI
- * clients find it over loopback HTTP instead of standing up a second, conflicting
- * backend. Since sheaf-server must not depend on the CLI package, the discovery
- * machinery belongs here and the CLI consumes it via the `sheaf-server/daemon`
- * subpath export.
+ * docs/sheaf-cli-v0.1.md). That process is *the daemon* (`sheaf serve`), but any
+ * host that owns the backend for a vault must be able to register as the daemon
+ * so CLI clients find it over loopback HTTP instead of standing up a second,
+ * conflicting backend. Since sheaf-server must not depend on the CLI package,
+ * the discovery machinery belongs here and the CLI consumes it via the
+ * `sheaf-server/daemon` subpath export.
  *
  * On-disk layout (all under `$SHEAF_HOME`, see `./home`):
  *   daemons/<key>.json   discovery record (mode 0600) — who is serving, where

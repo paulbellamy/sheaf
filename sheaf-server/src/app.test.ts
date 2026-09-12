@@ -11,9 +11,9 @@ import { StubBackend } from "./backend/stub";
 import { buildSheafApp } from "./app";
 
 /**
- * End-to-end smoke tests against a *real* listening socket — the path the
- * Obsidian plugin takes (`app.listen()`), which `inject()`-based tests don't
- * cover: the MCP node transport wired to `reply.raw`, and live SSE streaming.
+ * End-to-end smoke tests against a *real* listening socket — the path `sheaf
+ * serve` takes (`app.listen()`), which `inject()`-based tests don't cover: the
+ * MCP node transport wired to `reply.raw`, and live SSE streaming.
  */
 describe("buildSheafApp over a real socket", () => {
   let root: string;
@@ -198,8 +198,8 @@ describe("buildSheafApp over a real socket", () => {
 
   it("close() ends live SSE streams instead of hanging on them", async () => {
     // Regression: hijacked SSE replies are invisible to Fastify's shutdown,
-    // so `close()` used to wait forever on a connected stream. The Obsidian
-    // host's stop→start restart then left the old app alive with the agent's
+    // so `close()` used to wait forever on a connected stream. A daemon
+    // stop→start restart then left the old app alive with the agent's
     // Monitor still subscribed to the *old* backend — kept open by the
     // keep-alive ping, never reconnecting, silently missing every event
     // emitted on the restarted instance (user replies included).
@@ -237,7 +237,11 @@ describe("buildSheafApp request hardening", () => {
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-cors-"));
-    app = buildSheafApp(new StubBackend(root));
+    // There is no default allowlist anymore, so opt an origin in explicitly to
+    // exercise the reflection path (`sheaf serve --allow-origin` does the same).
+    app = buildSheafApp(new StubBackend(root), {
+      allowedOrigins: ["app://obsidian.md"],
+    });
     await app.ready();
   });
 
@@ -264,7 +268,7 @@ describe("buildSheafApp request hardening", () => {
     expect(res.statusCode).toBe(200);
   });
 
-  it("reflects an allowed Origin but omits CORS for others", async () => {
+  it("reflects an explicitly allowed Origin but omits CORS for others", async () => {
     const ok = await app.inject({
       method: "GET",
       url: "/api/ui/docs",
@@ -278,6 +282,24 @@ describe("buildSheafApp request hardening", () => {
       headers: { host: "localhost:31415", origin: "https://evil.example" },
     });
     expect(evil.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+
+  it("reflects no Origin by default (empty allowlist)", async () => {
+    // With no `allowedOrigins` option, nothing is trusted cross-origin — even
+    // the origin the reflection test opts in above gets no CORS header.
+    const noCors = buildSheafApp(new StubBackend(root));
+    await noCors.ready();
+    try {
+      const res = await noCors.inject({
+        method: "GET",
+        url: "/api/ui/docs",
+        headers: { host: "localhost:31415", origin: "app://obsidian.md" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+    } finally {
+      await noCors.close();
+    }
   });
 });
 

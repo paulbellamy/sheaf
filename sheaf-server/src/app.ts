@@ -6,7 +6,6 @@ import Fastify, {
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
 import type { Backend } from "./backend/index";
-import { getBackend } from "./backend/factory";
 import { buildServer, type ToolSurface } from "./server";
 import { err, errorResult } from "./errors";
 import { assertVaultPath } from "./paths";
@@ -36,13 +35,12 @@ import {
 /**
  * The canonical sheaf HTTP API as a Fastify app: the `/api/ui/*` REST routes,
  * the `/api/ui/drafts/stream` SSE stream, and the `/api/mcp` MCP Streamable
- * HTTP endpoint. The Obsidian plugin runs this in-process via `.listen()`;
- * the Next prototype reuses the same handlers/transport cores through thin
- * route shims (it doesn't import this Fastify instance).
+ * HTTP endpoint. `sheaf serve` runs it in-process via `.listen()` as the
+ * per-vault daemon.
  *
- * Logging is disabled so the bundle the plugin ships doesn't pull in pino's
- * worker-thread transport (which doesn't bundle cleanly into the Obsidian
- * single-file build).
+ * Logging is disabled: the daemon does its own structured file logging (`sheaf
+ * serve` → `$SHEAF_HOME/logs/<key>.log`), and Fastify's default per-request
+ * pino output would only add noise to the process's stdout/stderr.
  */
 /**
  * True if the HTTP `Host` header names a loopback address (any port). The
@@ -97,7 +95,7 @@ function resolveDocScope(req: FastifyRequest): string | undefined {
 }
 
 export function buildSheafApp(
-  backend: Backend = getBackend(),
+  backend: Backend,
   opts: {
     allowedOrigins?: string[];
     tools?: ToolSurface;
@@ -105,16 +103,15 @@ export function buildSheafApp(
      * Daemon identity reported by `GET /api/health`. `sheaf serve` threads it
      * in so liveness probes can confirm this server owns the *expected* vault
      * (a pid-reuse-proof check — see `isDaemonAlive` in `./daemon`). Optional so
-     * the embedding hosts (Obsidian, Next) and existing tests keep working; when
-     * omitted, `vault`/`version` are absent and `startedAt` is the app's own
-     * construction time.
+     * tests can build the app without it; when omitted, `vault`/`version` are
+     * absent and `startedAt` is the app's own construction time.
      */
     health?: { vault: string; startedAt: number; version: string };
     /**
      * Force-close lingering keep-alive sockets on `close()` so a daemon's
      * shutdown is bounded (a client holding an idle HTTP/1.1 connection can't
-     * make `app.close()` hang). Left off by default so the embedding hosts
-     * (Obsidian, Next) keep Fastify's graceful-drain behavior.
+     * make `app.close()` hang). Left off by default (Fastify's graceful-drain
+     * behavior); `sheaf serve` turns it on.
      */
     forceCloseConnections?: boolean;
     /**
@@ -124,7 +121,7 @@ export function buildSheafApp(
      * *ephemeral* port: `sheaf serve` builds the app before it knows the port,
      * so it hands in `() => daemonBaseUrl(...)` and fills the value in after
      * `listen()`. Resolved per request (well after boot), so a getter that
-     * returns `undefined` early is harmless. Omitted by embedding hosts.
+     * returns `undefined` early is harmless.
      */
     publicUrl?: string | (() => string | undefined);
   } = {},
@@ -142,12 +139,12 @@ export function buildSheafApp(
   // when no explicit daemon identity was supplied.
   const healthStartedAt = opts.health?.startedAt ?? Date.now();
 
-  // Browser origins trusted to read responses cross-origin. The only one in
-  // the shipped plugin is Obsidian's renderer (its SSE uses `fetch`); the REST
-  // client uses Obsidian's CORS-exempt `requestUrl`, and the agent's MCP client
-  // isn't a browser — so the default allowlist is just the Obsidian origin.
+  // Browser origins trusted to read responses cross-origin. Empty by default:
+  // the daemon's own clients (the CLI's REST/MCP callers) aren't browsers, so
+  // no cross-origin reader is trusted unless one is opted in explicitly (`sheaf
+  // serve --allow-origin <O>`). Other origins get no CORS header at all.
   const allowedOrigins = new Set(
-    (opts.allowedOrigins ?? ["app://obsidian.md"]).map((o) => o.toLowerCase()),
+    (opts.allowedOrigins ?? []).map((o) => o.toLowerCase()),
   );
   const allowedAcao = (origin: string | undefined): string | undefined =>
     origin && allowedOrigins.has(origin.toLowerCase()) ? origin : undefined;
@@ -330,12 +327,11 @@ export function buildSheafApp(
 
   // Live SSE connections, ended on app.close(). Hijacked replies are invisible
   // to Fastify's shutdown: without this, `close()` waits forever on the open
-  // stream sockets. The Obsidian host's stop→start restart then leaves the old
-  // app alive with every subscriber bound to the *old* backend — the keep-alive
-  // ping holds the agent's Monitor connection open, so it never reconnects and
-  // silently misses every event emitted on the new instance. Closing the
-  // streams here gives clients an EOF, and their reconnect loops re-attach to
-  // the restarted server.
+  // stream sockets. A daemon restart would then leave the old app alive with
+  // every subscriber bound to the *old* backend — the keep-alive ping holds the
+  // agent's Monitor connection open, so it never reconnects and silently misses
+  // every event emitted on the new instance. Closing the streams here gives
+  // clients an EOF, and their reconnect loops re-attach to the restarted server.
   // `preClose` (not `onClose`) because Fastify's own server-close — which
   // waits for the sockets these streams hold open — runs before onClose hooks.
   const liveSseCleanups = new Set<() => void>();
@@ -365,7 +361,7 @@ export function buildSheafApp(
       "X-Accel-Buffering": "no",
     };
     // This route hijacks the reply, so the onSend CORS hook doesn't run —
-    // apply the same allowed-origin reflection here for the plugin's SSE fetch.
+    // apply the same allowed-origin reflection here for a cross-origin SSE fetch.
     const acao = allowedAcao(req.headers.origin);
     if (acao) {
       sseHeaders["Access-Control-Allow-Origin"] = acao;

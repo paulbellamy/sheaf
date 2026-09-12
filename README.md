@@ -138,16 +138,14 @@ Agents still reach these through `sheaf mcp`; they're just not CLI verbs yet:
 
 ## Monorepo packages
 
-`sheaf-cli` is the entrypoint; the rest are libraries it (and the legacy
-embedding hosts) build on.
+`sheaf-cli` is the entrypoint; `sheaf-server` is the library it builds on.
 
 - [`sheaf-cli`](sheaf-cli) — **the `sheaf` binary.** Daemon, MCP bridge/installer,
   and the read/thread verbs.
 - [`sheaf-server`](sheaf-server) — shared backend, MCP tool definitions, and the
-  Fastify HTTP app. Pure library, no build step (consumed as TS source).
-- [`obsidian-plugin`](obsidian-plugin) — Obsidian plugin. Historically embeds the
-  server in-process (see the migration note below).
-- [`prototype`](prototype) — Next.js web prototype (also embeds the server).
+  Fastify HTTP app (`buildServer` / `buildSheafApp`, plus the daemon-discovery
+  machinery under `sheaf-server/daemon`). Pure library, no build step (consumed
+  as TS source).
 
 ### Checks
 
@@ -157,26 +155,12 @@ pnpm -r typecheck
 pnpm -r test
 ```
 
-## Migration note: embedding is deprecated
+## No embedding: the daemon is the only host
 
-v0.1 has no legacy compatibility path — the daemon model replaces in-process
-embedding of `buildSheafApp` / `buildServer`. Existing consumers keep working for
-now, but should migrate to running or pointing at a `sheaf serve` daemon (and use
-`sheaf mcp install` to wire agents) rather than standing up their own backend. The
-concrete items:
-
-- **Obsidian plugin — embedded server.** The plugin runs `buildSheafApp` in-process
-  and violates the one-backend-per-vault invariant if a daemon is also running.
-  It should spawn/point at `sheaf serve` instead of hosting its own app.
-- **Obsidian plugin — agent connect strings.** These hard-code a direct
-  `claude mcp add --transport http sheaf <url>/api/mcp` against the embedded
-  server; they should instead run `sheaf mcp install claude` (or show that
-  command):
-  - `obsidian-plugin/src/views/threads-view.ts:776`
-  - `obsidian-plugin/src/settings.ts:243`
-  - `obsidian-plugin/README.md:43`
-- **Next prototype — embedded MCP route.** `prototype/app/api/mcp/route.ts` imports
-  `buildServer` from `sheaf-server` and hosts MCP itself. It should proxy to a
-  `sheaf serve` daemon's `/api/mcp` rather than construct a second backend.
-
-(These are recorded, not changed, in this step — the consumers migrate themselves.)
+There is no in-process embedding path. The one-backend-per-vault invariant is
+enforced by a single daemon (`sheaf serve`) owning the one `StubBackend`;
+everything else — including the agent's MCP server (`sheaf mcp`) — is a thin
+client that speaks loopback HTTP to it (or, for `sheaf mcp --no-daemon`, runs a
+lone backend only when nothing else touches the vault). `buildServer` /
+`buildSheafApp` take their backend as a required argument; there is no backend
+factory to reach for a shared instance.

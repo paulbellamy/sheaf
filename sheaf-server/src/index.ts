@@ -2,15 +2,15 @@
  * sheaf-server — the shared backend, MCP server, and HTTP API logic.
  *
  * The Fastify app (`buildSheafApp`) lives behind the `sheaf-server/app`
- * subpath so importing this entry never pulls Fastify into a consumer's
- * graph (the Next prototype reuses the handlers/transport cores directly and
- * doesn't want Fastify in its bundle).
+ * subpath so importing this entry never pulls Fastify into a consumer's graph
+ * that only needs the backend, tool, or handler cores.
  */
 
-// Backend interface, types, and the filesystem-backed implementation.
+// Backend interface, types, and the filesystem-backed implementation. The CLI
+// constructs its own `StubBackend(vault, vault)` directly — there is no backend
+// factory; the daemon owns the one instance per vault.
 export * from "./backend/index";
 export { StubBackend } from "./backend/stub";
-export { getBackend, setBackend } from "./backend/factory";
 
 // MCP server (tool definitions). Transport is supplied per-runtime.
 export {

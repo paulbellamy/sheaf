@@ -52,9 +52,10 @@ import {
 import { styleConfigSchema, styleProfileSchema } from "../style/schemas";
 
 /**
- * Filesystem-backed stub backend for the prototype.
+ * Filesystem-backed stub backend — the one `StubBackend` the daemon owns per
+ * vault (the CLI constructs it directly as `new StubBackend(vault, vault)`).
  *
- * `<root>` is the Obsidian vault root. Any visible markdown file under it is a
+ * `<root>` is the vault root. Any visible markdown file under it is a
  * sheaf doc — `<dir>/<name>.md` at any depth. Dot-prefixed entries (`.drafts/`,
  * `.op_log.json`, `.obsidian/`, …) are infra and never surfaced as docs.
  *
@@ -1878,10 +1879,3 @@ export class StubBackend implements Backend {
     });
   }
 }
-
-/**
- * Deprecated re-export. The factory lives in `./factory.ts` — new consumers
- * should import from there. This shim keeps existing app/api callers
- * compiling while migration rolls through.
- */
-export { getBackend } from "./factory";

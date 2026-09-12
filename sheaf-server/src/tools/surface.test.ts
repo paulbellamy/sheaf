@@ -10,9 +10,9 @@ import { buildServer, type ToolSurface } from "../server";
 import { StubBackend } from "../backend/stub";
 
 /**
- * Tool-surface gating: the embedded server can expose the full tool set (web
- * prototype, default) or a "thread-only" surface (Obsidian plugin) that omits
- * the draft-workflow tools. We assert the registered tool list over a real MCP
+ * Tool-surface gating (`--tools full|thread-only`): the server can expose the
+ * full tool set (default) or a "thread-only" surface that omits the
+ * draft-workflow tools. We assert the registered tool list over a real MCP
  * client (in-memory transport) so the check rides the actual tools/list path.
  */
 
