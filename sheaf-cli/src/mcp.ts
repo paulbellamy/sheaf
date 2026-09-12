@@ -703,10 +703,10 @@ async function runStandalone(
 ): Promise<ExitCode> {
   err(
     "sheaf mcp: --no-daemon — serving an in-process backend; live events across " +
-      "processes (Obsidian/UI) are unavailable in this mode",
+      "processes (editor/UI) are unavailable in this mode",
   );
 
-  const backend = new StubBackend(vault, vault);
+  const backend = new StubBackend(vault);
   const server = buildServer(backend, {
     tools,
     docScope: doc,

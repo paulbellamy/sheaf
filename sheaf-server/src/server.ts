@@ -43,8 +43,8 @@ export interface BuildServerOptions {
    * The server's real, reachable origin (`http://host:port`), interpolated into
    * the ReadMe's raw-curl event-loop fallback so it points at the actual daemon
    * rather than a guessed port. `sheaf serve` threads its bound address through
-   * `buildSheafApp`; embedding hosts and the standalone bridge omit it, and the
-   * ReadMe falls back to a sensible default. See `tools/readme.ts`.
+   * `buildSheafApp`; the standalone `sheaf mcp --no-daemon` bridge omits it, and
+   * the ReadMe falls back to a sensible default. See `tools/readme.ts`.
    */
   publicUrl?: string;
   /**

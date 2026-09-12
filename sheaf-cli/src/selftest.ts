@@ -26,7 +26,7 @@ export function runSelftest(io: Io): number {
   try {
     // Construct the real backend — proves the sheaf-server TS was bundled and
     // its external deps (zod, the MCP SDK) resolved.
-    const backend = new StubBackend(dir, dir);
+    const backend = new StubBackend(dir);
     if (typeof backend.subscribe !== "function") {
       io.err("selftest failed: StubBackend missing expected API\n");
       return 1;

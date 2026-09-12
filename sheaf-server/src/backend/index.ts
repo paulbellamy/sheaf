@@ -271,8 +271,8 @@ export interface Backend {
    * may name a single doc OR a folder — a folder rename reconciles every
    * descendant in one pass (see `remapRenamedPath`).
    *
-   * The byte move itself is the caller's job (in the Obsidian prototype the
-   * vault renames out from under us). A doc's threads travel inline with its
+   * The byte move itself is the caller's job (the editor renames out from
+   * under us). A doc's threads travel inline with its
    * `.md`, so this only fixes what the move can't: the target paths recorded
    * inside each doc's review endmatter, per-doc version counters/history, the
    * hidden `.drafts/` overrides, and any draft whose `base_path`/`touches` sat

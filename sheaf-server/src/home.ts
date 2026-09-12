@@ -3,9 +3,9 @@
  *
  * This lives in sheaf-server (not sheaf-cli) on purpose: daemon discovery and
  * registration is a server-side concern — `registerDaemon` (step 2) writes
- * `$SHEAF_HOME/daemons/<key>.json`, and any embedding host that owns *the*
- * backend for a vault must be able to register there so CLI clients find it
- * instead of spawning a second backend. sheaf-server must not depend on the CLI
+ * `$SHEAF_HOME/daemons/<key>.json`, and any host that owns *the* backend for a
+ * vault must be able to register there so CLI clients find it instead of
+ * spawning a second backend. sheaf-server must not depend on the CLI
  * package, so the layout helpers belong here and the CLI re-exports them.
  *
  * `$SHEAF_HOME` defaults to `~/.sheaf` (dir mode 0700) and is overridable via

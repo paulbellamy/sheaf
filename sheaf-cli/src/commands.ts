@@ -279,7 +279,7 @@ export const REGISTRY: Record<string, CommandSpec> = {
           "sheaf thread resolve <id> [--as ui|agent] [--no-apply] [--option N]",
         details:
           "On the ui path (default), resolve APPLIES an attached draft leaf into the doc —\n" +
-          "the plugin's \"resolve & take\". Pass --no-apply to resolve without taking, and\n" +
+          "\"resolve & take\". Pass --no-apply to resolve without taking, and\n" +
           "--option N to choose which option leaf to apply. Both are ui-only; --as agent just\n" +
           "flips the thread's status.",
         step: 6,
@@ -317,7 +317,7 @@ export const REGISTRY: Record<string, CommandSpec> = {
         details:
           "Prints one JSON event per line to stdout (always NDJSON, ignoring --format).\n" +
           "--role defaults to 'ui'; pass 'agent' for the MCP agent watcher (it flips the\n" +
-          "plugin's \"agent connected\" status). By default it runs until interrupted,\n" +
+          "\"agent connected\" status). By default it runs until interrupted,\n" +
           "reconnecting across daemon restarts; --exit-on-disconnect exits instead when the\n" +
           "daemon goes away (0 on a clean shutdown, non-zero on error).\n" +
           "--since resumes from a cursor for programmatic use: on disconnect/exit the latest\n" +

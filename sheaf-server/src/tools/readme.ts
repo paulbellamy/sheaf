@@ -2,10 +2,9 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 /**
  * Fallback origin for the ReadMe's raw-curl event loop when no `publicUrl` is
- * threaded in (an embedding host that predates the daemon, or a standalone
- * `sheaf mcp --no-daemon` with no HTTP server at all). This is the Obsidian
- * plugin's historical default port; it's only a hint for the curl *fallback* —
- * the guide leads with `sheaf events follow`, which needs no address.
+ * threaded in (e.g. a standalone `sheaf mcp --no-daemon` with no HTTP server at
+ * all). A legacy default port; it's only a hint for the curl *fallback* — the
+ * guide leads with `sheaf events follow`, which needs no address.
  */
 const DEFAULT_PUBLIC_URL = "http://localhost:31415";
 
@@ -20,8 +19,8 @@ const DEFAULT_PUBLIC_URL = "http://localhost:31415";
  *   - `publicUrl` — the daemon's *actual* bound origin (`http://host:port`),
  *     threaded down from `buildSheafApp` via `buildServer` so the curl fallback
  *     in the event-subscription section points at the real server rather than a
- *     guessed port. Omitted by embedding hosts; {@link DEFAULT_PUBLIC_URL} then
- *     stands in.
+ *     guessed port. Omitted when no bound address is available (e.g. `sheaf mcp
+ *     --no-daemon`); {@link DEFAULT_PUBLIC_URL} then stands in.
  *   - `standalone` — set by `sheaf mcp --no-daemon`, whose in-process backend
  *     has no daemon and no cross-process event stream. In that mode the whole
  *     "Subscribe to events" section is replaced with a note to re-poll
@@ -141,7 +140,7 @@ and can be ignored.`;
 const STANDALONE_SUBSCRIBE = `## Staying current (no live events)
 
 You're running in \`--no-daemon\` mode: an in-process backend with **no live
-event stream** — a comment posted in Obsidian or another process won't reach
+event stream** — a comment posted from the editor or another process won't reach
 you as it happens (there is no daemon fanning events out). Do **not** run
 \`sheaf events follow\` (it needs a running daemon) or a curl loop (nothing is
 listening).
@@ -154,7 +153,7 @@ are your queue, exactly as in the loop above.`;
 const README_TEMPLATE = `# Sheaf MCP — operating guide
 
 You're connected to sheaf. A user is editing a markdown doc somewhere
-(typically in Obsidian via the sheaf plugin). When they highlight a passage
+(in their editor). When they highlight a passage
 and write a comment, sheaf records it as a **thread** anchored to that
 character range. Your job: react to those threads by editing the doc, then
 mark the thread resolved. The user sees your edits land in their editor live.

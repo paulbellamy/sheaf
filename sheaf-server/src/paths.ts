@@ -86,50 +86,6 @@ export function remapRenamedPath(
   return null;
 }
 
-/**
- * Plugin paths live at the repo root (not under the data root) and are
- * served read-only. They carry the bundled skills and scripts so agents can
- * discover how to use the MCP without installing the plugin locally.
- */
-export const PLUGIN_PATH_PREFIX = ".claude-plugin/";
-
-export function isPluginPath(p: string): boolean {
-  if (typeof p !== "string") return false;
-  return path.posix.normalize(p).startsWith(PLUGIN_PATH_PREFIX);
-}
-
-/**
- * Assert a path is readable via the MCP. Accepts either a vault doc path or a
- * plugin-tree path. Use for read-only tool inputs; mutations must still call
- * `assertVaultPath` so they cannot target the (dot-prefixed) plugin tree.
- */
-export function assertReadablePath(p: string): void {
-  if (isPluginPath(p)) {
-    assertPathWithPrefixes(p, [PLUGIN_PATH_PREFIX]);
-    return;
-  }
-  assertVaultPath(p);
-}
-
-function assertPathWithPrefixes(p: string, prefixes: string[]): void {
-  if (typeof p !== "string" || p.length === 0) throw err.invalidPath(p);
-  if (p.includes("\0")) throw err.invalidPath(p);
-  // Normalize using posix-style rules; we store paths with forward slashes.
-  const normalized = path.posix.normalize(p);
-  const matched = prefixes.find((prefix) => normalized.startsWith(prefix));
-  if (
-    !matched ||
-    // A bare `<prefix>..` normalizes to the prefix's parent — reject it.
-    normalized === matched.slice(0, -1) + "/.." ||
-    normalized.split("/").some((seg) => seg === "..")
-  ) {
-    throw err.invalidPath(p);
-  }
-  if (path.isAbsolute(p) || /^[A-Za-z]:[\\/]/.test(p)) {
-    throw err.invalidPath(p);
-  }
-}
-
 export function assertDraftId(id: string): void {
   if (typeof id !== "string" || !DRAFT_ID_RE.test(id)) {
     throw err.invalidRef(String(id));

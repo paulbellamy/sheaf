@@ -15,6 +15,9 @@ server** rather than standing up its own copy of the world.
 No legacy compatibility. Obsidian plugin and Next prototype migrate themselves;
 nothing here preserves their in-process embedding.
 
+> _History note: in the final step the `prototype` and `obsidian-plugin`
+> packages were deleted rather than migrated — the CLI + daemon is the product._
+
 ## The invariant: exactly one backend per vault
 
 Not "state crosses processes for free." `StubBackend` keeps critical state in a
@@ -244,6 +247,9 @@ file blind.
    `obsidian-plugin/src/views/threads-view.ts:776`, `settings.ts:243`,
    `obsidian-plugin/README.md:43`). Tests: each verb against a live daemon,
    text + `--format json`.
+   _(History note: in the final step the `prototype` and `obsidian-plugin`
+   packages were deleted rather than migrated, so these migration items are
+   moot.)_
 
 Order rationale: the agent-facing MVP (serve → client/events → mcp → install)
 lands before the human read/thread verbs.

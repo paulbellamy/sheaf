@@ -127,7 +127,7 @@ const renameBodySchema = z.object({
 /**
  * Reconcile sheaf's review state after the vault renamed `from` → `to` —
  * either a single doc or a whole folder (the backend remaps every descendant).
- * The Obsidian plugin fires this on `vault.on("rename")` so the target paths
+ * An editor fires this on a vault rename so the target paths
  * stored in each doc's endmatter, version history, and drafts follow the move
  * instead of orphaning on the old path. The byte move is the vault's job (a
  * doc's threads travel inline with it); this only fixes sheaf's metadata.

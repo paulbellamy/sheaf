@@ -365,7 +365,7 @@ export async function startServer(
     }
 
     // --- Backend + app. ---
-    const backend = new StubBackend(vault, vault);
+    const backend = new StubBackend(vault);
     const startedAt = Date.now();
     // The daemon's real origin, filled in once `listen()` picks the ephemeral
     // port. Handed to `buildSheafApp` as a getter (resolved per request, well

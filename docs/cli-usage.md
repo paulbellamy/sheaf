@@ -103,7 +103,7 @@ sheaf thread reopen  thrd_9f3c…          # status → open
 ```
 
 On the `ui` path a resolve **applies an attached draft leaf into the doc by
-default** (the plugin's "resolve & take"): `--no-apply` resolves without taking,
+default** ("resolve & take"): `--no-apply` resolves without taking,
 and `--option N` chooses which option leaf to apply. Both are `ui`-only.
 
 `--as agent` reroutes `add`/`reply`/`resolve` through the MCP tools (origin
@@ -119,7 +119,7 @@ regardless of `--format`:
 
 ```sh
 sheaf events follow                      # role ui (a passive human tail)
-sheaf events follow --role agent         # flips the plugin's "agent connected"
+sheaf events follow --role agent         # flips the "agent connected" status
 sheaf events follow --since <id>         # resume from an SSE id
 ```
 

@@ -223,7 +223,7 @@ describe("isDaemonAlive", () => {
     vault: string,
     healthVault: string,
   ): Promise<{ host: string; port: number }> {
-    const app = buildSheafApp(new StubBackend(vault, vault), {
+    const app = buildSheafApp(new StubBackend(vault), {
       health: { vault: healthVault, startedAt: Date.now(), version: "t" },
     });
     apps.push(app);

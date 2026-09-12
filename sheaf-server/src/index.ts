@@ -44,7 +44,5 @@ export {
   assertThreadId,
   assertDraftId,
   assertVaultPath,
-  assertReadablePath,
-  isPluginPath,
   safeJoin,
 } from "./paths";

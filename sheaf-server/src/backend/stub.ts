@@ -28,12 +28,9 @@ import { McpError, err, type MergeConflictDetail } from "../errors";
 import { globToRegex } from "../glob";
 import {
   DRAFT_ID_RE,
-  PLUGIN_PATH_PREFIX,
   assertDraftId,
-  assertReadablePath,
   assertThreadId,
   assertVaultPath,
-  isPluginPath,
   remapRenamedPath,
   safeJoin,
 } from "../paths";
@@ -53,7 +50,7 @@ import { styleConfigSchema, styleProfileSchema } from "../style/schemas";
 
 /**
  * Filesystem-backed stub backend — the one `StubBackend` the daemon owns per
- * vault (the CLI constructs it directly as `new StubBackend(vault, vault)`).
+ * vault (the CLI constructs it directly as `new StubBackend(vault)`).
  *
  * `<root>` is the vault root. Any visible markdown file under it is a
  * sheaf doc — `<dir>/<name>.md` at any depth. Dot-prefixed entries (`.drafts/`,
@@ -98,7 +95,7 @@ function assertDraftRef(ref: Ref): asserts ref is DraftId {
 
 /**
  * Bump the per-doc version counter on a main write. Direct edits to main
- * (Obsidian-prototype mode: agent writes land without a draft round-trip)
+ * (thread-on-doc mode: agent writes land without a draft round-trip)
  * still want a monotonic version number so callers can stale-check.
  */
 function bumpCounter(
@@ -251,12 +248,6 @@ const MAX_REPLAY_EVENTS = 256;
 
 export class StubBackend implements Backend {
   private root: string;
-  /**
-   * Repo-root dir that holds `.claude-plugin/`. Exposed read-only so remote
-   * agents can discover the bundled skills + scripts through `Read`/`Glob`/
-   * `Grep` without installing the plugin locally.
-   */
-  private pluginRoot: string;
   private opLogPath: string;
   /** Hidden cache for the style profile + bridged config (see `.sheaf/`). */
   private styleProfilePath: string;
@@ -277,7 +268,7 @@ export class StubBackend implements Backend {
    * `<epoch>.<seq>` (the SSE `id:` field) and a slot in a bounded replay
    * buffer, so a subscriber that reconnects with `sinceId` gets the events
    * it missed instead of a silent gap. The epoch is random per backend
-   * instance: an id minted by a previous instance (embedded-server restart)
+   * instance: an id minted by a previous instance (a daemon restart)
    * is detectably non-resumable and yields a `stream_reset` instead of a
    * wrong replay. Lifecycle events (`agent_presence`, `stream_reset`) are
    * connection state, not mutations — they get no id and aren't buffered
@@ -300,9 +291,8 @@ export class StubBackend implements Backend {
    */
   private versionHistory = new Map<DocPath, VersionHistoryEntry[]>();
 
-  constructor(root: string, pluginRoot?: string) {
+  constructor(root: string) {
     this.root = root;
-    this.pluginRoot = pluginRoot ?? path.resolve(root, "..");
     this.opLogPath = path.join(root, ".op_log.json");
     this.styleProfilePath = path.join(root, ".sheaf", "style-profile.json");
     this.styleConfigPath = path.join(root, ".sheaf", "config.json");
@@ -657,8 +647,7 @@ export class StubBackend implements Backend {
 
   private async listAllDocs(ref: Ref): Promise<DocSummary[]> {
     const main = await this.listMainDocs();
-    const plugin = await this.listPluginFiles();
-    if (ref === "main") return [...main, ...plugin];
+    if (ref === "main") return main;
     const meta = await this.loadDraftMeta(ref);
     const draftBase = path.join(this.root, ".drafts", meta.draft_id);
     const draftFiles = await walk(draftBase);
@@ -680,39 +669,7 @@ export class StubBackend implements Backend {
         updated_at: stat.mtimeMs,
       });
     }
-    return [...main.map((d) => overridden.get(d.path) ?? d), ...plugin];
-  }
-
-  /**
-   * Walk the repo-root `.claude-plugin/` tree and return one entry per file.
-   * No extension filter — plugin bundles include `.md`, `.mjs`, `.json`, etc.
-   * Always served as `origin: main`; drafts never shadow these paths.
-   */
-  private async listPluginFiles(): Promise<DocSummary[]> {
-    const base = path.join(this.pluginRoot, PLUGIN_PATH_PREFIX);
-    let files: string[];
-    try {
-      files = await walk(base);
-    } catch {
-      return [];
-    }
-    const results: DocSummary[] = [];
-    for (const f of files) {
-      const rel = path.relative(this.pluginRoot, f).replace(/\\/g, "/");
-      if (!rel.startsWith(PLUGIN_PATH_PREFIX)) continue;
-      let stat: import("node:fs").Stats;
-      try {
-        stat = await fs.lstat(f);
-      } catch {
-        continue;
-      }
-      results.push({
-        path: rel,
-        title: path.basename(rel),
-        updated_at: stat.mtimeMs,
-      });
-    }
-    return results.sort((a, b) => a.path.localeCompare(b.path));
+    return main.map((d) => overridden.get(d.path) ?? d);
   }
 
   async grep(opts: GrepOptions): Promise<GrepResult> {
@@ -794,14 +751,10 @@ export class StubBackend implements Backend {
   }
 
   async readDoc(p: DocPath, ref: Ref = "main"): Promise<DocContent> {
-    assertReadablePath(p);
+    assertVaultPath(p);
     let abs: string;
     let origin: "main" | "draft";
-    if (isPluginPath(p)) {
-      // Plugin tree is main-only: drafts never shadow it.
-      abs = safeJoin(this.pluginRoot, p);
-      origin = "main";
-    } else if (ref === "main") {
+    if (ref === "main") {
       abs = this.absMain(p);
       origin = "main";
     } else {

@@ -2,10 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   assertDraftId,
-  assertReadablePath,
   assertThreadId,
   assertVaultPath,
-  isPluginPath,
   safeJoin,
 } from "./paths";
 
@@ -50,60 +48,6 @@ describe("assertVaultPath", () => {
     expect(() => assertVaultPath("")).toThrow();
     // @ts-expect-error runtime fuzz
     expect(() => assertVaultPath(undefined)).toThrow();
-  });
-});
-
-describe("assertReadablePath", () => {
-  it("accepts vault paths", () => {
-    expect(() => assertReadablePath("notes/proposal.md")).not.toThrow();
-    expect(() => assertReadablePath("README.md")).not.toThrow();
-  });
-
-  it("accepts plugin paths", () => {
-    expect(() =>
-      assertReadablePath(".claude-plugin/skills/sheaf-event-watcher/SKILL.md"),
-    ).not.toThrow();
-    expect(() =>
-      assertReadablePath(".claude-plugin/scripts/watch-events.mjs"),
-    ).not.toThrow();
-  });
-
-  it("rejects non-plugin dot-prefixed paths", () => {
-    expect(() => assertReadablePath(".drafts/x/meta.json")).toThrow();
-    expect(() => assertReadablePath(".claude/settings.json")).toThrow();
-  });
-
-  it("rejects traversal segments under either prefix", () => {
-    expect(() => assertReadablePath("notes/../etc/passwd")).toThrow();
-    expect(() =>
-      assertReadablePath(".claude-plugin/../etc/passwd"),
-    ).toThrow();
-    expect(() =>
-      assertReadablePath(".claude-plugin/foo/../../etc"),
-    ).toThrow();
-  });
-
-  it("rejects null-byte injection", () => {
-    expect(() => assertReadablePath(".claude-plugin/\0/x")).toThrow();
-  });
-
-  it("rejects absolute paths", () => {
-    expect(() => assertReadablePath("/.claude-plugin/x")).toThrow();
-  });
-});
-
-describe("isPluginPath", () => {
-  it("detects the plugin prefix", () => {
-    expect(isPluginPath(".claude-plugin/skills/foo/SKILL.md")).toBe(true);
-  });
-
-  it("returns false for vault paths", () => {
-    expect(isPluginPath("notes/proposal.md")).toBe(false);
-  });
-
-  it("returns false for non-string inputs", () => {
-    // @ts-expect-error runtime fuzz
-    expect(isPluginPath(undefined)).toBe(false);
   });
 });
 

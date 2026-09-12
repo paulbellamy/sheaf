@@ -1,8 +1,7 @@
 // esbuild bundle for the `sheaf` CLI.
 //
-// Mirrors the obsidian-plugin build conventions: a single esbuild pass, node
-// platform, first-party TypeScript bundled into one file. Differences the CLI
-// needs:
+// A single esbuild pass: node platform, first-party TypeScript bundled into one
+// file. Specifics the CLI needs:
 //   - `format: "esm"` + `target: "node20"` (CI runs Node 20; sources use
 //     extensionless ESM imports, so `node --strip-types` is a non-starter).
 //   - `banner` injects the shebang so `bin/sheaf.js` is directly executable.
@@ -13,7 +12,7 @@
 // dep `sheaf-server` publishes extensionless *.ts from `src/` — Node cannot
 // import that at runtime, so it MUST be bundled (esbuild follows the pnpm
 // symlink and transpiles the TS). Everything else — sheaf-server's own runtime
-// deps (@modelcontextprotocol/sdk, fastify, yaml, yjs) and zod — stays external
+// deps (@modelcontextprotocol/sdk, fastify, yaml) and zod — stays external
 // and resolves from the install next to `bin/`. Those packages are declared in
 // this package's `dependencies` precisely so they resolve there under pnpm's
 // strict node_modules layout. Each dep is externalized as both the bare name
