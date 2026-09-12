@@ -3,6 +3,7 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -20,9 +21,12 @@ import {
   daemonBaseUrl,
   daemonFile,
   daemonKey,
+  findDaemon,
   isDaemonAlive,
+  isPidAlive,
   lockFile,
   readDaemon,
+  readLock,
   registerDaemon,
   type DaemonInfo,
 } from "./daemon";
@@ -105,28 +109,70 @@ describe("registerDaemon", () => {
 describe("acquireLock", () => {
   it("grants the lock once, refuses a second holder, and frees on release", () => {
     const { env, vault } = tempEnv();
-    const release = acquireLock(vault, env);
-    expect(release).not.toBeNull();
+    const lock = acquireLock(vault, env);
+    expect(lock).not.toBeNull();
     expect(existsSync(lockFile(vault, env))).toBe(true);
 
     // A second acquire while the first is held loses.
     expect(acquireLock(vault, env)).toBeNull();
 
-    release!();
+    lock!.release();
     expect(existsSync(lockFile(vault, env))).toBe(false);
     // Now a fresh acquire succeeds again.
     const again = acquireLock(vault, env);
     expect(again).not.toBeNull();
-    again!();
+    again!.release();
   });
 
   it("writes the holder's pid into the lock for debugging", () => {
     const { env, vault } = tempEnv();
-    const release = acquireLock(vault, env);
+    const lock = acquireLock(vault, env);
     expect(readFileSync(lockFile(vault, env), "utf8").trim()).toBe(
       String(process.pid),
     );
-    release!();
+    lock!.release();
+  });
+
+  it("release is inode-guarded: it won't delete a lock it no longer owns", () => {
+    const { env, vault } = tempEnv();
+    const first = acquireLock(vault, env);
+    const lp = lockFile(vault, env);
+
+    // Simulate a reclaimer renaming our lock aside and a successor recreating
+    // one with a *different* inode.
+    renameSync(lp, `${lp}.aside`);
+    const second = acquireLock(vault, env);
+    expect(second).not.toBeNull();
+    expect(second!.ino).not.toBe(first!.ino);
+
+    // The original holder releasing must NOT remove the successor's lock.
+    first!.release();
+    expect(existsSync(lp)).toBe(true);
+    expect(readLock(vault, env)?.ino).toBe(second!.ino);
+
+    second!.release();
+    rmSync(`${lp}.aside`, { force: true });
+  });
+});
+
+describe("readLock / isPidAlive", () => {
+  it("reads the lock's pid, mtime and inode", () => {
+    const { env, vault } = tempEnv();
+    const lock = acquireLock(vault, env);
+    const lk = readLock(vault, env);
+    expect(lk?.pid).toBe(process.pid);
+    expect(lk?.ino).toBe(lock!.ino);
+    expect(typeof lk?.mtimeMs).toBe("number");
+    lock!.release();
+    expect(readLock(vault, env)).toBeNull();
+  });
+
+  it("isPidAlive tracks the current process and rejects a dead/invalid pid", () => {
+    expect(isPidAlive(process.pid)).toBe(true);
+    expect(isPidAlive(0)).toBe(false);
+    expect(isPidAlive(-1)).toBe(false);
+    // A very high pid is exceedingly unlikely to exist.
+    expect(isPidAlive(2 ** 31 - 1)).toBe(false);
   });
 });
 
@@ -186,12 +232,34 @@ describe("isDaemonAlive", () => {
     return { host: "127.0.0.1", port: addr.port };
   }
 
-  it("is true when a live server owns the vault", async () => {
+  it("is true when a live server owns the vault (and findDaemon returns it)", async () => {
     const { env, vault } = tempEnv();
     const { host, port } = await serve(vault, vault);
     const dispose = registerDaemon({ vault, host, port, version: "t" }, env);
     expect(await isDaemonAlive(vault, env)).toBe(true);
+    expect((await findDaemon(vault, env))?.port).toBe(port);
     dispose();
+    // With the record gone, findDaemon is null even though the server lives.
+    expect(await findDaemon(vault, env)).toBeNull();
+  });
+
+  it("is false when health reports a different pid than the record (pid reuse)", async () => {
+    const { env, vault } = tempEnv();
+    const { host, port } = await serve(vault, vault);
+    // A record claiming a different pid than /api/health returns (= our pid).
+    registerDaemon({ vault, host, port, version: "t" }, env);
+    writeFileSync(
+      daemonFile(vault, env),
+      JSON.stringify({
+        pid: process.pid + 1234567,
+        host,
+        port,
+        vault,
+        startedAt: 1,
+        version: "t",
+      }),
+    );
+    expect(await isDaemonAlive(vault, env)).toBe(false);
   });
 
   it("is false when there is no discovery record", async () => {

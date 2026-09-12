@@ -2,9 +2,11 @@ import { spawn } from "node:child_process";
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   realpathSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,12 +14,23 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
-import { acquireLock, daemonFile, readDaemon } from "sheaf-server/daemon";
+import {
+  acquireLock,
+  daemonFile,
+  isDaemonAlive,
+  lockFile,
+  readDaemon,
+} from "sheaf-server/daemon";
 
 import { REGISTRY, type RunContext } from "./commands";
+import { daemonsDir } from "./config";
 import { daemonStatusCommand } from "./daemon-cmd";
 import { Output, type Io } from "./io";
 import { serveCommand, startServer, type ServeHandle } from "./serve";
+
+/** Sleep helper for the idle/lifecycle timing assertions. */
+const delay = (ms: number): Promise<void> =>
+  new Promise((r) => setTimeout(r, ms));
 
 const pkgRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const bin = join(pkgRoot, "bin", "sheaf.js");
@@ -176,6 +189,192 @@ describe("serve contention + status (in-process)", () => {
     expect(typeof REGISTRY.serve.run).toBe("function");
     expect(typeof REGISTRY.daemon.subcommands?.status.run).toBe("function");
     expect(typeof REGISTRY.daemon.subcommands?.stop.run).toBe("function");
+  });
+});
+
+describe("lock protocol: reclaim, leak-safety, races", () => {
+  /** Plant a stale lock (dead pid) and a matching dead discovery record. */
+  function plantStale(env: NodeJS.ProcessEnv, vault: string): void {
+    mkdirSync(daemonsDir(env), { recursive: true, mode: 0o700 });
+    writeFileSync(lockFile(vault, env), "0\n"); // pid 0 → treated as dead
+    writeFileSync(
+      daemonFile(vault, env),
+      JSON.stringify({
+        pid: 0,
+        host: "127.0.0.1",
+        port: 1, // nothing listening → isDaemonAlive false
+        vault,
+        startedAt: 1,
+        version: "stale",
+      }),
+    );
+  }
+
+  it("racing two startServers against a planted stale lock+record yields exactly one daemon", async () => {
+    // Repeat: the race resolution is timing-sensitive, so exercise it a few
+    // times. Every round must leave exactly one live backend + one record.
+    for (let round = 0; round < 4; round++) {
+      const { env, vault } = scratch();
+      plantStale(env, vault);
+
+      const results = await Promise.allSettled([
+        startServer({ vault, version: "a", env }),
+        startServer({ vault, version: "b", env }),
+      ]);
+      const winners = results.filter((r) => r.status === "fulfilled");
+      const losers = results.filter((r) => r.status === "rejected");
+
+      expect(winners.length).toBe(1);
+      expect(losers.length).toBe(1);
+      expect((losers[0] as PromiseRejectedResult).reason).toBeInstanceOf(Error);
+
+      const winner = (winners[0] as PromiseFulfilledResult<ServeHandle>).value;
+      handles.push(winner);
+
+      // Exactly one backend, and the surviving record matches the winner.
+      expect(await isDaemonAlive(vault, env)).toBe(true);
+      expect(readDaemon(vault, env)?.port).toBe(winner.port);
+
+      await winner.close();
+    }
+  }, 20_000);
+
+  it("reclaims a record-less lock left by a dead process", async () => {
+    const { env, vault } = scratch();
+    mkdirSync(daemonsDir(env), { recursive: true, mode: 0o700 });
+    const lp = lockFile(vault, env);
+    writeFileSync(lp, "0\n"); // pid 0 → dead
+    // Age it past the mid-boot grace window so it's judged a crash leftover.
+    const old = new Date(Date.now() - 30_000);
+    utimesSync(lp, old, old);
+
+    const handle = await startServer({ vault, version: "test", env });
+    handles.push(handle);
+    expect(handle.port).toBeGreaterThan(0);
+    expect(await isDaemonAlive(vault, env)).toBe(true);
+  });
+
+  it("does NOT reclaim a fresh record-less lock (a daemon mid-boot)", async () => {
+    const { env, vault } = scratch();
+    mkdirSync(daemonsDir(env), { recursive: true, mode: 0o700 });
+    // A fresh lock owned by *this* (alive) process: not reclaimable.
+    writeFileSync(lockFile(vault, env), `${process.pid}\n`);
+
+    await expect(
+      startServer({ vault, version: "test", env }),
+    ).rejects.toMatchObject({ name: "DaemonAlreadyRunningError" });
+  });
+
+  it("releases the lock (and writes no record) when boot throws after acquiring", async () => {
+    const { env, vault } = scratch();
+    // logFile's parent is a *file* (note.md), so mkdirSync throws ENOTDIR after
+    // the lock is acquired but before the daemon registers.
+    const badLog = join(vault, "note.md", "nested", "d.log");
+
+    await expect(
+      startServer({ vault, version: "test", env, logFile: badLog }),
+    ).rejects.toThrow();
+
+    // No leaked lock or record → the vault is not wedged.
+    expect(existsSync(lockFile(vault, env))).toBe(false);
+    expect(existsSync(daemonFile(vault, env))).toBe(false);
+    const relock = acquireLock(vault, env);
+    expect(relock).not.toBeNull();
+    relock!.release();
+  });
+});
+
+describe("idle-exit accounting", () => {
+  it("health and UI-REST hits do NOT reset the idle clock", async () => {
+    const { env, vault } = scratch();
+    const handle = await startServer({
+      vault,
+      version: "test",
+      env,
+      idleMs: 300,
+    });
+    const file = daemonFile(vault, env);
+
+    // Hammer non-MCP endpoints for less than the idle window. These must not
+    // hold the daemon open, so it should still idle-exit ~300ms after boot.
+    const stop = Date.now() + 220;
+    while (Date.now() < stop) {
+      await fetch(`${handle.url}/api/health`).catch(() => {});
+      await fetch(`${handle.url}/api/ui/docs`).catch(() => {});
+      await delay(20);
+    }
+
+    const raced = await Promise.race([
+      handle.closed.then(() => "closed" as const),
+      delay(3000).then(() => "timeout" as const),
+    ]);
+    expect(raced).toBe("closed");
+    expect(existsSync(file)).toBe(false);
+  }, 10_000);
+
+  it("an open SSE stream holds the daemon past the idle window", async () => {
+    const { env, vault } = scratch();
+    const handle = await startServer({
+      vault,
+      version: "test",
+      env,
+      idleMs: 150,
+    });
+    const file = daemonFile(vault, env);
+
+    const ctrl = new AbortController();
+    const res = await fetch(`${handle.url}/api/ui/drafts/stream?role=agent`, {
+      headers: { accept: "text/event-stream" },
+      signal: ctrl.signal,
+    });
+    const reader = res.body!.getReader();
+    await reader.read(); // primed frame — connection fully established
+
+    // Well past idleMs, but the open stream keeps it alive.
+    await delay(500);
+    expect(existsSync(file)).toBe(true);
+
+    // Close the stream; now it should idle-exit.
+    await reader.cancel();
+    ctrl.abort();
+    const raced = await Promise.race([
+      handle.closed.then(() => "closed" as const),
+      delay(3000).then(() => "timeout" as const),
+    ]);
+    expect(raced).toBe("closed");
+    expect(existsSync(file)).toBe(false);
+  }, 10_000);
+});
+
+describe("in-process signal handling", () => {
+  it("SIGTERM cleans up the lock and record, then removes its handler", async () => {
+    const { env, vault } = scratch();
+    const baseline = process.listenerCount("SIGTERM");
+
+    const handle = await startServer({
+      vault,
+      version: "test",
+      env,
+      installSignalHandlers: true,
+    });
+    expect(existsSync(daemonFile(vault, env))).toBe(true);
+    expect(existsSync(lockFile(vault, env))).toBe(true);
+    expect(process.listenerCount("SIGTERM")).toBe(baseline + 1);
+
+    // `process.emit` invokes the registered listeners without the OS default
+    // termination — the safe way to exercise the handler in-process.
+    process.emit("SIGTERM");
+
+    await Promise.race([
+      handle.closed,
+      delay(3000).then(() => {
+        throw new Error("SIGTERM did not shut the daemon down");
+      }),
+    ]);
+    expect(existsSync(daemonFile(vault, env))).toBe(false);
+    expect(existsSync(lockFile(vault, env))).toBe(false);
+    // The handler must have been removed so it can't leak across tests.
+    expect(process.listenerCount("SIGTERM")).toBe(baseline);
   });
 });
 

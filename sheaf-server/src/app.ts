@@ -110,12 +110,22 @@ export function buildSheafApp(
      * construction time.
      */
     health?: { vault: string; startedAt: number; version: string };
+    /**
+     * Force-close lingering keep-alive sockets on `close()` so a daemon's
+     * shutdown is bounded (a client holding an idle HTTP/1.1 connection can't
+     * make `app.close()` hang). Left off by default so the embedding hosts
+     * (Obsidian, Next) keep Fastify's graceful-drain behavior.
+     */
+    forceCloseConnections?: boolean;
   } = {},
 ): FastifyInstance {
   const app = Fastify({
     logger: false,
     // Thread bodies / draft payloads can approach 1 MB; give headroom.
     bodyLimit: 8 * 1024 * 1024,
+    ...(opts.forceCloseConnections
+      ? { forceCloseConnections: true as const }
+      : {}),
   });
 
   // Fallback so `/api/health` always answers with a plausible `startedAt` even

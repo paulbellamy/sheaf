@@ -9,8 +9,9 @@
 import { existsSync } from "node:fs";
 
 import {
-  daemonFile,
   isDaemonAlive,
+  isPidAlive,
+  lockFile,
   readDaemon,
 } from "sheaf-server/daemon";
 
@@ -99,13 +100,16 @@ export async function daemonStopCommand(ctx: RunContext): Promise<ExitCode> {
     if ((e as NodeJS.ErrnoException).code !== "ESRCH") throw e;
   }
 
-  // Poll for the discovery file to vanish — the daemon removes it on shutdown.
-  const file = daemonFile(vault, io.env);
+  // Wait for the LOCK to vanish (or the pid to die), not the record: the daemon
+  // shuts down record → drain → release lock LAST, so the lock disappearing is
+  // the proof it has fully stopped writing (the record goes earlier).
+  const lock = lockFile(vault, io.env);
   const deadline = Date.now() + 5000;
-  while (existsSync(file) && Date.now() < deadline) {
+  const gone = (): boolean => !existsSync(lock) || !isPidAlive(info.pid);
+  while (!gone() && Date.now() < deadline) {
     await delay(50);
   }
-  const stopped = !existsSync(file);
+  const stopped = gone();
 
   if (out.format === "json") {
     out.json({ stopped, running: !stopped, vault, pid: info.pid });
