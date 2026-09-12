@@ -52,14 +52,44 @@ export async function callTool(
     const sc = result.structuredContent as
       | { code?: unknown; message?: unknown }
       | undefined;
-    const code = typeof sc?.code === "string" ? sc.code : "tool_error";
-    const message =
+    let code = typeof sc?.code === "string" ? sc.code : "tool_error";
+    let message =
       typeof sc?.message === "string"
         ? sc.message
         : (firstText(result) ?? `${name} failed`);
+
+    // The SDK returns a tool input-schema miss as an in-band error whose text is
+    // a multi-line `Input validation error: … [ <zod issues JSON> ]` dump with no
+    // structured `code`. Collapse it to a single clean line + a stable code, so
+    // it reads like the REST path's `{ error, code }` instead of a zod splat.
+    const validation = validationMessage(message);
+    if (validation !== undefined) {
+      code = "invalid_params";
+      message = validation;
+    }
     throw new CliError(message, code, EXIT.GENERIC);
   }
   return result;
+}
+
+/**
+ * If `text` is an MCP "Input validation error" dump, return just the first zod
+ * issue's `message` (parsed out of the embedded JSON array; the first line as a
+ * fallback). Returns `undefined` for any other error text.
+ */
+function validationMessage(text: string): string | undefined {
+  if (!text.includes("Input validation error")) return undefined;
+  const start = text.indexOf("[");
+  if (start !== -1) {
+    try {
+      const issues = JSON.parse(text.slice(start)) as { message?: unknown }[];
+      const first = issues[0]?.message;
+      if (typeof first === "string") return first;
+    } catch {
+      /* not the JSON we expected — fall through to the first line */
+    }
+  }
+  return text.split("\n")[0];
 }
 
 /** The first text content block's text, or `undefined` if the tool sent none. */

@@ -12,12 +12,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { followEvents } from "./events";
 import type { Io } from "./io";
 import { run } from "./run";
 import { startServer, type ServeHandle } from "./serve";
 
 const trash: string[] = [];
 const handles: ServeHandle[] = [];
+
+const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** Poll `pred` until it holds or the deadline passes (then throw). */
+async function waitFor(pred: () => boolean, ms = 5000, what = "condition"): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!pred() && Date.now() < deadline) await delay(25);
+  if (!pred()) throw new Error(`timed out waiting for ${what}`);
+}
 
 interface Scratch {
   env: NodeJS.ProcessEnv;
@@ -74,7 +84,7 @@ afterEach(async () => {
 /* -------------------------------------------------------------- read verbs -- */
 
 describe("sheaf read", () => {
-  it("prints the doc markdown as text and the full tool result as JSON", async () => {
+  it("prints the doc markdown as text and a clean domain object as JSON", async () => {
     const s = scratch();
     await serve(s);
 
@@ -84,9 +94,24 @@ describe("sheaf read", () => {
 
     const j = await cli(s, "--format", "json", "read", "note.md");
     expect(j.code).toBe(0);
-    const body = json<{ content: { type: string; text?: string }[] }>(j.stdout);
-    expect(Array.isArray(body.content)).toBe(true);
-    expect(body.content[0].text).toContain("The quick brown fox");
+    const body = json<{
+      path: string;
+      ref: string;
+      md: string;
+      version_counter: number;
+      version_token: string;
+      origin: string;
+    }>(j.stdout);
+    // One flat object like the other verbs — no raw `content` array / footer.
+    expect(body).toMatchObject({
+      path: "note.md",
+      ref: "main",
+      origin: "main",
+      version_counter: 1,
+    });
+    expect(body.md).toContain("The quick brown fox");
+    expect(typeof body.version_token).toBe("string");
+    expect(body).not.toHaveProperty("content");
   });
 
   it("errors (exit 1) with the server code for a missing doc", async () => {
@@ -127,6 +152,20 @@ describe("sheaf grep", () => {
 
     const none = await cli(s, "grep", "zzzznotfound");
     expect(none.stdout.trim()).toBe("(no matches)");
+  });
+
+  it("dedupes overlapping context windows for adjacent matches (-A1 -B1)", async () => {
+    const s = scratch();
+    await serve(s);
+    // note.md lines 3 and 4 both match 'fox'; with -A1/-B1 their context windows
+    // overlap. Each line must appear exactly once, not double-printed.
+    const r = await cli(s, "grep", "fox", "--output-mode", "content", "-A", "1", "-B", "1");
+    expect(r.code).toBe(0);
+    expect((r.stdout.match(/The quick brown fox jumps/g) ?? []).length).toBe(1);
+    expect((r.stdout.match(/Another line mentions fox again/g) ?? []).length).toBe(1);
+    // Both are rendered as match lines (path:line:), not indented context.
+    expect(r.stdout).toContain("note.md:3: The quick brown fox jumps over the lazy dog.");
+    expect(r.stdout).toContain("note.md:4: Another line mentions fox again.");
   });
 });
 
@@ -277,6 +316,14 @@ describe("sheaf thread add", () => {
     expect(both.code).toBe(2);
     expect(both.stderr).toContain("exactly one of --range");
   });
+
+  it("--doc --as agent is a usage error (no doc-scope agent tool, exit 2)", async () => {
+    const s = scratch();
+    await serve(s);
+    const r = await cli(s, "thread", "add", "--path", "other.md", "--doc", "-m", "x", "--as", "agent");
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("only supported with --as ui");
+  });
 });
 
 describe("sheaf thread reply / resolve / reopen", () => {
@@ -339,6 +386,96 @@ describe("sheaf thread reply / resolve / reopen", () => {
     const show = await cli(s, "--format", "json", "thread", "show", id);
     return json<{ status: string }>(show.stdout).status;
   }
+});
+
+/* --------------------------------------------------------- error surface -- */
+
+describe("error surface", () => {
+  it("a malformed thread id is a clean usage error (exit 2) on ui and agent paths", async () => {
+    const s = scratch();
+    await serve(s);
+
+    const show = await cli(s, "thread", "show", "bogus");
+    expect(show.code).toBe(2);
+    expect(show.stderr).toContain("invalid thread id");
+    expect(show.stderr).not.toContain("Input validation error"); // no raw zod dump
+
+    const replyUi = await cli(s, "thread", "reply", "bogus", "-m", "x");
+    expect(replyUi.code).toBe(2);
+    const replyAgent = await cli(s, "thread", "reply", "bogus", "-m", "x", "--as", "agent");
+    expect(replyAgent.code).toBe(2);
+  });
+
+  it("grep --head-limit 0 is a usage error (exit 2), not a zod dump", async () => {
+    const s = scratch();
+    await serve(s);
+    const r = await cli(s, "grep", "fox", "--head-limit", "0");
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain("head-limit");
+    expect(r.stderr).not.toContain("Input validation error");
+  });
+});
+
+/* ------------------------------------------------------ agent wake path -- */
+
+describe("followEvents wake path", () => {
+  it("a --as ui add wakes the agent stream; a --as agent add does not", async () => {
+    const s = scratch();
+    await serve(s);
+
+    const events: { kind?: string; thread_id?: string }[] = [];
+    const diags: string[] = [];
+    const controller = new AbortController();
+    const followed = followEvents({
+      vault: s.vault,
+      env: s.env,
+      role: "agent",
+      signal: controller.signal,
+      onData: (l) => {
+        try {
+          events.push(JSON.parse(l));
+        } catch {
+          /* NDJSON is always valid; ignore defensively */
+        }
+      },
+      onDiagnostic: (l) => diags.push(l),
+      backoffBaseMs: 50,
+      backoffCapMs: 200,
+    });
+
+    const changed = (id: string): boolean =>
+      events.some((e) => e.kind === "thread_changed" && e.thread_id === id);
+    const addId = async (msg: string, ...extra: string[]): Promise<string> => {
+      const r = await cli(
+        s, "--format", "json", "thread", "add", "--path", "note.md", "--range", "0:5", "-m", msg, ...extra,
+      );
+      return json<{ thread_id: string }>(r.stdout).thread_id;
+    };
+
+    try {
+      await waitFor(() => diags.some((d) => d.startsWith("following")), 5000, "follow to connect");
+
+      // 1) ui add (origin ui) — must reach the agent stream.
+      const ui1 = await addId("ui one");
+      await waitFor(() => changed(ui1), 5000, "ui thread_changed");
+
+      // 2) agent add (origin agent) — its own mutation must NOT be echoed back.
+      const agent1 = await addId("agent one", "--as", "agent");
+
+      // 3) sentinel: a later ui add. Once ITS event lands, the agent event
+      // (emitted earlier, delivered in order) would already be here if it were
+      // coming — so its absence is conclusive rather than a race.
+      const ui2 = await addId("ui two");
+      await waitFor(() => changed(ui2), 5000, "sentinel thread_changed");
+
+      expect(changed(ui1)).toBe(true);
+      expect(changed(ui2)).toBe(true);
+      expect(changed(agent1)).toBe(false);
+    } finally {
+      controller.abort();
+      await followed;
+    }
+  }, 20_000);
 });
 
 /* --------------------------------------------------- needsDaemon guard -- */

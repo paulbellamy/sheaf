@@ -25,7 +25,7 @@ import type {
 
 import { connectDaemon, requireDaemonAllowed } from "./client";
 import type { RunContext } from "./commands";
-import { parseAs, strFlag } from "./flags";
+import { intFlag, parseAs, requireThreadId, strFlag } from "./flags";
 import { EXIT, usageError, type ExitCode } from "./io";
 import { callTool } from "./tool-call";
 
@@ -82,6 +82,7 @@ export async function threadShowCommand(ctx: RunContext): Promise<ExitCode> {
 
   const id = ctx.positionals[0];
   if (id === undefined) throw usageError("sheaf thread show requires a <id>");
+  requireThreadId(id);
 
   const client = await connectDaemon(ctx.vault, ctx.io.env);
   try {
@@ -227,6 +228,7 @@ export async function threadReplyCommand(ctx: RunContext): Promise<ExitCode> {
 
   const id = ctx.positionals[0];
   if (id === undefined) throw usageError("sheaf thread reply requires a <id>");
+  requireThreadId(id);
   const message = strFlag(ctx.values, "message");
   if (message === undefined) {
     throw usageError("sheaf thread reply requires -m/--message MSG");
@@ -253,15 +255,25 @@ export async function threadReplyCommand(ctx: RunContext): Promise<ExitCode> {
 }
 
 /**
- * `sheaf thread resolve <id> [--as ui|agent]`. `--as ui` →
- * `POST /api/ui/threads/:id/resolve`; `--as agent` → the `ResolveThread` tool.
+ * `sheaf thread resolve <id> [--as ui|agent] [--no-apply] [--option N]`.
+ *
+ * `--as ui` → `POST /api/ui/threads/:id/resolve`; `--as agent` → the
+ * `ResolveThread` tool. On the `ui` path a resolve **applies an attached draft
+ * leaf into the doc by default** (the plugin's "resolve & take"): `--no-apply`
+ * (`?apply=false`) resolves without taking, and `--option N` (`?option_index=N`)
+ * picks which option leaf to apply. Both are `ui`-only — the `agent` tool just
+ * flips status — but `--option` is still parsed on both paths so a malformed
+ * value is a clean usage error.
  */
 export async function threadResolveCommand(ctx: RunContext): Promise<ExitCode> {
   requireDaemonAllowed(ctx.globals, "sheaf thread resolve");
 
   const id = ctx.positionals[0];
   if (id === undefined) throw usageError("sheaf thread resolve requires a <id>");
+  requireThreadId(id);
   const as = parseAs(ctx.values.as);
+  const noApply = ctx.values["no-apply"] === true;
+  const option = intFlag(ctx.values, "option", "--option", 0);
 
   const client = await connectDaemon(ctx.vault, ctx.io.env);
   try {
@@ -269,6 +281,12 @@ export async function threadResolveCommand(ctx: RunContext): Promise<ExitCode> {
       await client.rest(
         "POST",
         `/api/ui/threads/${encodeURIComponent(id)}/resolve`,
+        {
+          query: {
+            apply: noApply ? "false" : undefined,
+            option_index: option,
+          },
+        },
       );
     } else {
       const mcp = await client.mcp();
@@ -293,6 +311,7 @@ export async function threadReopenCommand(ctx: RunContext): Promise<ExitCode> {
 
   const id = ctx.positionals[0];
   if (id === undefined) throw usageError("sheaf thread reopen requires a <id>");
+  requireThreadId(id);
   const as = parseAs(ctx.values.as);
   if (as === "agent") {
     throw usageError(

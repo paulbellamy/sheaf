@@ -34,11 +34,12 @@ Any client that can't find a daemon exits `3` (`no sheaf daemon for <vault>; run
 
 ## 2. Browse and read
 
-These reads go over the MCP tool surface; text by default, `--format json` for
-the raw structured payload.
+Text by default, `--format json` for the structured payload. `docs` uses the
+daemon's REST route (`GET /api/ui/docs`); `read`/`grep`/`glob` go over the MCP
+tool surface.
 
 ```sh
-sheaf docs                          # list every doc in the vault
+sheaf docs                          # list every doc in the vault (REST)
 sheaf read proposal.md              # print the doc's markdown
 sheaf read proposal.md --ref draft_1c2f…   # read from a draft ref
 sheaf glob 'notes/**/*.md'          # docs matching a glob
@@ -95,14 +96,21 @@ Reply, resolve, or re-open — again `--as ui` by default:
 
 ```sh
 sheaf thread reply   thrd_9f3c… -m "actually, keep the second clause"
-sheaf thread resolve thrd_9f3c…          # status → accepted
+sheaf thread resolve thrd_9f3c…          # status → accepted (applies an attached leaf)
+sheaf thread resolve thrd_9f3c… --no-apply    # resolve without taking the draft
+sheaf thread resolve thrd_9f3c… --option 1    # apply option leaf #1
 sheaf thread reopen  thrd_9f3c…          # status → open
 ```
 
+On the `ui` path a resolve **applies an attached draft leaf into the doc by
+default** (the plugin's "resolve & take"): `--no-apply` resolves without taking,
+and `--option N` chooses which option leaf to apply. Both are `ui`-only.
+
 `--as agent` reroutes `add`/`reply`/`resolve` through the MCP tools (origin
-`agent`). Two combinations have no agent equivalent and error as usage: `thread
-reopen --as agent` (there is no `ReopenThread` MCP tool) and `thread add --doc
---as agent` (the `AddThread` tool anchors to a char range only).
+`agent`; the agent resolve just flips status and ignores `--no-apply`/`--option`).
+Two combinations have no agent equivalent and error as usage: `thread reopen --as
+agent` (there is no `ReopenThread` MCP tool) and `thread add --doc --as agent`
+(the `AddThread` tool anchors to a char range only).
 
 ## 5. Follow events
 

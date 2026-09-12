@@ -27,9 +27,9 @@ pnpm --filter sheaf-cli build      # bundles bin/sheaf.js (the `sheaf` binary)
 
 `sheaf-cli` builds an esbuild bundle at `sheaf-cli/bin/sheaf.js` with a
 `#!/usr/bin/env node` banner; its `package.json` exposes it as the `sheaf` bin.
-Run it directly (`node sheaf-cli/bin/sheaf.js …`), `pnpm --filter sheaf-cli exec sheaf …`,
-or `npm link` / `pnpm link` the package to put `sheaf` on your PATH. v0.1 is
-POSIX-only (macOS/Linux); Windows is out of scope.
+Run it directly (`node sheaf-cli/bin/sheaf.js …`), or `npm link` / `pnpm link`
+the package to put `sheaf` on your PATH. v0.1 is POSIX-only (macOS/Linux);
+Windows is out of scope.
 
 See **[docs/cli-usage.md](docs/cli-usage.md)** for a full walkthrough (serve →
 install into an agent → post a thread → follow events).
@@ -57,12 +57,13 @@ exactly one process — the daemon (`sheaf serve`).** Everything else is a clien
 
 REST covers only a subset, and REST mutations hard-code origin `ui`. So:
 
-- **Reads** (`docs`, `read`, `grep`, `glob`, `thread list`, `thread show`) and
+- **Reads** (`read`, `grep`, `glob`, `thread list`, `thread show`) and
   **`--as agent` mutations** go over the **MCP tool surface** (`/api/mcp`,
   origin `agent`, the full tool set).
-- **`--as ui` mutations** — the default for humans (`thread add/reply/resolve/
-  reopen`) — go over **REST `/api/ui/*`**, because those stamp origin `ui` and
-  thereby **wake the connected agent**. An agent-origin comment would not.
+- **`docs`** and the **`--as ui` mutations** — the default for humans (`thread
+  add/reply/resolve/reopen`) — go over **REST `/api/ui/*`**. `docs` has a REST
+  route (`GET /api/ui/docs`); the ui mutations stamp origin `ui` and thereby
+  **wake the connected agent** (an agent-origin comment would not).
 - **`events follow`** consumes the SSE stream, emitting one event per line.
 
 ## Command tree

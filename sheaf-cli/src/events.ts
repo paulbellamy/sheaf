@@ -374,6 +374,10 @@ export async function eventsFollowCommand(ctx: RunContext): Promise<ExitCode> {
     controller.abort();
   };
   process.on("SIGINT", onSigint);
+  // Track the latest SSE resume cursor so we can hand it back on exit — stdout
+  // stays pure NDJSON (which carries no ids), so the cursor for `--since` goes
+  // to stderr, where a script can capture it separately.
+  let lastResumeId: string | undefined;
   try {
     await followEvents({
       vault: ctx.vault,
@@ -385,9 +389,15 @@ export async function eventsFollowCommand(ctx: RunContext): Promise<ExitCode> {
       // Always NDJSON on stdout, regardless of --format.
       onData: (line) => ctx.io.out(`${line}\n`),
       onDiagnostic: (line) => ctx.io.err(`${line}\n`),
+      onResumeId: (id) => {
+        lastResumeId = id;
+      },
     });
   } finally {
     process.removeListener("SIGINT", onSigint);
+    if (lastResumeId !== undefined) {
+      ctx.io.err(`resume cursor: ${lastResumeId}\n`);
+    }
   }
   return EXIT.OK;
 }

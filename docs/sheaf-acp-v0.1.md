@@ -9,6 +9,13 @@ file-i/o layer.*
 > sync, comment anchoring, and the web prototype's draft workflow are unchanged
 > except where noted. this doc settles the architecture before any code lands.
 
+> **superseded by the sheaf CLI.** the embedded `127.0.0.1:31415` +
+> `claude mcp add --transport http` flow described below (see §1's table and the
+> §2 diagram) is the pre-daemon design. the shipped model is one `sheaf serve`
+> daemon per vault with thin clients — see the [README](../README.md) and
+> [docs/cli-usage.md](cli-usage.md). this doc is retained for the acp design
+> rationale.
+
 ---
 
 ## 1. thesis

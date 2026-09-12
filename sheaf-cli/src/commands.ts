@@ -275,10 +275,20 @@ export const REGISTRY: Record<string, CommandSpec> = {
       resolve: {
         name: "resolve",
         summary: "Resolve a thread",
-        usage: "sheaf thread resolve <id> [--as ui|agent]",
+        usage:
+          "sheaf thread resolve <id> [--as ui|agent] [--no-apply] [--option N]",
+        details:
+          "On the ui path (default), resolve APPLIES an attached draft leaf into the doc —\n" +
+          "the plugin's \"resolve & take\". Pass --no-apply to resolve without taking, and\n" +
+          "--option N to choose which option leaf to apply. Both are ui-only; --as agent just\n" +
+          "flips the thread's status.",
         step: 6,
         needsDaemon: true,
-        options: { as: { type: "string" } },
+        options: {
+          as: { type: "string" },
+          "no-apply": { type: "boolean" },
+          option: { type: "string" },
+        },
         run: threadResolveCommand,
       },
       reopen: {
@@ -309,7 +319,10 @@ export const REGISTRY: Record<string, CommandSpec> = {
           "--role defaults to 'ui'; pass 'agent' for the MCP agent watcher (it flips the\n" +
           "plugin's \"agent connected\" status). By default it runs until interrupted,\n" +
           "reconnecting across daemon restarts; --exit-on-disconnect exits instead when the\n" +
-          "daemon goes away (0 on a clean shutdown, non-zero on error).",
+          "daemon goes away (0 on a clean shutdown, non-zero on error).\n" +
+          "--since resumes from a cursor for programmatic use: on disconnect/exit the latest\n" +
+          "resume cursor is printed to stderr as `resume cursor: <id>` (stdout stays pure\n" +
+          "NDJSON, which carries no ids); pass that value back as --since to replay from there.",
         step: 3,
         needsDaemon: true,
         options: {

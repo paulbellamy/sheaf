@@ -19,21 +19,43 @@ export function strFlag(
 }
 
 /**
- * A non-negative integer flag (e.g. `-A`/`-B`/`--head-limit`, which parseArgs
- * captures as strings), or `undefined` when unset. Anything that isn't a
- * non-negative integer is a usage error naming the flag.
+ * An integer flag (e.g. `-A`/`-B`/`--head-limit`, which parseArgs captures as
+ * strings), or `undefined` when unset. `min` (default 0) is the smallest
+ * accepted value — `--head-limit` requires `>= 1` to match the Grep tool's
+ * schema, so a `0` is rejected here rather than dumped as a raw zod error from
+ * the daemon. Anything below `min` or non-integer is a usage error naming the
+ * flag.
  */
 export function intFlag(
   values: Record<string, unknown>,
   name: string,
   displayName = `--${name}`,
+  min = 0,
 ): number | undefined {
   const v = values[name];
   if (v === undefined) return undefined;
-  if (typeof v !== "string" || !/^\d+$/.test(v)) {
-    throw usageError(`${displayName} must be a non-negative integer (got '${String(v)}')`);
+  if (typeof v !== "string" || !/^\d+$/.test(v) || Number(v) < min) {
+    throw usageError(
+      `${displayName} must be an integer >= ${min} (got '${String(v)}')`,
+    );
   }
   return Number(v);
+}
+
+/**
+ * The thread-id shape, copied from `sheaf-server/src/schemas.ts` `threadIdArg`.
+ * The daemon validates ids too, but the MCP tools surface a schema miss as a
+ * raw multi-line zod dump; pre-checking here lets a malformed id fail fast as a
+ * clean usage error (and identically on the `ui` and `agent` paths).
+ */
+const THREAD_ID_RE = /^thrd_[A-Za-z0-9]{6,64}(?:-[A-Za-z0-9]{1,64}){0,8}$/;
+
+/** Require a well-formed `thrd_…` id, else a usage error (exit 2). */
+export function requireThreadId(id: string): string {
+  if (!THREAD_ID_RE.test(id)) {
+    throw usageError(`invalid thread id '${id}' (expected a thrd_… id)`);
+  }
+  return id;
 }
 
 /**
