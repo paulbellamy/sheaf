@@ -148,7 +148,10 @@ export const REGISTRY: Record<string, CommandSpec> = {
           "(default `sheaf`) and preserving every other server/key. Clients: claude (project\n" +
           "`<vault>/.mcp.json`), claude-desktop (macOS), codex (`~/.codex/config.toml`).\n" +
           "No client arg installs into every detected client; --dry-run prints the diff and\n" +
-          "writes nothing. This command needs no daemon and never spawns or connects to one.",
+          "writes nothing. This command needs no daemon and never spawns or connects to one.\n" +
+          "Note: the entry pins the current node binary (command: process.execPath). Under a\n" +
+          "node version manager (nvm/volta/asdf), switching node later can stale that path —\n" +
+          "re-run `sheaf mcp install` after such a switch.",
         step: 5,
         // `--tools` (shared TOOLS fragment) is appended to the written args; it
         // is not a global, so it must be declared here to parse on `install`.

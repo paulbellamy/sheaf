@@ -9,13 +9,17 @@
  * and parse them — asserting on *data*, not incidental formatting.
  */
 import {
+  chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -27,7 +31,14 @@ import { parse as parseToml } from "smol-toml";
 import type { RunContext } from "./commands";
 import { CliError, EXIT, Output, type ExitCode, type Io } from "./io";
 import { sheafBinPath } from "./mcp";
-import { buildSheafEntry, mcpInstallCommand, type McpEntry } from "./mcp-install";
+import {
+  CLIENTS,
+  applyPlan,
+  buildSheafEntry,
+  mcpInstallCommand,
+  type McpEntry,
+  type Plan,
+} from "./mcp-install";
 
 const trash: string[] = [];
 
@@ -464,8 +475,292 @@ describe("non-destructive write", () => {
     const vault = tmp("sheaf-vault-");
     const home = tmp("sheaf-home-");
     const path = join(vault, ".mcp.json");
-    writeFileSync(path, JSON.stringify({ mcpServers: {} }), { mode: 0o644 });
+    // Seed 0o600 (NOT the umask default 0o644, so the assertion is meaningful:
+    // it would fail if preservation were broken and we fell back to the default).
+    writeFileSync(path, JSON.stringify({ mcpServers: {} }), { mode: 0o600 });
+    chmodSync(path, 0o600); // writeFileSync's mode is umask-masked; force it
     install({ vault, home, clients: ["claude"] });
-    expect(statSync(path).mode & 0o777).toBe(0o644);
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+  });
+
+  it("creates ~/.codex with mode 0700 (it also holds auth.json)", () => {
+    const vault = tmp("sheaf-vault-");
+    const home = tmp("sheaf-home-"); // no ~/.codex yet
+    install({ vault, home, clients: ["codex"] });
+    expect(statSync(join(home, ".codex")).mode & 0o777).toBe(0o700);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Symlinked config (P1) — follow the link, keep the real file, stay a symlink
+// ---------------------------------------------------------------------------
+
+describe("symlinked config", () => {
+  it("updates the real target and leaves the symlink a symlink", () => {
+    const vault = tmp("sheaf-vault-");
+    const home = tmp("sheaf-home-");
+    const dotfiles = tmp("sheaf-dotfiles-");
+    const realFile = join(dotfiles, "codex.toml");
+    writeFileSync(realFile, 'model = "gpt-5"\n');
+
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    const link = join(home, ".codex", "config.toml");
+    symlinkSync(realFile, link);
+
+    install({ vault, home, clients: ["codex"] });
+
+    // The link is still a symlink (not clobbered into a plain file)...
+    expect(lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(realpathSync(link)).toBe(realFile);
+    // ...and the REAL file got our entry while keeping its own content.
+    const cfg = readToml(realFile);
+    expect(cfg.model).toBe("gpt-5");
+    expect((cfg.mcp_servers as Record<string, McpEntry>).sheaf).toEqual(
+      buildSheafEntry(vault),
+    );
+  });
+
+  it("a dangling symlink is a clear error, not an overwrite", () => {
+    const vault = tmp("sheaf-vault-");
+    const home = tmp("sheaf-home-");
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    const link = join(home, ".codex", "config.toml");
+    symlinkSync(join(home, "does-not-exist.toml"), link);
+
+    const { ctx } = makeCtx({ vault, home, clients: ["codex"] });
+    const e = caught(() => mcpInstallCommand(ctx));
+    expect(e.code).toBe("config_dangling_symlink");
+    expect(lstatSync(link).isSymbolicLink()).toBe(true); // still a (dangling) link
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Merge: user-added keys on OUR entry survive an update (P2.4)
+// ---------------------------------------------------------------------------
+
+describe("update merges over user-added keys on our entry", () => {
+  it("codex: startup_timeout_sec + nested env survive; command/args are ours", () => {
+    const vault = tmp("sheaf-vault-");
+    const home = tmp("sheaf-home-");
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    const path = join(home, ".codex", "config.toml");
+    writeFileSync(
+      path,
+      [
+        "[mcp_servers.sheaf]",
+        'command = "oldnode"',
+        'args = ["old"]',
+        "startup_timeout_sec = 30",
+        "",
+        "[mcp_servers.sheaf.env]",
+        'FOO = "bar"',
+        "",
+      ].join("\n"),
+    );
+
+    install({ vault, home, clients: ["codex"] });
+
+    const sheaf = (readToml(path).mcp_servers as Record<string, Record<string, unknown>>)
+      .sheaf;
+    expect(sheaf.command).toBe(process.execPath); // ours
+    expect(sheaf.args).toEqual(buildSheafEntry(vault).args); // ours
+    expect(sheaf.startup_timeout_sec).toBe(30); // user key preserved
+    expect(sheaf.env).toEqual({ FOO: "bar" }); // user nested table preserved
+  });
+
+  it("claude JSON: a user-added env on our entry survives", () => {
+    const vault = tmp("sheaf-vault-");
+    const home = tmp("sheaf-home-");
+    const path = join(vault, ".mcp.json");
+    writeFileSync(
+      path,
+      JSON.stringify({
+        mcpServers: { sheaf: { command: "old", args: ["old"], env: { A: "1" } } },
+      }),
+    );
+
+    install({ vault, home, clients: ["claude"] });
+
+    const sheaf = (readJson(path).mcpServers as Record<string, Record<string, unknown>>)
+      .sheaf;
+    expect(sheaf.command).toBe(process.execPath);
+    expect(sheaf.args).toEqual(buildSheafEntry(vault).args);
+    expect(sheaf.env).toEqual({ A: "1" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TOML comment/formatting preservation (P2.2)
+// ---------------------------------------------------------------------------
+
+describe("codex TOML comment handling", () => {
+  it("first install APPENDS a table and preserves comments (no reformat warning)", () => {
+    const vault = tmp("sheaf-vault-");
+    const home = tmp("sheaf-home-");
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    const path = join(home, ".codex", "config.toml");
+    writeFileSync(path, '# my codex config\nmodel = "gpt-5" # inline note\n');
+
+    const { cap } = install({ vault, home, clients: ["codex"] });
+
+    const after = readFileSync(path, "utf8");
+    expect(after).toContain("# my codex config");
+    expect(after).toContain("# inline note");
+    expect((readToml(path).mcp_servers as Record<string, McpEntry>).sheaf).toEqual(
+      buildSheafEntry(vault),
+    );
+    expect(cap.stderr).not.toContain("not preserved");
+  });
+
+  it("updating an existing entry reserializes (drops comments) and warns", () => {
+    const vault = tmp("sheaf-vault-");
+    const home = tmp("sheaf-home-");
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    const path = join(home, ".codex", "config.toml");
+    writeFileSync(
+      path,
+      '# keep me?\n[mcp_servers.sheaf]\ncommand = "old"\nargs = []\n',
+    );
+
+    const { cap } = install({ vault, home, clients: ["codex"], format: "json" });
+
+    expect(readFileSync(path, "utf8")).not.toContain("# keep me?");
+    expect(cap.stderr).toContain("not preserved"); // warned on stderr
+    expect(JSON.parse(cap.stdout).changes[0].reformat).toBe(true);
+  });
+
+  it("a reserialize warning appears in dry-run output too, file untouched", () => {
+    const vault = tmp("sheaf-vault-");
+    const home = tmp("sheaf-home-");
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    const path = join(home, ".codex", "config.toml");
+    const original = '# keep me?\n[mcp_servers.sheaf]\ncommand = "old"\nargs = []\n';
+    writeFileSync(path, original);
+
+    const { cap } = install({ vault, home, clients: ["codex"], dryRun: true });
+    expect(cap.stdout).toContain("not preserved");
+    expect(readFileSync(path, "utf8")).toBe(original);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Malformed configs → clear error, exit 1, ORIGINAL left byte-intact
+// ---------------------------------------------------------------------------
+
+describe("malformed existing config is refused non-destructively", () => {
+  it("malformed JSON → config_parse, exit 1, file byte-intact", () => {
+    const vault = tmp("sheaf-vault-");
+    const home = tmp("sheaf-home-");
+    const path = join(vault, ".mcp.json");
+    const bad = "{ this is : not json";
+    writeFileSync(path, bad);
+
+    const { ctx } = makeCtx({ vault, home, clients: ["claude"] });
+    const e = caught(() => mcpInstallCommand(ctx));
+    expect(e.exitCode).toBe(EXIT.GENERIC);
+    expect(e.code).toBe("config_parse");
+    expect(readFileSync(path, "utf8")).toBe(bad);
+  });
+
+  it("malformed TOML → config_parse, exit 1, file byte-intact", () => {
+    const vault = tmp("sheaf-vault-");
+    const home = tmp("sheaf-home-");
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    const path = join(home, ".codex", "config.toml");
+    const bad = "model = = =\n[unclosed\n";
+    writeFileSync(path, bad);
+
+    const { ctx } = makeCtx({ vault, home, clients: ["codex"] });
+    const e = caught(() => mcpInstallCommand(ctx));
+    expect(e.exitCode).toBe(EXIT.GENERIC);
+    expect(e.code).toBe("config_parse");
+    expect(readFileSync(path, "utf8")).toBe(bad);
+  });
+
+  it("mcpServers: null → config_invalid, exit 1", () => {
+    const vault = tmp("sheaf-vault-");
+    const home = tmp("sheaf-home-");
+    const path = join(vault, ".mcp.json");
+    writeFileSync(path, JSON.stringify({ mcpServers: null }));
+    const { ctx } = makeCtx({ vault, home, clients: ["claude"] });
+    const e = caught(() => mcpInstallCommand(ctx));
+    expect(e.exitCode).toBe(EXIT.GENERIC);
+    expect(e.code).toBe("config_invalid");
+  });
+
+  it("mcpServers: [array] → config_invalid, exit 1", () => {
+    const vault = tmp("sheaf-vault-");
+    const home = tmp("sheaf-home-");
+    const path = join(vault, ".mcp.json");
+    writeFileSync(path, JSON.stringify({ mcpServers: [1, 2] }));
+    const { ctx } = makeCtx({ vault, home, clients: ["claude"] });
+    expect(caught(() => mcpInstallCommand(ctx)).code).toBe("config_invalid");
+  });
+
+  it("a whitespace-only / empty config is treated as empty, not an error", () => {
+    const vault = tmp("sheaf-vault-");
+    const home = tmp("sheaf-home-");
+    const path = join(vault, ".mcp.json");
+    writeFileSync(path, "   \n\t\n");
+    const { code } = install({ vault, home, clients: ["claude"] });
+    expect(code).toBe(EXIT.OK);
+    expect((readJson(path).mcpServers as Record<string, McpEntry>).sheaf).toEqual(
+      buildSheafEntry(vault),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Multi-client: all plans computed before any write (P2.3)
+// ---------------------------------------------------------------------------
+
+describe("multi-client run is all-or-nothing", () => {
+  it("a malformed target aborts before ANY client is written", () => {
+    const vault = tmp("sheaf-vault-");
+    const home = tmp("sheaf-home-");
+    // codex is listed FIRST and is valid; claude is malformed. Since every plan
+    // is computed before any write, codex must NOT be written when claude fails.
+    mkdirSync(join(home, ".codex"), { recursive: true });
+    writeFileSync(join(vault, ".mcp.json"), "{ broken");
+
+    const { ctx } = makeCtx({ vault, home, clients: ["codex", "claude"] });
+    const e = caught(() => mcpInstallCommand(ctx));
+    expect(e.code).toBe("config_parse");
+    expect(existsSync(join(home, ".codex", "config.toml"))).toBe(false); // not written
+    expect(readFileSync(join(vault, ".mcp.json"), "utf8")).toBe("{ broken"); // intact
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Atomic write leaves no tmp orphan on failure (P3.7)
+// ---------------------------------------------------------------------------
+
+describe("applyPlan cleans up its tmp file on failure", () => {
+  it("removes the .tmp sibling when the rename fails", () => {
+    const base = tmp("sheaf-apply-");
+    // Target is a NON-EMPTY directory, so rename(tmp, target) fails after the
+    // tmp has been created+written — exercising the finally cleanup branch.
+    const target = join(base, "adir");
+    mkdirSync(target);
+    writeFileSync(join(target, "keep"), "x");
+
+    const plan: Plan = {
+      client: CLIENTS.codex,
+      path: target,
+      requested: target,
+      fileExists: false,
+      action: "install",
+      oldEntry: null,
+      newEntry: { command: "x", args: [] },
+      contents: "x = 1\n",
+      mode: undefined,
+      reformat: false,
+    };
+
+    expect(() => applyPlan(plan)).toThrow();
+    const orphans = readdirSync(base).filter(
+      (f) => f.includes(".sheaf-") || f.endsWith(".tmp"),
+    );
+    expect(orphans).toEqual([]);
   });
 });
