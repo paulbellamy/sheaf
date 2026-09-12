@@ -1,12 +1,14 @@
 /**
- * The command tree + hand-written help metadata.
+ * The command tree + hand-written help metadata + per-command flag schemas.
  *
  * This is the v0.1 command surface (docs/sheaf-cli-v0.1.md "Command tree"). In
  * step 1 every domain command is a stub: `run` is left undefined and the
- * dispatcher emits `not implemented (step N)` (exit 1). Later steps attach real
- * `run` handlers without changing the tree shape or the help text.
+ * dispatcher emits `not implemented (step N)` (exit 1). But each command's
+ * `options` (its `parseArgs` schema) is real, so the documented flags parse now
+ * — later steps only need to add the `run` handler, which reads them off
+ * {@link RunContext}.
  */
-import type { Globals } from "./args";
+import type { Globals, OptionDef } from "./args";
 import type { ExitCode, Io, Output } from "./io";
 
 /** Everything a command handler receives. */
@@ -14,8 +16,12 @@ export interface RunContext {
   globals: Globals;
   out: Output;
   io: Io;
+  /** Parsed flag values (globals + this command's own), from the strict pass. */
+  values: Record<string, unknown>;
   /** Positionals after the resolved command path (command-specific args). */
-  args: string[];
+  positionals: string[];
+  /** Raw argv, kept for handlers that need to re-parse or inspect it. */
+  argv: string[];
 }
 
 export interface CommandSpec {
@@ -27,6 +33,8 @@ export interface CommandSpec {
   usage: string;
   /** Plan step that implements this command (drives the stub message). */
   step: number;
+  /** This command's own `parseArgs` options, merged onto the globals. */
+  options?: Record<string, OptionDef>;
   /**
    * For a group (a spec with `subcommands`): whether it can also run on its own
    * without a matching subcommand. Only `mcp` does — `mcp` runs the bridge,
@@ -44,6 +52,14 @@ export interface CommandSpec {
   run?: (ctx: RunContext) => ExitCode | Promise<ExitCode>;
 }
 
+// Shared option fragments, kept consistent across commands.
+const REF: Record<string, OptionDef> = { ref: { type: "string" } };
+const TOOLS: Record<string, OptionDef> = { tools: { type: "string" } };
+const AS_MESSAGE: Record<string, OptionDef> = {
+  message: { type: "string", short: "m" },
+  as: { type: "string" },
+};
+
 /**
  * The top-level command registry. Insertion order is the order shown in
  * `sheaf --help`.
@@ -55,6 +71,12 @@ export const REGISTRY: Record<string, CommandSpec> = {
     usage:
       "sheaf serve [--port N] [--host H] [--tools full|thread-only] [--allow-origin O]...",
     step: 2,
+    options: {
+      port: { type: "string" },
+      host: { type: "string" },
+      ...TOOLS,
+      "allow-origin": { type: "string", multiple: true },
+    },
   },
 
   daemon: {
@@ -84,12 +106,15 @@ export const REGISTRY: Record<string, CommandSpec> = {
     usage: "sheaf mcp [--doc PATH] [--tools full|thread-only] [--no-daemon]",
     step: 4,
     runnable: true,
+    // `--no-daemon` is a global flag, so it already parses here.
+    options: { doc: { type: "string" }, ...TOOLS },
     subcommands: {
       install: {
         name: "install",
         summary: "Install sheaf as an MCP server in an agent's config",
         usage: "sheaf mcp install [client...] [--name NAME] [--dry-run]",
         step: 5,
+        options: { name: { type: "string" }, "dry-run": { type: "boolean" } },
       },
     },
   },
@@ -106,6 +131,7 @@ export const REGISTRY: Record<string, CommandSpec> = {
     summary: "Read a document",
     usage: "sheaf read <path> [--ref REF]",
     step: 6,
+    options: { ...REF },
   },
 
   grep: {
@@ -113,6 +139,13 @@ export const REGISTRY: Record<string, CommandSpec> = {
     summary: "Search document contents",
     usage: "sheaf grep <pattern> [--path P] [--glob G] [-i] [-A n] [-B n]",
     step: 6,
+    options: {
+      path: { type: "string" },
+      glob: { type: "string" },
+      "ignore-case": { type: "boolean", short: "i" },
+      "after-context": { type: "string", short: "A" },
+      "before-context": { type: "string", short: "B" },
+    },
   },
 
   glob: {
@@ -120,6 +153,7 @@ export const REGISTRY: Record<string, CommandSpec> = {
     summary: "List documents matching a glob",
     usage: "sheaf glob <pattern> [--ref REF]",
     step: 6,
+    options: { ...REF },
   },
 
   thread: {
@@ -133,6 +167,7 @@ export const REGISTRY: Record<string, CommandSpec> = {
         summary: "List threads",
         usage: "sheaf thread list [--path P] [--ref REF]",
         step: 6,
+        options: { path: { type: "string" }, ...REF },
       },
       show: {
         name: "show",
@@ -146,12 +181,19 @@ export const REGISTRY: Record<string, CommandSpec> = {
         usage:
           "sheaf thread add --path P [--range from:to | --doc] -m MSG [--as ui|agent]",
         step: 6,
+        options: {
+          path: { type: "string" },
+          range: { type: "string" },
+          doc: { type: "boolean" },
+          ...AS_MESSAGE,
+        },
       },
       reply: {
         name: "reply",
         summary: "Reply to a thread",
         usage: "sheaf thread reply <id> -m MSG [--as ui|agent]",
         step: 6,
+        options: { ...AS_MESSAGE },
       },
       resolve: {
         name: "resolve",
@@ -179,6 +221,7 @@ export const REGISTRY: Record<string, CommandSpec> = {
         summary: "Follow events as NDJSON",
         usage: "sheaf events follow [--role agent|ui] [--since ID]",
         step: 3,
+        options: { role: { type: "string" }, since: { type: "string" } },
       },
     },
   },

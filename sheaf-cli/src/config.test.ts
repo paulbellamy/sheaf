@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -30,12 +30,16 @@ describe("config load/save", () => {
 
   it("writes the config file with mode 0600", () => {
     saveConfig({ defaultVault: "/x" }, env);
-    const mode = statSync(configPath(env)).mode & 0o777;
-    expect(mode).toBe(0o600);
+    expect(statSync(configPath(env)).mode & 0o777).toBe(0o600);
   });
 
-  it("re-tightens permissions on an existing (looser) file", () => {
+  it("re-tightens permissions on an externally-loosened file", () => {
     saveConfig({ defaultVault: "/a" }, env);
+    // Simulate a file left world/group-readable (e.g. an older sheaf, or a
+    // umask/editor quirk); the next save must bring it back to 0600.
+    chmodSync(configPath(env), 0o644);
+    expect(statSync(configPath(env)).mode & 0o777).toBe(0o644);
+
     saveConfig({ defaultVault: "/b" }, env);
     expect(statSync(configPath(env)).mode & 0o777).toBe(0o600);
     expect(loadConfig(env)).toEqual({ defaultVault: "/b" });
@@ -52,5 +56,11 @@ describe("config load/save", () => {
     const config: Config = { mcp: { defaultClient: "claude", extra: [1, 2] } };
     saveConfig(config, env);
     expect(loadConfig(env)).toEqual(config);
+  });
+
+  it("rejects a relative defaultVault", () => {
+    expect(() => saveConfig({ defaultVault: "notes" } as Config, env)).toThrow(
+      /absolute/,
+    );
   });
 });

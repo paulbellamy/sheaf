@@ -6,11 +6,11 @@ import type { Io } from "./io";
 
 /**
  * Build a capturing {@link Io} plus accessors for what was written. `env`
- * carries a bogus `SHEAF_HOME` so that, even though step-1 stubs never touch
- * it, an accidental write would land in a nonexistent temp path, never the real
- * home.
+ * carries a bogus `SHEAF_HOME` so that, even though step-1 stubs never touch it,
+ * an accidental write would land in a nonexistent temp path, never the real
+ * home. Extra env (e.g. `SHEAF_DEBUG`) can be merged in.
  */
-function makeIo(): {
+function makeIo(env: NodeJS.ProcessEnv = {}): {
   io: Io;
   stdout: () => string;
   stderr: () => string;
@@ -20,7 +20,7 @@ function makeIo(): {
   const io: Io = {
     out: (c) => out.push(c),
     err: (c) => err.push(c),
-    env: { SHEAF_HOME: "/nonexistent/sheaf-home" },
+    env: { SHEAF_HOME: "/nonexistent/sheaf-home", ...env },
     cwd: "/tmp",
   };
   return { io, stdout: () => out.join(""), stderr: () => err.join("") };
@@ -29,8 +29,7 @@ function makeIo(): {
 describe("global flags", () => {
   it("--version prints the injected version to stdout, exit 0", async () => {
     const { io, stdout, stderr } = makeIo();
-    const code = await run(["--version"], io);
-    expect(code).toBe(0);
+    expect(await run(["--version"], io)).toBe(0);
     expect(stdout().trim()).toBe(VERSION);
     expect(stderr()).toBe("");
   });
@@ -49,8 +48,7 @@ describe("global flags", () => {
 
   it("--help prints the root usage table to stdout, exit 0", async () => {
     const { io, stdout } = makeIo();
-    const code = await run(["--help"], io);
-    expect(code).toBe(0);
+    expect(await run(["--help"], io)).toBe(0);
     expect(stdout()).toContain("Usage: sheaf");
     expect(stdout()).toContain("Commands:");
     expect(stdout()).toContain("Global flags:");
@@ -64,9 +62,18 @@ describe("global flags", () => {
 
   it("rejects an invalid --format with a usage error (exit 2)", async () => {
     const { io, stderr } = makeIo();
-    const code = await run(["--format", "yaml", "docs"], io);
-    expect(code).toBe(2);
+    expect(await run(["--format", "yaml", "docs"], io)).toBe(2);
     expect(stderr()).toContain("--format must be");
+  });
+
+  it("a dangling --vault is a usage error (exit 2)", async () => {
+    const { io } = makeIo();
+    expect(await run(["read", "--vault"], io)).toBe(2);
+  });
+
+  it("an unknown flag on a command is a usage error (exit 2)", async () => {
+    const { io } = makeIo();
+    expect(await run(["read", "notes.md", "--bogus"], io)).toBe(2);
   });
 });
 
@@ -104,51 +111,86 @@ describe("dispatch to stubs", () => {
     [["events", "follow"], 3],
   ])("`%s` stubs with its step number, exit 1", async (argv, step) => {
     const { io, stdout, stderr } = makeIo();
-    const code = await run(argv as string[], io);
-    expect(code).toBe(1);
+    expect(await run(argv as string[], io)).toBe(1);
     expect(stderr().trim()).toBe(`not implemented (step ${step})`);
     expect(stdout()).toBe("");
   });
 
   it("emits stub errors as JSON under --format json", async () => {
     const { io, stdout, stderr } = makeIo();
-    const code = await run(["docs", "--format", "json"], io);
-    expect(code).toBe(1);
+    expect(await run(["docs", "--format", "json"], io)).toBe(1);
     expect(JSON.parse(stdout())).toEqual({
       error: "not implemented (step 6)",
       code: "not_implemented",
     });
-    // Diagnostics channel stays empty; the one JSON object is on stdout.
     expect(stderr()).toBe("");
+  });
+});
+
+describe("per-command flags parse (proven via SHEAF_DEBUG)", () => {
+  it("read <path> --ref REF", async () => {
+    const { io, stderr } = makeIo({ SHEAF_DEBUG: "1" });
+    expect(await run(["read", "notes.md", "--ref", "v3"], io)).toBe(1);
+    const debug = stderr();
+    expect(debug).toContain("command=read");
+    expect(debug).toContain('"ref":"v3"');
+    expect(debug).toContain('["notes.md"]');
+  });
+
+  it("thread add --path P -m MSG --as agent", async () => {
+    const { io, stderr } = makeIo({ SHEAF_DEBUG: "1" });
+    expect(
+      await run(
+        ["thread", "add", "--path", "a.md", "-m", "hi", "--as", "agent"],
+        io,
+      ),
+    ).toBe(1);
+    const debug = stderr();
+    expect(debug).toContain("command=thread add");
+    expect(debug).toContain('"path":"a.md"');
+    expect(debug).toContain('"message":"hi"');
+    expect(debug).toContain('"as":"agent"');
+  });
+
+  it("mcp --doc PATH is the bridge (not a stray subcommand)", async () => {
+    const { io, stderr } = makeIo({ SHEAF_DEBUG: "1" });
+    expect(await run(["mcp", "--doc", "notes.md"], io)).toBe(1);
+    const debug = stderr();
+    expect(debug).toContain("command=mcp");
+    expect(debug).toContain('"doc":"notes.md"');
+    // No leftover positional was mistaken for a subcommand.
+    expect(debug).toContain("positionals=[]");
   });
 });
 
 describe("usage errors (exit 2)", () => {
   it("unknown top-level command", async () => {
     const { io, stderr } = makeIo();
-    const code = await run(["frobnicate"], io);
-    expect(code).toBe(2);
+    expect(await run(["frobnicate"], io)).toBe(2);
     expect(stderr()).toContain("unknown command: frobnicate");
   });
 
   it("unknown nested subcommand", async () => {
     const { io, stderr } = makeIo();
-    const code = await run(["thread", "bogus"], io);
-    expect(code).toBe(2);
+    expect(await run(["thread", "bogus"], io)).toBe(2);
     expect(stderr()).toContain("unknown subcommand: thread bogus");
   });
 
   it("group invoked with no subcommand", async () => {
     const { io, stderr } = makeIo();
-    const code = await run(["thread"], io);
-    expect(code).toBe(2);
+    expect(await run(["thread"], io)).toBe(2);
     expect(stderr()).toContain("`thread` requires a subcommand");
+  });
+
+  it("runnable group with a stray positional is a bad subcommand, not the bridge", async () => {
+    const { io, stderr } = makeIo();
+    expect(await run(["mcp", "bogus"], io)).toBe(2);
+    expect(stderr()).toContain("unknown subcommand: mcp bogus");
   });
 
   it("renders usage errors as JSON under --format json", async () => {
     const { io, stdout } = makeIo();
-    const code = await run(["frobnicate", "--format", "json"], io);
-    expect(code).toBe(2);
+    expect(await run(["frobnicate", "--format", "json"], io)).toBe(2);
     expect(JSON.parse(stdout())).toEqual({
       error: "unknown command: frobnicate",
       code: "usage",

@@ -117,9 +117,21 @@ importers:
 
   sheaf-cli:
     dependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.29.0
+        version: 1.29.0(zod@4.4.3)
+      fastify:
+        specifier: ^5.8.0
+        version: 5.8.5
       sheaf-server:
         specifier: workspace:*
         version: link:../sheaf-server
+      yaml:
+        specifier: ^2.8.3
+        version: 2.9.0
+      yjs:
+        specifier: ^13.6.31
+        version: 13.6.31
       zod:
         specifier: ^4.3.6
         version: 4.4.3

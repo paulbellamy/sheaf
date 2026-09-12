@@ -26,3 +26,5 @@ jobs:
       # Build the consumers.
       - run: pnpm --filter prototype build
       - run: pnpm --filter sheaf-obsidian build
+      # Build the CLI bundle and smoke-test that it runs.
+      - run: pnpm --filter sheaf-cli build && node sheaf-cli/bin/sheaf.js --version

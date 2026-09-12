@@ -1,22 +1,26 @@
 /**
- * `$SHEAF_HOME` layout + config file load/save.
+ * Config file load/save on top of the `$SHEAF_HOME` layout.
  *
- * `$SHEAF_HOME` (default `~/.sheaf`, dir mode 0700) is the single root for all
- * cross-invocation state: the config file, the per-vault daemon discovery files
- * (`daemons/`), and daemon logs (`logs/`). It is overridable via the
- * `SHEAF_HOME` env var so tests (and sandboxes) can point it at a throwaway
- * directory and never touch the real home.
+ * The layout helpers (`sheafHome`, `ensureSheafHome`, `daemonsDir`, `logsDir`)
+ * live in `sheaf-server/home` — daemon registration (step 2) is a server-side
+ * concern that cannot depend on this package. We import them here, re-export
+ * them for local call sites (and step-2 discoverability), and build the config
+ * path on top of `sheafHome()`.
  *
- * Step 1 provides only the path helpers plus config load/save; `daemons/` and
- * `logs/` are created by later steps (`sheaf serve`) when first needed.
+ * The config file itself (`$SHEAF_HOME/config.json`) is a CLI concern, so
+ * `configPath`, `loadConfig`, and `saveConfig` stay here. A missing file is an
+ * empty config, never an error.
  */
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { chmodSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 
+import { ensureSheafHome, sheafHome } from "sheaf-server/home";
 import { z } from "zod";
 
 import { CliError, EXIT } from "./io";
+
+// Re-export the layout helpers so CLI call sites import them from one place.
+export { daemonsDir, ensureSheafHome, logsDir, sheafHome } from "sheaf-server/home";
 
 /**
  * Config file schema. Deliberately minimal and forward-compatible: unknown keys
@@ -25,8 +29,17 @@ import { CliError, EXIT } from "./io";
  * optional; a missing file is an empty config, never an error.
  */
 export const ConfigSchema = z.looseObject({
-  /** Default vault when neither `--vault` nor `$SHEAF_VAULT` is set. */
-  defaultVault: z.string().optional(),
+  /**
+   * Default vault when neither `--vault` nor `$SHEAF_VAULT` is set. Must be
+   * absolute — a relative value would resolve differently per shell cwd, so the
+   * config-sourced vault would silently drift.
+   */
+  defaultVault: z
+    .string()
+    .refine((p) => isAbsolute(p), {
+      message: "defaultVault must be an absolute path",
+    })
+    .optional(),
   /** Preferred port for `sheaf serve` (0 / omitted → ephemeral). */
   defaultPort: z.number().int().min(0).max(65535).optional(),
   /** MCP-related settings; shape intentionally open for now. */
@@ -35,40 +48,9 @@ export const ConfigSchema = z.looseObject({
 
 export type Config = z.infer<typeof ConfigSchema>;
 
-/**
- * Resolve `$SHEAF_HOME` without creating it. A non-empty `SHEAF_HOME` wins
- * (resolved to an absolute path); otherwise `~/.sheaf`.
- */
-export function sheafHome(env: NodeJS.ProcessEnv = process.env): string {
-  const override = env.SHEAF_HOME;
-  if (override && override.length > 0) return resolve(override);
-  return join(homedir(), ".sheaf");
-}
-
-/**
- * Resolve `$SHEAF_HOME`, creating it lazily with mode 0700. The explicit
- * `chmod` defends against a permissive umask (mkdir's mode is masked by it).
- */
-export function ensureSheafHome(env: NodeJS.ProcessEnv = process.env): string {
-  const home = sheafHome(env);
-  mkdirSync(home, { recursive: true, mode: 0o700 });
-  chmodSync(home, 0o700);
-  return home;
-}
-
 /** Path to the config file (`$SHEAF_HOME/config.json`). */
 export function configPath(env: NodeJS.ProcessEnv = process.env): string {
   return join(sheafHome(env), "config.json");
-}
-
-/** Directory holding per-vault daemon discovery files (`$SHEAF_HOME/daemons`). */
-export function daemonsDir(env: NodeJS.ProcessEnv = process.env): string {
-  return join(sheafHome(env), "daemons");
-}
-
-/** Directory holding daemon logs (`$SHEAF_HOME/logs`). */
-export function logsDir(env: NodeJS.ProcessEnv = process.env): string {
-  return join(sheafHome(env), "logs");
 }
 
 /**
@@ -108,9 +90,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 }
 
 /**
- * Persist the config to `$SHEAF_HOME/config.json` with mode 0600. The `chmod`
- * runs unconditionally because `writeFile`'s mode only applies when creating a
- * new file — an existing file keeps its old (possibly looser) permissions.
+ * Persist the config to `$SHEAF_HOME/config.json` with mode 0600, atomically:
+ * write a sibling `.tmp` (chmod 0600 — `writeFile`'s mode is masked by umask
+ * and only applies on create) then `rename` it over the target. The rename is
+ * atomic on POSIX, so a crash mid-write can never leave a truncated
+ * `config.json` that bricks every later command.
  */
 export function saveConfig(
   config: Config,
@@ -119,6 +103,8 @@ export function saveConfig(
   const validated = ConfigSchema.parse(config);
   ensureSheafHome(env);
   const path = configPath(env);
-  writeFileSync(path, `${JSON.stringify(validated, null, 2)}\n`, { mode: 0o600 });
-  chmodSync(path, 0o600);
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(validated, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(tmp, 0o600);
+  renameSync(tmp, path);
 }

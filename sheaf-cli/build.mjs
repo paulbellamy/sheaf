@@ -1,16 +1,24 @@
 // esbuild bundle for the `sheaf` CLI.
 //
 // Mirrors the obsidian-plugin build conventions: a single esbuild pass, node
-// platform, first-party TypeScript bundled into one file. Differences that the
-// CLI needs:
+// platform, first-party TypeScript bundled into one file. Differences the CLI
+// needs:
 //   - `format: "esm"` + `target: "node20"` (CI runs Node 20; sources use
 //     extensionless ESM imports, so `node --strip-types` is a non-starter).
 //   - `banner` injects the shebang so `bin/sheaf.js` is directly executable.
-//   - `packages: "external"` keeps node_modules deps (zod, sheaf-server, the
-//     MCP SDK added in later steps) out of the bundle; they resolve at runtime
-//     from the install. Only our own `src/*.ts` is bundled.
 //   - `define` inlines the package version, so the shipped binary carries its
-//     version with zero runtime file reads.
+//     version with zero runtime file reads (see src/version.ts).
+//
+// Externalization is deliberate and NOT `packages: "external"`. The workspace
+// dep `sheaf-server` publishes extensionless *.ts from `src/` — Node cannot
+// import that at runtime, so it MUST be bundled (esbuild follows the pnpm
+// symlink and transpiles the TS). Everything else — sheaf-server's own runtime
+// deps (@modelcontextprotocol/sdk, fastify, yaml, yjs) and zod — stays external
+// and resolves from the install next to `bin/`. Those packages are declared in
+// this package's `dependencies` precisely so they resolve there under pnpm's
+// strict node_modules layout. Each dep is externalized as both the bare name
+// and a `/*` wildcard so subpath imports (e.g.
+// `@modelcontextprotocol/sdk/server/mcp.js`) are externalized too.
 import { chmodSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -21,6 +29,10 @@ const root = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const outfile = join(root, "bin", "sheaf.js");
 
+const external = Object.keys(pkg.dependencies ?? {})
+  .filter((dep) => dep !== "sheaf-server")
+  .flatMap((dep) => [dep, `${dep}/*`]);
+
 await esbuild.build({
   entryPoints: [join(root, "src", "main.ts")],
   outfile,
@@ -28,8 +40,7 @@ await esbuild.build({
   platform: "node",
   format: "esm",
   target: "node20",
-  // node_modules deps stay external; first-party `./` imports get bundled.
-  packages: "external",
+  external,
   banner: { js: "#!/usr/bin/env node" },
   // Replaced with a string literal at build time (see src/version.ts).
   define: { __SHEAF_VERSION__: JSON.stringify(pkg.version) },

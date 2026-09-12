@@ -9,11 +9,15 @@
   },
   "scripts": {
     "build": "node build.mjs",
-    "test": "vitest run",
+    "test": "pnpm run build && vitest run",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "sheaf-server": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "fastify": "^5.8.0",
+    "yaml": "^2.8.3",
+    "yjs": "^13.6.31",
     "zod": "^4.3.6"
   },
   "devDependencies": {
