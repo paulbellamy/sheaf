@@ -47,6 +47,14 @@ export interface BuildServerOptions {
    * ReadMe falls back to a sensible default. See `tools/readme.ts`.
    */
   publicUrl?: string;
+  /**
+   * Set by `sheaf mcp --no-daemon`: this server is a lone in-process backend
+   * with no daemon and no cross-process event stream, so the ReadMe replaces its
+   * "Subscribe to events" section with a poll-`ListThreads` note rather than
+   * pointing the agent at `sheaf events follow` / a curl loop that can't work
+   * here. See `tools/readme.ts`.
+   */
+  standalone?: boolean;
 }
 
 /**
@@ -63,7 +71,7 @@ export function buildServer(
   backend: Backend = getBackend(),
   opts: BuildServerOptions = {},
 ): McpServer {
-  const { tools = "full", docScope, publicUrl } = opts;
+  const { tools = "full", docScope, publicUrl, standalone } = opts;
   const server = new McpServer(
     {
       name: "sheaf",
@@ -76,7 +84,7 @@ export function buildServer(
     },
   );
 
-  registerReadMe(server, publicUrl);
+  registerReadMe(server, { publicUrl, standalone });
   registerRead(server, backend);
   registerWrite(server, backend);
   registerEdit(server, backend);

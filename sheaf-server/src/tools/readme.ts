@@ -16,14 +16,25 @@ const DEFAULT_PUBLIC_URL = "http://localhost:31415";
  * AGENTS.md lookup. Everything the agent needs to react to user comments
  * and edit the doc lives in this string.
  *
- * `publicUrl` is the daemon's *actual* bound origin (`http://host:port`),
- * threaded down from `buildSheafApp` via `buildServer` so the curl fallback in
- * the event-subscription section points at the real server rather than a
- * guessed port. Omitted by embedding hosts and the standalone path, in which
- * case {@link DEFAULT_PUBLIC_URL} stands in.
+ * Options:
+ *   - `publicUrl` — the daemon's *actual* bound origin (`http://host:port`),
+ *     threaded down from `buildSheafApp` via `buildServer` so the curl fallback
+ *     in the event-subscription section points at the real server rather than a
+ *     guessed port. Omitted by embedding hosts; {@link DEFAULT_PUBLIC_URL} then
+ *     stands in.
+ *   - `standalone` — set by `sheaf mcp --no-daemon`, whose in-process backend
+ *     has no daemon and no cross-process event stream. In that mode the whole
+ *     "Subscribe to events" section is replaced with a note to re-poll
+ *     `ListThreads`, rather than pointing the agent at `sheaf events follow`
+ *     (which would exit 3 — no daemon) or a curl URL that isn't listening.
  */
-export function registerReadMe(server: McpServer, publicUrl?: string): void {
-  const text = renderReadMe(publicUrl);
+export interface ReadMeOptions {
+  publicUrl?: string;
+  standalone?: boolean;
+}
+
+export function registerReadMe(server: McpServer, opts: ReadMeOptions = {}): void {
+  const text = renderReadMe(opts);
   server.registerTool(
     "ReadMe",
     {
@@ -40,14 +51,105 @@ export function registerReadMe(server: McpServer, publicUrl?: string): void {
 }
 
 /**
- * Build the operating-guide string, interpolating the daemon's real origin into
- * the curl fallback. Exported so a test can assert the served text without
- * standing up a transport.
+ * Build the operating-guide string: swap in the daemon event-subscription
+ * section (interpolating the daemon's real origin into the curl fallback), or
+ * the standalone no-events note. Exported so a test can assert the served text
+ * without standing up a transport.
  */
-export function renderReadMe(publicUrl?: string): string {
-  const base = publicUrl ?? DEFAULT_PUBLIC_URL;
-  return README_TEMPLATE.replace("__SHEAF_PUBLIC_URL__", base);
+export function renderReadMe(opts: ReadMeOptions = {}): string {
+  const section = opts.standalone
+    ? STANDALONE_SUBSCRIBE
+    : DAEMON_SUBSCRIBE.replace(
+        "__SHEAF_PUBLIC_URL__",
+        opts.publicUrl ?? DEFAULT_PUBLIC_URL,
+      );
+  return README_TEMPLATE.replace("__SHEAF_SUBSCRIBE_SECTION__", section);
 }
+
+/** The daemon-mode "Subscribe to events" section (interpolates `__SHEAF_PUBLIC_URL__`). */
+const DAEMON_SUBSCRIBE = `## Subscribe to events
+
+Run this once with the \`Monitor\` tool. It tails the live event stream and
+prints one JSON event per line **the moment it arrives** — \`Monitor\` wakes you
+on each line, so you react to a comment as soon as it's posted:
+
+\`\`\`
+Monitor({
+  command: 'sheaf events follow --role agent',
+  description: "sheaf events",
+  persistent: true,
+})
+\`\`\`
+
+\`sheaf events follow\` speaks to the same daemon this MCP server runs in. It
+emits **one BackendEvent JSON object per line** (the keep-alive pings are
+dropped for you) and reconnects across daemon restarts on its own, so nothing
+here needs a retry loop. The \`--role agent\` flag is what makes the user's
+plugin show "agent connected" in its status bar — keep it.
+
+Don't add a debounce/quiet-window buffer around it (\`read -t N\` accumulating
+into a batch): the events are discrete user actions, not keystroke spam, so
+buffering just delays every wake-up — and because the quiet timer resets on each
+event, a user who keeps working starves the buffer and you never wake at all.
+\`Monitor\` already groups lines that land within the same instant into one
+notification, so a burst stays a single wake-up without any buffering.
+
+**Fallback (no \`sheaf\` CLI on PATH).** If you connected straight to the daemon
+over HTTP and can't run the CLI, tail the SSE stream with curl against the
+**same host:port you reached this MCP server on** instead:
+
+\`\`\`
+Monitor({
+  command: 'while true; do curl -sN "__SHEAF_PUBLIC_URL__/api/ui/drafts/stream?role=agent" | sed -n -u "s/^data: //p"; sleep 1; done',
+  description: "sheaf events",
+  persistent: true,
+})
+\`\`\`
+
+\`sed\` keeps only the \`data:\` lines — dropping the keep-alive \`: ping\`
+comments — and strips the prefix, leaving one JSON event per line, exactly like
+\`sheaf events follow\`. On disconnect (e.g. the server restarts) the loop
+reconnects (\`sleep 1\`). Keep \`role=agent\` here too.
+
+A single wake-up may still carry **one or more** event lines (several can land
+in the same instant — e.g. a rename that moves many threads at once). Handle
+each line independently; each is an event of the form:
+
+\`\`\`
+{"kind":"thread_changed","thread_id":"thrd_...","target_paths":["notes/foo.md"]}
+{"kind":"doc_changed","path":"notes/foo.md"}
+{"kind":"agent_presence","connected":true}
+{"kind":"stream_reset"}
+\`\`\`
+
+Branch on \`kind\`:
+- **thread_changed** — the user posted a thread or a reply. Investigate.
+  (Your own thread mutations are not echoed back to this stream.)
+- **doc_changed** — a write landed on a doc from outside your session (your
+  own Edit/Write is not echoed back). Ignore unless you're tracking
+  concurrent activity.
+- **stream_reset** — the stream can't prove continuity with what you've
+  already seen: sent on every fresh connect, and on a reconnect after the
+  server restarted. Events may have been missed while you were disconnected,
+  so re-run \`ListThreads\` and work whatever is open.
+- **agent_presence** — connection lifecycle for the watcher itself. Ignore.
+
+Other event kinds may arrive (\`draft_*\`); they're not part of this workflow
+and can be ignored.`;
+
+/** The standalone (\`--no-daemon\`) replacement: no live stream exists. */
+const STANDALONE_SUBSCRIBE = `## Staying current (no live events)
+
+You're running in \`--no-daemon\` mode: an in-process backend with **no live
+event stream** — a comment posted in Obsidian or another process won't reach
+you as it happens (there is no daemon fanning events out). Do **not** run
+\`sheaf events follow\` (it needs a running daemon) or a curl loop (nothing is
+listening).
+
+Instead, **poll**: re-run \`ListThreads(ref:"main")\` whenever you finish a piece
+of work (and whenever you want to check for new work). The thread store on disk
+is the source of truth — the open threads whose latest message is from the user
+are your queue, exactly as in the loop above.`;
 
 const README_TEMPLATE = `# Sheaf MCP — operating guide
 
@@ -189,75 +291,7 @@ latest message author before acting:
 The plugin uses the same "any non-user message on an open thread" signal to
 show "agent working", so this convention also keeps the UI honest.
 
-## Subscribe to events
-
-Run this once with the \`Monitor\` tool. It tails the live event stream and
-prints one JSON event per line **the moment it arrives** — \`Monitor\` wakes you
-on each line, so you react to a comment as soon as it's posted:
-
-\`\`\`
-Monitor({
-  command: 'sheaf events follow --role agent',
-  description: "sheaf events",
-  persistent: true,
-})
-\`\`\`
-
-\`sheaf events follow\` speaks to the same daemon this MCP server runs in. It
-emits **one BackendEvent JSON object per line** (the keep-alive pings are
-dropped for you) and reconnects across daemon restarts on its own, so nothing
-here needs a retry loop. The \`--role agent\` flag is what makes the user's
-plugin show "agent connected" in its status bar — keep it.
-
-Don't add a debounce/quiet-window buffer around it (\`read -t N\` accumulating
-into a batch): the events are discrete user actions, not keystroke spam, so
-buffering just delays every wake-up — and because the quiet timer resets on each
-event, a user who keeps working starves the buffer and you never wake at all.
-\`Monitor\` already groups lines that land within the same instant into one
-notification, so a burst stays a single wake-up without any buffering.
-
-**Fallback (no \`sheaf\` CLI on PATH).** If you connected straight to the daemon
-over HTTP and can't run the CLI, tail the SSE stream with curl against the
-**same host:port you reached this MCP server on** instead:
-
-\`\`\`
-Monitor({
-  command: 'while true; do curl -sN "__SHEAF_PUBLIC_URL__/api/ui/drafts/stream?role=agent" | sed -n -u "s/^data: //p"; sleep 1; done',
-  description: "sheaf events",
-  persistent: true,
-})
-\`\`\`
-
-\`sed\` keeps only the \`data:\` lines — dropping the keep-alive \`: ping\`
-comments — and strips the prefix, leaving one JSON event per line, exactly like
-\`sheaf events follow\`. On disconnect (e.g. the server restarts) the loop
-reconnects (\`sleep 1\`). Keep \`role=agent\` here too.
-
-A single wake-up may still carry **one or more** event lines (several can land
-in the same instant — e.g. a rename that moves many threads at once). Handle
-each line independently; each is an event of the form:
-
-\`\`\`
-{"kind":"thread_changed","thread_id":"thrd_...","target_paths":["notes/foo.md"]}
-{"kind":"doc_changed","path":"notes/foo.md"}
-{"kind":"agent_presence","connected":true}
-{"kind":"stream_reset"}
-\`\`\`
-
-Branch on \`kind\`:
-- **thread_changed** — the user posted a thread or a reply. Investigate.
-  (Your own thread mutations are not echoed back to this stream.)
-- **doc_changed** — a write landed on a doc from outside your session (your
-  own Edit/Write is not echoed back). Ignore unless you're tracking
-  concurrent activity.
-- **stream_reset** — the stream can't prove continuity with what you've
-  already seen: sent on every fresh connect, and on a reconnect after the
-  server restarted. Events may have been missed while you were disconnected,
-  so re-run \`ListThreads\` and work whatever is open.
-- **agent_presence** — connection lifecycle for the watcher itself. Ignore.
-
-Other event kinds may arrive (\`draft_*\`); they're not part of this workflow
-and can be ignored.
+__SHEAF_SUBSCRIBE_SECTION__
 
 ## Tools you'll use
 
