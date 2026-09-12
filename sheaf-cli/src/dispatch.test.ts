@@ -97,20 +97,22 @@ describe("per-command help", () => {
   });
 });
 
-describe("dispatch to stubs", () => {
-  // `docs` (step 6), `events follow` (step 3), `mcp` (step 4, the bridge), and
-  // `mcp install` (step 5) are wired now, so they're deliberately absent here —
-  // each is covered by its own tests.
+describe("dispatch to wired verbs", () => {
+  // After step 6 every command has a handler (no stubs remain). The read/thread
+  // read verbs are daemon clients, so with no reachable daemon (a nonexistent
+  // $SHEAF_HOME + a /tmp cwd vault) they resolve to the no-daemon error (exit 3)
+  // rather than a step-1 stub. Their behavior against a live daemon is covered
+  // in verbs.test.ts.
   it.each([
-    [["read", "notes.md"], 6],
-    [["grep", "foo"], 6],
-    [["glob", "**/*.md"], 6],
-    [["thread", "list"], 6],
-    [["thread", "show", "thrd_x"], 6],
-  ])("`%s` stubs with its step number, exit 1", async (argv, step) => {
+    [["read", "notes.md"]],
+    [["grep", "foo"]],
+    [["glob", "**/*.md"]],
+    [["thread", "list"]],
+    [["thread", "show", "thrd_abcdef"]],
+  ])("`%s` is wired and needs a daemon (exit 3 when none)", async (argv) => {
     const { io, stdout, stderr } = makeIo();
-    expect(await run(argv as string[], io)).toBe(1);
-    expect(stderr().trim()).toBe(`not implemented (step ${step})`);
+    expect(await run(argv as string[], io)).toBe(3);
+    expect(stderr()).toContain("no sheaf daemon");
     expect(stdout()).toBe("");
   });
 
@@ -122,13 +124,10 @@ describe("dispatch to stubs", () => {
     expect(stderr()).toContain("unknown client");
   });
 
-  it("emits stub errors as JSON under --format json", async () => {
+  it("renders the no-daemon error as JSON under --format json", async () => {
     const { io, stdout, stderr } = makeIo();
-    expect(await run(["read", "notes.md", "--format", "json"], io)).toBe(1);
-    expect(JSON.parse(stdout())).toEqual({
-      error: "not implemented (step 6)",
-      code: "not_implemented",
-    });
+    expect(await run(["read", "notes.md", "--format", "json"], io)).toBe(3);
+    expect(JSON.parse(stdout())).toMatchObject({ code: "no_daemon" });
     expect(stderr()).toBe("");
   });
 });
@@ -147,29 +146,38 @@ describe("--no-daemon enforcement (dispatcher, not per-handler)", () => {
   });
 });
 
-describe("per-command flags parse (proven via SHEAF_DEBUG)", () => {
-  it("read <path> --ref REF", async () => {
-    const { io, stderr } = makeIo({ SHEAF_DEBUG: "1" });
-    expect(await run(["read", "notes.md", "--ref", "v3"], io)).toBe(1);
-    const debug = stderr();
-    expect(debug).toContain("command=read");
-    expect(debug).toContain('"ref":"v3"');
-    expect(debug).toContain('["notes.md"]');
+describe("per-command flags parse", () => {
+  // The step-6 verbs now have real handlers, so their flags are asserted at the
+  // parse layer (running them would require a live daemon — see verbs.test.ts).
+  it("read <path> --ref REF", () => {
+    const { values, positionals } = parseCommand(
+      ["read", "notes.md", "--ref", "v3"],
+      REGISTRY.read.options,
+    );
+    expect(values.ref).toBe("v3");
+    expect(positionals).toEqual(["read", "notes.md"]);
   });
 
-  it("thread add --path P -m MSG --as agent", async () => {
-    const { io, stderr } = makeIo({ SHEAF_DEBUG: "1" });
-    expect(
-      await run(
-        ["thread", "add", "--path", "a.md", "-m", "hi", "--as", "agent"],
-        io,
-      ),
-    ).toBe(1);
-    const debug = stderr();
-    expect(debug).toContain("command=thread add");
-    expect(debug).toContain('"path":"a.md"');
-    expect(debug).toContain('"message":"hi"');
-    expect(debug).toContain('"as":"agent"');
+  it("grep <pattern> with the ripgrep-shaped flags", () => {
+    const { values } = parseCommand(
+      ["grep", "foo", "-i", "-A", "2", "-B", "1", "--output-mode", "content"],
+      REGISTRY.grep.options,
+    );
+    expect(values["ignore-case"]).toBe(true);
+    expect(values["after-context"]).toBe("2");
+    expect(values["before-context"]).toBe("1");
+    expect(values["output-mode"]).toBe("content");
+  });
+
+  it("thread add --path P -m MSG --range A:B --as agent", () => {
+    const { values } = parseCommand(
+      ["thread", "add", "--path", "a.md", "-m", "hi", "--range", "0:5", "--as", "agent"],
+      REGISTRY.thread.subcommands!.add.options,
+    );
+    expect(values.path).toBe("a.md");
+    expect(values.message).toBe("hi");
+    expect(values.range).toBe("0:5");
+    expect(values.as).toBe("agent");
   });
 
   it("mcp --doc PATH parses as the runnable bridge, not a stray subcommand", () => {

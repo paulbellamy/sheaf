@@ -15,7 +15,16 @@ import { docsCommand } from "./docs";
 import { eventsFollowCommand } from "./events";
 import { mcpBridgeCommand } from "./mcp";
 import { mcpInstallCommand } from "./mcp-install";
+import { grepCommand, globCommand, readCommand } from "./reads";
 import { serveCommand } from "./serve";
+import {
+  threadAddCommand,
+  threadListCommand,
+  threadReopenCommand,
+  threadReplyCommand,
+  threadResolveCommand,
+  threadShowCommand,
+} from "./threads";
 
 /** Everything a command handler receives. */
 export interface RunContext {
@@ -179,21 +188,30 @@ export const REGISTRY: Record<string, CommandSpec> = {
     summary: "Read a document",
     usage: "sheaf read <path> [--ref REF]",
     step: 6,
+    needsDaemon: true,
     options: { ...REF },
+    run: readCommand,
   },
 
   grep: {
     name: "grep",
     summary: "Search document contents",
-    usage: "sheaf grep <pattern> [--path P] [--glob G] [-i] [-A n] [-B n]",
+    usage:
+      "sheaf grep <pattern> [--path P] [--glob G] [-i] [-A n] [-B n] [--multiline] [--head-limit n] [--output-mode M] [--ref REF]",
     step: 6,
+    needsDaemon: true,
     options: {
       path: { type: "string" },
       glob: { type: "string" },
       "ignore-case": { type: "boolean", short: "i" },
       "after-context": { type: "string", short: "A" },
       "before-context": { type: "string", short: "B" },
+      multiline: { type: "boolean" },
+      "head-limit": { type: "string" },
+      "output-mode": { type: "string" },
+      ...REF,
     },
+    run: grepCommand,
   },
 
   glob: {
@@ -201,7 +219,9 @@ export const REGISTRY: Record<string, CommandSpec> = {
     summary: "List documents matching a glob",
     usage: "sheaf glob <pattern> [--ref REF]",
     step: 6,
+    needsDaemon: true,
     options: { ...REF },
+    run: globCommand,
   },
 
   thread: {
@@ -215,45 +235,60 @@ export const REGISTRY: Record<string, CommandSpec> = {
         summary: "List threads",
         usage: "sheaf thread list [--path P] [--ref REF]",
         step: 6,
+        needsDaemon: true,
         options: { path: { type: "string" }, ...REF },
+        run: threadListCommand,
       },
       show: {
         name: "show",
         summary: "Show a thread",
         usage: "sheaf thread show <id>",
         step: 6,
+        needsDaemon: true,
+        run: threadShowCommand,
       },
       add: {
         name: "add",
         summary: "Start a new thread",
         usage:
-          "sheaf thread add --path P [--range from:to | --doc] -m MSG [--as ui|agent]",
+          "sheaf thread add --path P [--range from:to | --doc] -m MSG [--as ui|agent] [--ref REF]",
         step: 6,
+        needsDaemon: true,
         options: {
           path: { type: "string" },
           range: { type: "string" },
           doc: { type: "boolean" },
+          ...REF,
           ...AS_MESSAGE,
         },
+        run: threadAddCommand,
       },
       reply: {
         name: "reply",
         summary: "Reply to a thread",
         usage: "sheaf thread reply <id> -m MSG [--as ui|agent]",
         step: 6,
+        needsDaemon: true,
         options: { ...AS_MESSAGE },
+        run: threadReplyCommand,
       },
       resolve: {
         name: "resolve",
         summary: "Resolve a thread",
-        usage: "sheaf thread resolve <id>",
+        usage: "sheaf thread resolve <id> [--as ui|agent]",
         step: 6,
+        needsDaemon: true,
+        options: { as: { type: "string" } },
+        run: threadResolveCommand,
       },
       reopen: {
         name: "reopen",
         summary: "Reopen a thread",
-        usage: "sheaf thread reopen <id>",
+        usage: "sheaf thread reopen <id> [--as ui]",
         step: 6,
+        needsDaemon: true,
+        options: { as: { type: "string" } },
+        run: threadReopenCommand,
       },
     },
   },
