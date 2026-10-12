@@ -415,7 +415,7 @@ describe("MCP doc-scoping over HTTP", () => {
     try {
       const res = (await client.callTool({
         name: "ListThreads",
-        arguments: { ref: "main" },
+        arguments: {},
       })) as { structuredContent?: { threads: { id: string }[] } };
       return (res.structuredContent?.threads ?? []).map((t) => t.id).sort();
     } finally {

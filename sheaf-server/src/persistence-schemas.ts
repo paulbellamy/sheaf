@@ -20,28 +20,6 @@ import { z } from "zod";
  *  legitimate content (clipping would drop the whole record on the next write). */
 const MAX_FIELD_CHARS = 16 * 1024 * 1024;
 
-export const draftMetaSchema = z.object({
-  draft_id: z.string().regex(/^draft_[A-Za-z0-9]{6,64}(?:-[A-Za-z0-9]{1,64}){0,8}$/),
-  base_path: z.string().min(1).max(512),
-  intent: z.string().max(2048).optional(),
-  author: z.string().max(64),
-  state: z.enum(["open", "submitted", "accepted", "declined"]),
-  created_at: z.number().int(),
-  submitted_at: z.number().int().optional(),
-  name: z.string().max(256).optional(),
-  display_name: z.string().max(264).optional(),
-  touches: z.array(z.string().min(1).max(512)).max(64).optional(),
-  base_version: z.number().int().nonnegative().optional(),
-  parent_draft_id: z
-    .string()
-    .regex(/^draft_[A-Za-z0-9]{6,64}(?:-[A-Za-z0-9]{1,64}){0,8}$/)
-    .optional(),
-  // seed_prompt / note kept for backward compatibility with on-disk files
-  // written before the intent rename.
-  seed_prompt: z.string().max(2048).optional(),
-  note: z.string().max(2048).optional(),
-});
-
 /**
  * Stored thread target. Discriminated by `scope`:
  *   - `range` carries an anchor (rel_pos + anchored_text).
@@ -117,7 +95,6 @@ export const threadOnDiskSchema = z.preprocess(
     id: z.string().regex(/^thrd_[A-Za-z0-9]{6,64}(?:-[A-Za-z0-9]{1,64}){0,8}$/),
     created: z.number().int(),
     status: z.enum(["open", "accepted", "declined", "archived"]),
-    draft_id: z.string().optional(),
     targets: z.array(threadAnchorSchema).min(1).max(64),
     // A long-lived thread accretes replies; the file cap is the real bound, so
     // keep this generous rather than dropping a busy thread wholesale.

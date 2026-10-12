@@ -31,7 +31,7 @@ describe("StubBackend symlink safety", () => {
       return;
     }
     await fs.symlink(target, path.join(root, docPath));
-    await expect(backend.readDoc(docPath, "main")).rejects.toThrow();
+    await expect(backend.readDoc(docPath)).rejects.toThrow();
   });
 
   it("walk skips symlinks so listDocs does not surface them", async () => {

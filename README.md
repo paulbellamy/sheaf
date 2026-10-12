@@ -75,12 +75,12 @@ sheaf daemon  status | stop
 sheaf mcp     [--doc PATH] [--no-daemon]
 sheaf mcp install [client...] [--name NAME] [--dry-run]
 sheaf docs
-sheaf read    <path> [--ref REF]
-sheaf grep    <pattern> [--path P] [--glob G] [-i] [-A n] [-B n] [--multiline] [--head-limit n] [--output-mode M] [--ref REF]
-sheaf glob    <pattern> [--ref REF]
-sheaf thread  list    [--path P] [--ref REF]
+sheaf read    <path>
+sheaf grep    <pattern> [--path P] [--glob G] [-i] [-A n] [-B n] [--multiline] [--head-limit n] [--output-mode M]
+sheaf glob    <pattern>
+sheaf thread  list    [--path P]
 sheaf thread  show    <id>
-sheaf thread  add     --path P [--range from:to | --doc] -m MSG [--as ui|agent] [--ref REF]
+sheaf thread  add     --path P [--range from:to | --doc] -m MSG [--as ui|agent]
 sheaf thread  reply   <id> -m MSG [--as ui|agent]
 sheaf thread  resolve <id> [--as ui|agent]
 sheaf thread  reopen  <id> [--as ui]
@@ -94,7 +94,7 @@ sheaf events  follow  [--role agent|ui] [--since ID] [--exit-on-disconnect]
 | `mcp` | Run the stdio↔daemon MCP bridge (what agents connect to). |
 | `mcp install` | Write an absolute stdio MCP entry into an agent's config. |
 | `docs` | List the vault's documents. |
-| `read` | Print a doc's markdown (`--ref` for a draft). |
+| `read` | Print a doc's markdown. |
 | `grep` | Search doc contents (ripgrep-shaped: `-i`, `-A/-B`, output modes). |
 | `glob` | List docs matching a glob (`**/*.md`). |
 | `thread list` / `thread show` | List thread summaries / show one thread in full. |

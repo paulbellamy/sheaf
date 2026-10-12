@@ -149,15 +149,6 @@ describe("--no-daemon enforcement (dispatcher, not per-handler)", () => {
 describe("per-command flags parse", () => {
   // The step-6 verbs now have real handlers, so their flags are asserted at the
   // parse layer (running them would require a live daemon — see verbs.test.ts).
-  it("read <path> --ref REF", () => {
-    const { values, positionals } = parseCommand(
-      ["read", "notes.md", "--ref", "v3"],
-      REGISTRY.read.options,
-    );
-    expect(values.ref).toBe("v3");
-    expect(positionals).toEqual(["read", "notes.md"]);
-  });
-
   it("grep <pattern> with the ripgrep-shaped flags", () => {
     const { values } = parseCommand(
       ["grep", "foo", "-i", "-A", "2", "-B", "1", "--output-mode", "content"],

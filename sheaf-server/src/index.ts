@@ -27,7 +27,6 @@ export {
   McpError,
   type SheafErrorCode,
   type McpErrorCode,
-  type MergeConflictDetail,
   err,
   statusForCode,
   errorResult,
@@ -38,7 +37,6 @@ export {
 // Path validation helpers.
 export {
   assertThreadId,
-  assertDraftId,
   assertVaultPath,
   safeJoin,
 } from "./paths";

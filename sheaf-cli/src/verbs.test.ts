@@ -96,7 +96,6 @@ describe("sheaf read", () => {
     expect(j.code).toBe(0);
     const body = json<{
       path: string;
-      ref: string;
       md: string;
       version_counter: number;
       version_token: string;
@@ -105,7 +104,6 @@ describe("sheaf read", () => {
     // One flat object like the other verbs — no raw `content` array / footer.
     expect(body).toMatchObject({
       path: "note.md",
-      ref: "main",
       origin: "main",
       version_counter: 1,
     });

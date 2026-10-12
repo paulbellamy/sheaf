@@ -13,7 +13,6 @@ import { z } from "zod";
  *  narrow use-cases; bump only when a concrete need appears. */
 export const LIMITS = {
   path: 512,
-  ref: 128,
   author: 64,
   opId: 128,
   message: 10_000,
@@ -42,25 +41,6 @@ export const pathArg = z
   .describe(
     "Repo-root-relative (vault-relative) doc path, e.g. 'notes/proposal.md' or 'proposal.md'.",
   );
-
-export const refArg = z
-  .string()
-  .min(1)
-  .max(LIMITS.ref)
-  .describe(
-    "Ref to read from: 'main' or a draft id like 'draft_<uuid>' returned by Fork.",
-  );
-
-export const refOptionalArg = refArg
-  .optional()
-  .describe(
-    "Optional ref. Defaults to 'main'. Pass a draft_<uuid> from Fork to see draft state.",
-  );
-
-export const draftIdArg = z
-  .string()
-  .regex(/^draft_[A-Za-z0-9]{6,64}(?:-[A-Za-z0-9]{1,64}){0,8}$/)
-  .describe("Draft id returned by Fork, e.g. 'draft_<uuid>'.");
 
 export const threadIdArg = z
   .string()

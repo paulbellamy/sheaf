@@ -23,31 +23,29 @@ import { EXIT, usageError, type ExitCode } from "./io";
 import { callTool, firstText } from "./tool-call";
 
 /**
- * `sheaf read <path> [--ref REF]` → the `Read` tool.
+ * `sheaf read <path>` → the `Read` tool.
  *
  * Text mode prints the doc's markdown (the tool's first text block — the body,
- * without the `ref/version` footer the tool appends for agents). JSON mode emits
- * a clean domain object `{ path, ref, md, version_counter, version_token,
- * origin }`, parsed out of the tool's body + footer blocks, so consumers get
- * one flat object like the other verbs rather than the raw `content` array.
+ * without the `version` footer the tool appends for agents). JSON mode emits
+ * a clean domain object `{ path, md, version_counter, version_token, origin }`,
+ * parsed out of the tool's body + footer blocks, so consumers get one flat
+ * object like the other verbs rather than the raw `content` array.
  */
 export async function readCommand(ctx: RunContext): Promise<ExitCode> {
   requireDaemonAllowed(ctx.globals, "sheaf read");
 
   const path = ctx.positionals[0];
   if (path === undefined) throw usageError("sheaf read requires a <path>");
-  const ref = strFlag(ctx.values, "ref");
 
   const client = await connectDaemon(ctx.vault, ctx.io.env);
   try {
     const mcp = await client.mcp();
     const result = await callTool(mcp, "Read", {
       file_path: path,
-      ...(ref !== undefined ? { ref } : {}),
     });
 
     // The Read tool emits two text blocks: [0] the doc body, [1] a
-    // `--\nref: … v: … version_token: … origin: …` footer.
+    // `--\nv: … version_token: … origin: …` footer.
     const blocks = (result.content ?? []).filter(
       (b): b is { type: "text"; text: string } =>
         b.type === "text" && typeof b.text === "string",
@@ -55,7 +53,7 @@ export async function readCommand(ctx: RunContext): Promise<ExitCode> {
     const md = blocks[0]?.text ?? firstText(result) ?? "";
 
     if (ctx.out.format === "json") {
-      ctx.out.json(parseReadResult(path, ref, md, blocks[1]?.text));
+      ctx.out.json(parseReadResult(path, md, blocks[1]?.text));
       return EXIT.OK;
     }
     ctx.out.text(md);
@@ -65,29 +63,27 @@ export async function readCommand(ctx: RunContext): Promise<ExitCode> {
   }
 }
 
-/** The Read tool's footer, e.g. `--\nref: main  v: 1  version_token: v-ab  origin: main`. */
+/** The Read tool's footer, e.g. `--\nv: 1  version_token: v-ab  origin: main`. */
 const READ_FOOTER_RE =
-  /ref:\s*(\S+)\s+v:\s*(\d+)\s+version_token:\s*(\S+)\s+origin:\s*(\S+)/;
+  /v:\s*(\d+)\s+version_token:\s*(\S+)\s+origin:\s*(\S+)/;
 
 /**
  * Fold the Read tool's body + footer blocks into a flat domain object. The
  * footer is deterministic (see `sheaf-server/src/tools/read.ts`); if it ever
- * fails to parse, the doc `md` and requested `ref` still come through.
+ * fails to parse, the doc `md` still comes through.
  */
 function parseReadResult(
   path: string,
-  requestedRef: string | undefined,
   md: string,
   footer: string | undefined,
 ): Record<string, unknown> {
   const m = footer ? READ_FOOTER_RE.exec(footer) : null;
   return {
     path,
-    ref: m?.[1] ?? requestedRef ?? "main",
     md,
-    ...(m ? { version_counter: Number(m[2]) } : {}),
-    ...(m ? { version_token: m[3] } : {}),
-    ...(m ? { origin: m[4] } : {}),
+    ...(m ? { version_counter: Number(m[1]) } : {}),
+    ...(m ? { version_token: m[2] } : {}),
+    ...(m ? { origin: m[3] } : {}),
   };
 }
 
@@ -111,7 +107,7 @@ function parseOutputMode(value: unknown): GrepOutputMode | undefined {
 
 /**
  * `sheaf grep <pattern> [--path][--glob][-i][-A n][-B n][--multiline]
- * [--head-limit n][--output-mode][--ref]` → the `Grep` tool.
+ * [--head-limit n][--output-mode]` → the `Grep` tool.
  *
  * The tool returns a discriminated `GrepResult` as `structuredContent`; JSON
  * mode emits it raw. Text mode renders per output mode: `path:line: text` (with
@@ -130,7 +126,6 @@ export async function grepCommand(ctx: RunContext): Promise<ExitCode> {
   const headLimit = intFlag(ctx.values, "head-limit", "--head-limit", 1);
   const path = strFlag(ctx.values, "path");
   const glob = strFlag(ctx.values, "glob");
-  const ref = strFlag(ctx.values, "ref");
 
   // The Grep tool's input keys mirror ripgrep's flags (`-i`/`-A`/`-B`), which is
   // why they're passed under those exact names rather than the backend's
@@ -144,7 +139,6 @@ export async function grepCommand(ctx: RunContext): Promise<ExitCode> {
   if (ctx.values.multiline === true) args.multiline = true;
   if (headLimit !== undefined) args.head_limit = headLimit;
   if (outputMode !== undefined) args.output_mode = outputMode;
-  if (ref !== undefined) args.ref = ref;
 
   const client = await connectDaemon(ctx.vault, ctx.io.env);
   try {
@@ -235,7 +229,7 @@ function renderGrepContent(
 }
 
 /**
- * `sheaf glob <pattern> [--ref REF]` → the `Glob` tool. Prints one matching doc
+ * `sheaf glob <pattern>` → the `Glob` tool. Prints one matching doc
  * path per line (text) or the raw `{ matches }` payload (`--format json`).
  */
 export async function globCommand(ctx: RunContext): Promise<ExitCode> {
@@ -243,14 +237,12 @@ export async function globCommand(ctx: RunContext): Promise<ExitCode> {
 
   const pattern = ctx.positionals[0];
   if (pattern === undefined) throw usageError("sheaf glob requires a <pattern>");
-  const ref = strFlag(ctx.values, "ref");
 
   const client = await connectDaemon(ctx.vault, ctx.io.env);
   try {
     const mcp = await client.mcp();
     const result = await callTool(mcp, "Glob", {
       pattern,
-      ...(ref !== undefined ? { ref } : {}),
     });
     const matches =
       (result.structuredContent as { matches?: DocSummary[] } | undefined)

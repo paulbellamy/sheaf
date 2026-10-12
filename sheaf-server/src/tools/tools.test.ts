@@ -61,48 +61,9 @@ const threadsGET = (req: Request) => dispatch(req);
 const threadsPOST = (req: Request) => dispatch(req);
 const reopenPOST = (req: Request, _ctx?: unknown) => dispatch(req);
 const resolvePOST = (req: Request, _ctx?: unknown) => dispatch(req);
+const replyPOST = (req: Request, _ctx?: unknown) => dispatch(req);
 
-describe("backend.draftChanges on an empty draft", () => {
-  let root: string;
-  let backend: StubBackend;
-
-  beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
-    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
-      recursive: true,
-    });
-    await fs.writeFile(
-      path.join(root, "workspaces", "ws", "docs", "a.md"),
-      "# a\n",
-    );
-    backend = new StubBackend(root);
-  });
-
-  afterEach(async () => {
-    await fs.rm(root, { recursive: true, force: true });
-  });
-
-  it("returns the base_path entry for a fresh draft with no writes (main_md === draft_md)", async () => {
-    const [draftId] = await backend.fork("workspaces/ws/docs/a.md", 1);
-    const changes = await backend.draftChanges(draftId);
-    expect(changes).toHaveLength(1);
-    expect(changes[0].path).toBe("workspaces/ws/docs/a.md");
-    expect(changes[0].main_md).toBe("# a\n");
-    expect(changes[0].draft_md).toBe("# a\n");
-  });
-
-  it("returns pairs after a write", async () => {
-    const [draftId] = await backend.fork("workspaces/ws/docs/a.md", 1);
-    await backend.writeDoc("workspaces/ws/docs/a.md", draftId, "# a v2\n");
-    const changes = await backend.draftChanges(draftId);
-    expect(changes).toHaveLength(1);
-    expect(changes[0].path).toBe("workspaces/ws/docs/a.md");
-    expect(changes[0].main_md).toBe("# a\n");
-    expect(changes[0].draft_md).toBe("# a v2\n");
-  });
-});
-
-describe("threads route accepts ref=main (thread-on-doc mode)", () => {
+describe("threads route (thread-on-doc)", () => {
   let root: string;
   let backend: StubBackend;
   const docPath = "workspaces/ws/docs/a.md";
@@ -125,8 +86,8 @@ describe("threads route accepts ref=main (thread-on-doc mode)", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("POST creates a thread anchored to main and returns 201", async () => {
-    const req = new Request("http://localhost/api/ui/threads?ref=main", {
+  it("POST creates a thread anchored to the doc and returns 201", async () => {
+    const req = new Request("http://localhost/api/ui/threads", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -141,27 +102,23 @@ describe("threads route accepts ref=main (thread-on-doc mode)", () => {
     expect(body.thread_id).toMatch(/^thrd_/);
   });
 
-  it("GET returns threads anchored to main", async () => {
+  it("GET returns a doc's threads (no ?ref)", async () => {
     await backend.addThread({
       targets: [{ path: docPath, char_range: { from: 0, to: 5 } }],
       message: "tighten this",
       author: "user",
     });
     const req = new Request(
-      `http://localhost/api/ui/threads?path=${encodeURIComponent(docPath)}&ref=main`,
+      `http://localhost/api/ui/threads?path=${encodeURIComponent(docPath)}`,
     );
     const res = await threadsGET(req);
     expect(res.status).toBe(200);
-    const body = (await res.json()) as {
-      ref: string;
-      threads: { id: string }[];
-    };
-    expect(body.ref).toBe("main");
+    const body = (await res.json()) as { threads: { id: string }[] };
     expect(body.threads.length).toBeGreaterThan(0);
   });
 });
 
-describe("writeDoc/editDoc accept ref=main (thread-on-doc mode)", () => {
+describe("writeDoc/editDoc land on the doc (thread-on-doc)", () => {
   let root: string;
   let backend: StubBackend;
   const docPath = "workspaces/ws/docs/a.md";
@@ -182,10 +139,10 @@ describe("writeDoc/editDoc accept ref=main (thread-on-doc mode)", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("writeDoc(main) lands on disk and emits doc_changed", async () => {
+  it("writeDoc lands on disk and emits doc_changed", async () => {
     const events: BackendEvent[] = [];
     backend.subscribe((e) => events.push(e));
-    await backend.writeDoc(docPath, "main", "rewritten");
+    await backend.writeDoc(docPath, "rewritten");
     const onDisk = await fs.readFile(
       path.join(root, "workspaces", "ws", "docs", "a.md"),
       "utf8",
@@ -194,10 +151,10 @@ describe("writeDoc/editDoc accept ref=main (thread-on-doc mode)", () => {
     expect(events).toContainEqual({ kind: "doc_changed", path: docPath });
   });
 
-  it("editDoc(main) replaces in place and emits doc_changed", async () => {
+  it("editDoc replaces in place and emits doc_changed", async () => {
     const events: BackendEvent[] = [];
     backend.subscribe((e) => events.push(e));
-    await backend.editDoc(docPath, "main", "world", "obsidian", false);
+    await backend.editDoc(docPath, "world", "obsidian", false);
     const onDisk = await fs.readFile(
       path.join(root, "workspaces", "ws", "docs", "a.md"),
       "utf8",
@@ -243,7 +200,7 @@ describe("doc-level threads (scope=doc)", () => {
   });
 
   it("HTTP POST without char_range creates a doc-level thread", async () => {
-    const req = new Request("http://localhost/api/ui/threads?ref=main", {
+    const req = new Request("http://localhost/api/ui/threads", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -260,7 +217,7 @@ describe("doc-level threads (scope=doc)", () => {
   });
 
   it("HTTP POST with char_range still creates a range thread (back-compat)", async () => {
-    const req = new Request("http://localhost/api/ui/threads?ref=main", {
+    const req = new Request("http://localhost/api/ui/threads", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -290,7 +247,7 @@ describe("doc-level threads (scope=doc)", () => {
   });
 });
 
-describe("resolve route does NOT auto-apply variants to main (thread-on-doc)", () => {
+describe("resolve route does NOT auto-apply options to the doc", () => {
   let root: string;
   let backend: StubBackend;
   const docPath = "workspaces/ws/docs/a.md";
@@ -314,9 +271,9 @@ describe("resolve route does NOT auto-apply variants to main (thread-on-doc)", (
   });
 
   // Thread-on-doc options are a choice routed back to the agent, not a literal
-  // diff. Picking one must NOT write the option's new_md to the doc — the agent
-  // makes the real edit. (Auto-apply is a draft-mode-only behavior; see below.)
-  it("leaves a range-anchored doc untouched when an option is chosen", async () => {
+  // diff. Resolving must NOT write the option's new_md to the doc — the agent
+  // makes the real edit.
+  it("leaves a range-anchored doc untouched when resolved", async () => {
     const threadId = await backend.addThread({
       targets: [{ path: docPath, scope: "range", char_range: { from: 0, to: 5 } }],
       message: "punchier",
@@ -332,24 +289,18 @@ describe("resolve route does NOT auto-apply variants to main (thread-on-doc)", (
     });
 
     const req = new Request(
-      `http://localhost/api/ui/threads/${threadId}/resolve?option_index=1`,
+      `http://localhost/api/ui/threads/${threadId}/resolve`,
       { method: "POST" },
     );
-    const ctx = { params: Promise.resolve({ id: threadId }) };
-    const res = await resolvePOST(req, ctx);
+    const res = await resolvePOST(req);
     expect(res.status).toBe(200);
-    // Read the clean prose (the doc now carries inline review markup); the
-    // option's new_md must not have been applied to it.
-    const { md: onDisk } = await backend.readDoc(
-      "workspaces/ws/docs/a.md",
-      "main",
-    );
+    const { md: onDisk } = await backend.readDoc("workspaces/ws/docs/a.md");
     expect(onDisk).toBe("hello world"); // unchanged — agent will make the edit
     const thread = await backend.readThread(threadId);
     expect(thread.status).toBe("accepted");
   });
 
-  it("leaves a doc-scope doc untouched when an option is chosen", async () => {
+  it("leaves a doc-scope doc untouched when resolved", async () => {
     const threadId = await backend.addThread({
       targets: [{ path: docPath, scope: "doc" }],
       message: "rewrite",
@@ -364,114 +315,17 @@ describe("resolve route does NOT auto-apply variants to main (thread-on-doc)", (
     });
 
     const req = new Request(
-      `http://localhost/api/ui/threads/${threadId}/resolve?option_index=0`,
+      `http://localhost/api/ui/threads/${threadId}/resolve`,
       { method: "POST" },
     );
-    const ctx = { params: Promise.resolve({ id: threadId }) };
-    const res = await resolvePOST(req, ctx);
+    const res = await resolvePOST(req);
     expect(res.status).toBe(200);
-    // Read the clean prose (the doc now carries inline review markup); the
-    // option's new_md must not have been applied to it.
-    const { md: onDisk } = await backend.readDoc(
-      "workspaces/ws/docs/a.md",
-      "main",
-    );
+    const { md: onDisk } = await backend.readDoc("workspaces/ws/docs/a.md");
     expect(onDisk).toBe("hello world"); // unchanged
-  });
-
-  it("?apply=false resolves without applying any variant", async () => {
-    const threadId = await backend.addThread({
-      targets: [{ path: docPath, scope: "range", char_range: { from: 0, to: 5 } }],
-      message: "fix",
-      author: "user",
-    });
-    await backend.attachDraftPayload(threadId, {
-      author: "agent",
-      draft_options: [
-        { name: "a", new_md: "AAA" },
-        { name: "b", new_md: "BBB" },
-      ],
-    });
-
-    const req = new Request(
-      `http://localhost/api/ui/threads/${threadId}/resolve?apply=false`,
-      { method: "POST" },
-    );
-    const ctx = { params: Promise.resolve({ id: threadId }) };
-    const res = await resolvePOST(req, ctx);
-    expect(res.status).toBe(200);
-    // Read the clean prose (the doc now carries inline review markup); the
-    // option's new_md must not have been applied to it.
-    const { md: onDisk } = await backend.readDoc(
-      "workspaces/ws/docs/a.md",
-      "main",
-    );
-    expect(onDisk).toBe("hello world"); // unchanged
-    const thread = await backend.readThread(threadId);
-    expect(thread.status).toBe("accepted");
   });
 });
 
-describe("resolve route applies the chosen variant to the draft ref (draft mode)", () => {
-  let root: string;
-  let backend: StubBackend;
-  const docPath = "workspaces/ws/docs/a.md";
-
-  beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-apply-draft-"));
-    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
-      recursive: true,
-    });
-    await fs.writeFile(
-      path.join(root, "workspaces", "ws", "docs", "a.md"),
-      "hello world",
-    );
-    backend = new StubBackend(root);
-    setBackend(backend);
-  });
-
-  afterEach(async () => {
-    setBackend(null);
-    await fs.rm(root, { recursive: true, force: true });
-  });
-
-  it("applies the chosen option to the draft, leaving main untouched", async () => {
-    const [draftId] = await backend.fork(docPath, 1);
-    const threadId = await backend.addThread({
-      targets: [{ path: docPath, scope: "doc" }],
-      message: "rewrite",
-      author: "user",
-      ref: draftId,
-    });
-    await backend.attachDraftPayload(threadId, {
-      author: "agent",
-      draft_options: [
-        { name: "minimal", new_md: "# A\nMinimal.\n" },
-        { name: "verbose", new_md: "# A\nVerbose.\n" },
-      ],
-    });
-
-    const req = new Request(
-      `http://localhost/api/ui/threads/${threadId}/resolve?option_index=1`,
-      { method: "POST" },
-    );
-    const ctx = { params: Promise.resolve({ id: threadId }) };
-    const res = await resolvePOST(req, ctx);
-    expect(res.status).toBe(200);
-
-    // main is untouched — draft mode applies to the draft ref, reviewable.
-    const mainOnDisk = await fs.readFile(
-      path.join(root, "workspaces", "ws", "docs", "a.md"),
-      "utf8",
-    );
-    expect(mainOnDisk).toBe("hello world");
-    // ...but the draft carries the chosen leaf.
-    const draftView = await backend.readDoc(docPath, draftId);
-    expect(draftView.md).toBe("# A\nVerbose.\n");
-  });
-});
-
-describe("backend.readDoc version_counter (Phase B)", () => {
+describe("backend.readDoc version_counter", () => {
   let root: string;
   let backend: StubBackend;
 
@@ -504,26 +358,8 @@ describe("backend.readDoc version_counter (Phase B)", () => {
     expect((result as { version?: unknown }).version).toBeUndefined();
   });
 
-  it("does not bump version_counter on writeDoc (Phase I bumps on accept)", async () => {
-    const [draftId] = await backend.fork("workspaces/ws/docs/a.md", 1);
-    await backend.writeDoc(
-      "workspaces/ws/docs/a.md",
-      draftId,
-      "# a edited\n",
-    );
-    const main = await backend.readDoc("workspaces/ws/docs/a.md");
-    expect(main.version_counter).toBe(1);
-    const draft = await backend.readDoc("workspaces/ws/docs/a.md", draftId);
-    expect(draft.version_counter).toBe(1);
-  });
-
   it("writeDoc result carries version_token (renamed from version)", async () => {
-    const [draftId] = await backend.fork("workspaces/ws/docs/a.md", 1);
-    const result = await backend.writeDoc(
-      "workspaces/ws/docs/a.md",
-      draftId,
-      "# a v2\n",
-    );
+    const result = await backend.writeDoc("workspaces/ws/docs/a.md", "# a v2\n");
     expect(typeof result.version_token).toBe("string");
     expect(result.version_token).toMatch(/^v-/);
     expect((result as { version?: unknown }).version).toBeUndefined();
@@ -587,9 +423,9 @@ describe("operates on any vault doc (not just workspaces/)", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("reads and edits a root-level doc on main", async () => {
-    expect((await backend.readDoc("note.md", "main")).md).toBe("hello world");
-    await backend.editDoc("note.md", "main", "world", "vault", false);
+  it("reads and edits a root-level doc", async () => {
+    expect((await backend.readDoc("note.md")).md).toBe("hello world");
+    await backend.editDoc("note.md", "world", "vault", false);
     const onDisk = await fs.readFile(path.join(root, "note.md"), "utf8");
     expect(onDisk).toBe("hello vault");
   });
@@ -608,156 +444,22 @@ describe("operates on any vault doc (not just workspaces/)", () => {
     expect(raw).toContain(id);
     expect(raw).toContain("comment on any doc");
     // The clean prose is unchanged by the doc-level comment.
-    expect((await backend.readDoc("notes/x.md", "main")).md).toBe("hello world");
-    const threads = await backend.listThreads({ path: "notes/x.md", ref: "main" });
+    expect((await backend.readDoc("notes/x.md")).md).toBe("hello world");
+    const threads = await backend.listThreads({ path: "notes/x.md" });
     expect(threads.map((t) => t.id)).toContain(id);
   });
 
   it("rejects writes to dot-prefixed (infra) paths", async () => {
     await expect(
-      backend.writeDoc(".drafts/evil.md", "main", "x"),
+      backend.writeDoc(".git/evil.md", "x"),
     ).rejects.toThrow();
     await expect(
-      backend.writeDoc(".obsidian/x.md", "main", "x"),
+      backend.writeDoc(".obsidian/x.md", "x"),
     ).rejects.toThrow();
   });
 });
 
-describe("backend.forkAndAttachThreads (Phase C)", () => {
-  let root: string;
-  let backend: StubBackend;
-  const DOC = "workspaces/ws/docs/a.md";
-
-  beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
-    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
-      recursive: true,
-    });
-    await fs.writeFile(
-      path.join(root, "workspaces", "ws", "docs", "a.md"),
-      "# title\n\nbody one\n\nbody two\n",
-    );
-    backend = new StubBackend(root);
-  });
-
-  afterEach(async () => {
-    await fs.rm(root, { recursive: true, force: true });
-  });
-
-  it("creates the draft, persists threads, and emits one draft_created + N thread_changed", async () => {
-    const events: BackendEvent[] = [];
-    backend.subscribe((e) => events.push(e));
-
-    const result = await backend.forkAndAttachThreads({
-      base_path: DOC,
-      base_version: 1,
-      name: "v2 depth-first",
-      author: "alice",
-      initial_threads: [
-        {
-          targets: [{ path: DOC, char_range: { from: 0, to: 7 } }],
-          message: "scope",
-        },
-        {
-          targets: [{ path: DOC, char_range: { from: 9, to: 17 } }],
-          message: "tighten",
-        },
-      ],
-    });
-
-    expect(result.draft_id).toMatch(/^draft_/);
-    expect(result.base_version).toBe(1);
-    // display_name = "<name> #<4hex>" where 4hex is the first 4 chars after `draft_`.
-    const suffix = result.draft_id.slice("draft_".length, "draft_".length + 4);
-    expect(result.display_name).toBe(`v2 depth-first #${suffix}`);
-
-    // Drafts list reflects new shape (touches + base_version + display_name).
-    const drafts = await backend.listDrafts();
-    const created = drafts.find((d) => d.draft_id === result.draft_id);
-    expect(created).toBeDefined();
-    expect(created!.touches).toEqual([DOC]);
-    expect(created!.base_version).toBe(1);
-    expect(created!.display_name).toBe(`v2 depth-first #${suffix}`);
-
-    // Threads landed on the new draft ref.
-    const threads = await backend.listThreads({ ref: result.draft_id });
-    expect(threads).toHaveLength(2);
-
-    // Atomicity / event budget: one draft_created, two thread_changed.
-    const created_events = events.filter((e) => e.kind === "draft_created");
-    const thread_events = events.filter((e) => e.kind === "thread_changed");
-    expect(created_events).toHaveLength(1);
-    expect(thread_events).toHaveLength(2);
-  });
-
-  it("works with zero initial_threads (allowed; no thread_changed events)", async () => {
-    const events: BackendEvent[] = [];
-    backend.subscribe((e) => events.push(e));
-
-    const result = await backend.forkAndAttachThreads({
-      base_path: DOC,
-      base_version: 1,
-      name: "empty",
-      initial_threads: [],
-    });
-
-    expect(result.draft_id).toMatch(/^draft_/);
-    const thread_events = events.filter((e) => e.kind === "thread_changed");
-    expect(thread_events).toHaveLength(0);
-  });
-});
-describe("backend open_count derivation (Phase D)", () => {
-  let root: string;
-  let backend: StubBackend;
-  const DOC = "workspaces/ws/docs/a.md";
-
-  beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
-    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
-      recursive: true,
-    });
-    await fs.writeFile(
-      path.join(root, "workspaces", "ws", "docs", "a.md"),
-      "# title\n\nbody one\n\nbody two\n",
-    );
-    backend = new StubBackend(root);
-  });
-
-  afterEach(async () => {
-    await fs.rm(root, { recursive: true, force: true });
-  });
-
-  it("open_count drops when a thread is resolved", async () => {
-    const { draft_id } = await backend.forkAndAttachThreads({
-      base_path: DOC,
-      base_version: 1,
-      name: "v2",
-      initial_threads: [
-        {
-          targets: [{ path: DOC, char_range: { from: 0, to: 7 } }],
-          message: "a",
-        },
-        {
-          targets: [{ path: DOC, char_range: { from: 9, to: 17 } }],
-          message: "b",
-        },
-      ],
-    });
-
-    const before = await backend.listThreads({ ref: draft_id });
-    const beforeOpen = before.filter((t) => t.status === "open").length;
-    expect(beforeOpen).toBe(2);
-
-    const firstId = before[0].id;
-    await backend.resolveThread(firstId);
-
-    const after = await backend.listThreads({ ref: draft_id });
-    const afterOpen = after.filter((t) => t.status === "open").length;
-    expect(afterOpen).toBe(1);
-  });
-});
-
-describe("backend.subscribe agent_presence (Phase E)", () => {
+describe("backend.subscribe agent_presence", () => {
   let root: string;
   let backend: StubBackend;
 
@@ -869,12 +571,12 @@ describe("emit does not echo agent-origin mutations back to the agent", () => {
     backend.subscribe((e) => uiEvents.push(e), { role: "ui" });
     backend.subscribe((e) => agentEvents.push(e), { role: "agent" });
 
-    await backend.writeDoc(docPath, "main", "v2", undefined, "agent");
+    await backend.writeDoc(docPath, "v2", undefined, "agent");
     expect(uiEvents.filter((e) => e.kind === "doc_changed")).toHaveLength(1);
     expect(agentEvents.filter((e) => e.kind === "doc_changed")).toHaveLength(0);
 
     // A user-origin edit (default) is still delivered to the agent.
-    await backend.writeDoc(docPath, "main", "v3");
+    await backend.writeDoc(docPath, "v3");
     expect(agentEvents.filter((e) => e.kind === "doc_changed")).toHaveLength(1);
   });
 
@@ -920,12 +622,12 @@ describe("resumable event stream (sinceId replay)", () => {
     const unsub = backend.subscribe((_e, id) => {
       if (id) lastId = id;
     });
-    await backend.writeDoc(docPath, "main", "v2");
+    await backend.writeDoc(docPath, "v2");
     expect(lastId).toBeDefined();
     unsub();
 
     // Missed while disconnected.
-    await backend.writeDoc(docPath, "main", "v3");
+    await backend.writeDoc(docPath, "v3");
 
     const resumed: BackendEvent[] = [];
     backend.subscribe((e) => resumed.push(e), { sinceId: lastId });
@@ -941,12 +643,12 @@ describe("resumable event stream (sinceId replay)", () => {
       },
       { role: "agent" },
     );
-    await backend.writeDoc(docPath, "main", "v2");
+    await backend.writeDoc(docPath, "v2");
     unsub();
 
     // Missed while disconnected: one of the agent's own, one from the user.
-    await backend.writeDoc(docPath, "main", "v3", undefined, "agent");
-    await backend.writeDoc(docPath, "main", "v4");
+    await backend.writeDoc(docPath, "v3", undefined, "agent");
+    await backend.writeDoc(docPath, "v4");
 
     const resumed: BackendEvent[] = [];
     backend.subscribe((e) => resumed.push(e), {
@@ -969,12 +671,12 @@ describe("resumable event stream (sinceId replay)", () => {
     const unsub = backend.subscribe((_e, id) => {
       firstId = firstId ?? id;
     });
-    await backend.writeDoc(docPath, "main", "v2");
+    await backend.writeDoc(docPath, "v2");
     unsub();
 
     // Push the first id past the replay-buffer horizon.
     for (let i = 0; i < 300; i++) {
-      await backend.writeDoc(docPath, "main", `v${i + 3}`);
+      await backend.writeDoc(docPath, `v${i + 3}`);
     }
 
     const events: BackendEvent[] = [];
@@ -984,7 +686,7 @@ describe("resumable event stream (sinceId replay)", () => {
   });
 });
 
-describe("backend.attachDraftPayload (Phase F)", () => {
+describe("backend.attachDraftPayload", () => {
   let root: string;
   let backend: StubBackend;
   const DOC = "workspaces/ws/docs/a.md";
@@ -1005,30 +707,26 @@ describe("backend.attachDraftPayload (Phase F)", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("appends a system-style message carrying the single `draft` payload and emits thread_changed", async () => {
-    const { draft_id } = await backend.forkAndAttachThreads({
-      base_path: DOC,
-      base_version: 1,
-      name: "v2",
-      initial_threads: [
-        {
-          targets: [{ path: DOC, char_range: { from: 9, to: 17 } }],
-          message: "tighten",
-        },
-      ],
+  const seedThread = () =>
+    backend.addThread({
+      targets: [{ path: DOC, char_range: { from: 9, to: 17 } }],
+      message: "tighten",
+      author: "user",
     });
-    const [t] = await backend.listThreads({ ref: draft_id });
+
+  it("appends a system-style message carrying the single `draft` payload and emits thread_changed", async () => {
+    const id = await seedThread();
 
     const events: BackendEvent[] = [];
     backend.subscribe((e) => events.push(e), { role: "ui" });
     events.length = 0;
 
-    await backend.attachDraftPayload(t.id, {
+    await backend.attachDraftPayload(id, {
       message: "cut ~40%, same beats",
       draft: { new_md: "tightened body\n" },
     });
 
-    const after = await backend.readThread(t.id);
+    const after = await backend.readThread(id);
     const last = after.messages[after.messages.length - 1];
     expect(last.body).toBe("cut ~40%, same beats");
     expect(last.draft).toEqual({ new_md: "tightened body\n" });
@@ -1040,20 +738,9 @@ describe("backend.attachDraftPayload (Phase F)", () => {
   });
 
   it("appends a system-style message carrying multi-leaf `draft_options`", async () => {
-    const { draft_id } = await backend.forkAndAttachThreads({
-      base_path: DOC,
-      base_version: 1,
-      name: "v2",
-      initial_threads: [
-        {
-          targets: [{ path: DOC, char_range: { from: 9, to: 17 } }],
-          message: "rewrite",
-        },
-      ],
-    });
-    const [t] = await backend.listThreads({ ref: draft_id });
+    const id = await seedThread();
 
-    await backend.attachDraftPayload(t.id, {
+    await backend.attachDraftPayload(id, {
       message: "two angles; pick one",
       draft_options: [
         { name: "option a", description: "deeper, longer", new_md: "depth\n" },
@@ -1061,7 +748,7 @@ describe("backend.attachDraftPayload (Phase F)", () => {
       ],
     });
 
-    const after = await backend.readThread(t.id);
+    const after = await backend.readThread(id);
     const last = after.messages[after.messages.length - 1];
     // The optional per-option `description` round-trips; absent on others.
     expect(last.draft_options).toEqual([
@@ -1072,40 +759,16 @@ describe("backend.attachDraftPayload (Phase F)", () => {
   });
 
   it("rejects calls with neither `draft` nor `draft_options` set", async () => {
-    const { draft_id } = await backend.forkAndAttachThreads({
-      base_path: DOC,
-      base_version: 1,
-      name: "v2",
-      initial_threads: [
-        {
-          targets: [{ path: DOC, char_range: { from: 9, to: 17 } }],
-          message: "tighten",
-        },
-      ],
-    });
-    const [t] = await backend.listThreads({ ref: draft_id });
-
+    const id = await seedThread();
     await expect(
-      backend.attachDraftPayload(t.id, { message: "no payload" }),
+      backend.attachDraftPayload(id, { message: "no payload" }),
     ).rejects.toThrow();
   });
 
   it("rejects calls with both `draft` and `draft_options` set simultaneously", async () => {
-    const { draft_id } = await backend.forkAndAttachThreads({
-      base_path: DOC,
-      base_version: 1,
-      name: "v2",
-      initial_threads: [
-        {
-          targets: [{ path: DOC, char_range: { from: 9, to: 17 } }],
-          message: "tighten",
-        },
-      ],
-    });
-    const [t] = await backend.listThreads({ ref: draft_id });
-
+    const id = await seedThread();
     await expect(
-      backend.attachDraftPayload(t.id, {
+      backend.attachDraftPayload(id, {
         draft: { new_md: "x\n" },
         draft_options: [
           { name: "a", new_md: "x\n" },
@@ -1115,445 +778,8 @@ describe("backend.attachDraftPayload (Phase F)", () => {
     ).rejects.toThrow();
   });
 });
-describe("backend.fork(parent=...) sub-drafts (Phase G)", () => {
-  let root: string;
-  let backend: StubBackend;
-  const DOC = "workspaces/ws/docs/a.md";
 
-  beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
-    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
-      recursive: true,
-    });
-    await fs.writeFile(
-      path.join(root, "workspaces", "ws", "docs", "a.md"),
-      "# title\n\nbody one\n",
-    );
-    backend = new StubBackend(root);
-  });
-
-  afterEach(async () => {
-    await fs.rm(root, { recursive: true, force: true });
-  });
-
-  it("backwards compat: fork(path, n) without parent leaves parent_draft_id undefined", async () => {
-    const [id] = await backend.fork(DOC, 1);
-    const drafts = await backend.listDrafts();
-    const created = drafts.find((d) => d.draft_id === id);
-    expect(created).toBeDefined();
-    expect(created!.parent_draft_id).toBeUndefined();
-  });
-
-  it("fork with parent returns sub-drafts whose parent_draft_id matches", async () => {
-    const [parentId] = await backend.fork(DOC, 1);
-    const subIds = await backend.fork(DOC, 2, undefined, undefined, parentId);
-    expect(subIds).toHaveLength(2);
-
-    const drafts = await backend.listDrafts();
-    for (const subId of subIds) {
-      const sub = drafts.find((d) => d.draft_id === subId);
-      expect(sub).toBeDefined();
-      expect(sub!.parent_draft_id).toBe(parentId);
-      expect(sub!.base_path).toBe(DOC);
-    }
-  });
-
-  it("a sub-draft sees the parent's edits, not main", async () => {
-    const [parentId] = await backend.fork(DOC, 1);
-    await backend.writeDoc(DOC, parentId, "# title\n\nparent edit\n");
-
-    const [subId] = await backend.fork(DOC, 1, undefined, undefined, parentId);
-    const subView = await backend.readDoc(DOC, subId);
-    expect(subView.md).toBe("# title\n\nparent edit\n");
-
-    // Main is unchanged.
-    const mainView = await backend.readDoc(DOC, "main");
-    expect(mainView.md).toBe("# title\n\nbody one\n");
-  });
-
-  it("a sub-draft's working copy is independent of the parent after fork", async () => {
-    const [parentId] = await backend.fork(DOC, 1);
-    await backend.writeDoc(DOC, parentId, "# title\n\nparent v1\n");
-    const [subId] = await backend.fork(DOC, 1, undefined, undefined, parentId);
-
-    // Edit the parent again; the sub-draft should keep its snapshot.
-    await backend.writeDoc(DOC, parentId, "# title\n\nparent v2\n");
-    const subView = await backend.readDoc(DOC, subId);
-    expect(subView.md).toBe("# title\n\nparent v1\n");
-
-    // Edit only the sub-draft; the parent should be unaffected.
-    await backend.writeDoc(DOC, subId, "# title\n\nsub edit\n");
-    const parentView = await backend.readDoc(DOC, parentId);
-    expect(parentView.md).toBe("# title\n\nparent v2\n");
-  });
-
-  it("sub-draft inherits base_version from the parent (lineage back to main)", async () => {
-    const [parentId] = await backend.fork(DOC, 1);
-    const [parentSummary] = (await backend.listDrafts()).filter(
-      (d) => d.draft_id === parentId,
-    );
-    const [subId] = await backend.fork(DOC, 1, undefined, undefined, parentId);
-    const drafts = await backend.listDrafts();
-    const sub = drafts.find((d) => d.draft_id === subId);
-    expect(sub!.base_version).toBe(parentSummary.base_version);
-  });
-
-  it("rejects fork(parent=...) when path differs from the parent's base_path", async () => {
-    await fs.writeFile(
-      path.join(root, "workspaces", "ws", "docs", "b.md"),
-      "# b\n",
-    );
-    const OTHER = "workspaces/ws/docs/b.md";
-    const [parentId] = await backend.fork(DOC, 1);
-    await expect(
-      backend.fork(OTHER, 1, undefined, undefined, parentId),
-    ).rejects.toThrow();
-  });
-
-  it("_cascadeDeclineSubDrafts declines all unaccepted sub-drafts of the parent", async () => {
-    const [parentId] = await backend.fork(DOC, 1);
-    const [a, b, c] = await backend.fork(
-      DOC,
-      3,
-      undefined,
-      undefined,
-      parentId,
-    );
-    // Mark one sub-draft accepted: it must not be touched.
-    await backend.propose(a);
-    await backend.merge(a);
-    // Independent draft (different parent, no parent at all): must not be touched.
-    const [other] = await backend.fork(DOC, 1);
-
-    const declined = await backend._cascadeDeclineSubDrafts(parentId);
-    expect(new Set(declined)).toEqual(new Set([b, c]));
-
-    const drafts = await backend.listDrafts();
-    const get = (id: string) => drafts.find((d) => d.draft_id === id)!;
-    expect(get(a).state).toBe("accepted");
-    expect(get(b).state).toBe("declined");
-    expect(get(c).state).toBe("declined");
-    expect(get(other).state).toBe("open");
-    expect(get(parentId).state).toBe("open");
-  });
-
-  it("_cascadeDeclineSubDrafts is a no-op when the parent has no sub-drafts", async () => {
-    const [parentId] = await backend.fork(DOC, 1);
-    const declined = await backend._cascadeDeclineSubDrafts(parentId);
-    expect(declined).toEqual([]);
-  });
-});
-
-describe("backend cross-cutting drafts (Phase H)", () => {
-  let root: string;
-  let backend: StubBackend;
-  const DOC_A = "workspaces/ws/docs/a.md";
-  const DOC_B = "workspaces/ws/docs/b.md";
-  const DOC_C = "workspaces/ws/docs/c.md";
-
-  beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
-    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
-      recursive: true,
-    });
-    await fs.writeFile(
-      path.join(root, "workspaces", "ws", "docs", "a.md"),
-      "# a\nbody\n",
-    );
-    await fs.writeFile(
-      path.join(root, "workspaces", "ws", "docs", "b.md"),
-      "# b\nbody\n",
-    );
-    await fs.writeFile(
-      path.join(root, "workspaces", "ws", "docs", "c.md"),
-      "# c\nbody\n",
-    );
-    backend = new StubBackend(root);
-  });
-
-  afterEach(async () => {
-    await fs.rm(root, { recursive: true, force: true });
-  });
-
-  const touchesOf = async (id: string): Promise<string[]> => {
-    const drafts = await backend.listDrafts();
-    return drafts.find((d) => d.draft_id === id)!.touches;
-  };
-
-  it("editDoc against a path outside touches appends it", async () => {
-    const [draftId] = await backend.fork(DOC_A, 1);
-    expect(await touchesOf(draftId)).toEqual([DOC_A]);
-
-    await backend.editDoc(DOC_B, draftId, "# b", "# b v2", false);
-
-    expect(await touchesOf(draftId)).toEqual([DOC_A, DOC_B]);
-  });
-
-  it("writeDoc against a path outside touches appends it", async () => {
-    const [draftId] = await backend.fork(DOC_A, 1);
-
-    await backend.writeDoc(DOC_B, draftId, "# b v2\n");
-
-    expect(await touchesOf(draftId)).toEqual([DOC_A, DOC_B]);
-  });
-
-  it("addThread targeting a new path appends it to touches", async () => {
-    const [draftId] = await backend.fork(DOC_A, 1);
-
-    await backend.addThread({
-      ref: draftId,
-      targets: [{ path: DOC_B, char_range: { from: 0, to: 3 } }],
-      message: "rename",
-    });
-
-    expect(await touchesOf(draftId)).toEqual([DOC_A, DOC_B]);
-  });
-
-  it("does not duplicate a path written multiple times", async () => {
-    const [draftId] = await backend.fork(DOC_A, 1);
-
-    await backend.writeDoc(DOC_B, draftId, "# b v2\n");
-    await backend.writeDoc(DOC_B, draftId, "# b v3\n");
-    await backend.editDoc(DOC_B, draftId, "v3", "v4", false);
-
-    expect(await touchesOf(draftId)).toEqual([DOC_A, DOC_B]);
-  });
-
-  it("a multi-target thread spanning two new paths adds both", async () => {
-    const [draftId] = await backend.fork(DOC_A, 1);
-
-    await backend.addThread({
-      ref: draftId,
-      targets: [
-        { path: DOC_B, char_range: { from: 0, to: 3 } },
-        { path: DOC_C, char_range: { from: 0, to: 3 } },
-      ],
-      message: "cross-cutting rename",
-    });
-
-    const touches = await touchesOf(draftId);
-    expect(new Set(touches)).toEqual(new Set([DOC_A, DOC_B, DOC_C]));
-  });
-
-  it("draftChanges returns entries for every path in touches", async () => {
-    const [draftId] = await backend.fork(DOC_A, 1);
-    await backend.writeDoc(DOC_B, draftId, "# b v2\n");
-    await backend.addThread({
-      ref: draftId,
-      targets: [{ path: DOC_C, char_range: { from: 0, to: 3 } }],
-      message: "thread on c",
-    });
-
-    const changes = await backend.draftChanges(draftId);
-    const paths = changes.map((c) => c.path).sort();
-    expect(paths).toEqual([DOC_A, DOC_B, DOC_C].sort());
-
-    // The path with no override falls back to main_md on both sides.
-    const cEntry = changes.find((c) => c.path === DOC_C)!;
-    expect(cEntry.main_md).toBe("# c\nbody\n");
-    expect(cEntry.draft_md).toBe("# c\nbody\n");
-
-    // The edited path shows the override on draft_md.
-    const bEntry = changes.find((c) => c.path === DOC_B)!;
-    expect(bEntry.main_md).toBe("# b\nbody\n");
-    expect(bEntry.draft_md).toBe("# b v2\n");
-  });
-});
-
-describe("backend.merge atomic accept (Phase I)", () => {
-  let root: string;
-  let backend: StubBackend;
-  const DOC_A = "workspaces/ws/docs/a.md";
-  const DOC_B = "workspaces/ws/docs/b.md";
-
-  beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
-    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
-      recursive: true,
-    });
-    await fs.writeFile(
-      path.join(root, "workspaces", "ws", "docs", "a.md"),
-      "# a\nbody\n",
-    );
-    await fs.writeFile(
-      path.join(root, "workspaces", "ws", "docs", "b.md"),
-      "# b\nbody\n",
-    );
-    backend = new StubBackend(root);
-  });
-
-  afterEach(async () => {
-    await fs.rm(root, { recursive: true, force: true });
-  });
-
-  it("single-doc merge: bumps version, lands content, accepts state, emits versions", async () => {
-    // Read once so the counter for DOC_A is initialized to 1.
-    await backend.readDoc(DOC_A);
-    const [draftId] = await backend.fork(DOC_A, 1);
-    await backend.writeDoc(DOC_A, draftId, "# a v2\nbody v2\n");
-    await backend.propose(draftId);
-
-    const events: BackendEvent[] = [];
-    backend.subscribe((e) => events.push(e));
-
-    const result = await backend.merge(draftId);
-    expect(result.versions).toEqual([{ path: DOC_A, from: 1, to: 2 }]);
-    expect(result.commit).toMatch(/^c-/);
-
-    const main = await backend.readDoc(DOC_A);
-    expect(main.md).toBe("# a v2\nbody v2\n");
-    expect(main.version_counter).toBe(2);
-
-    const drafts = await backend.listDrafts();
-    expect(drafts.find((d) => d.draft_id === draftId)!.state).toBe("accepted");
-
-    const merged = events.filter((e) => e.kind === "draft_merged");
-    expect(merged).toHaveLength(1);
-    const evt = merged[0];
-    if (evt.kind !== "draft_merged") throw new Error("unreachable");
-    expect(evt.versions).toEqual([{ path: DOC_A, from: 1, to: 2 }]);
-    expect(evt.target_paths).toEqual([DOC_A]);
-  });
-
-  it("cross-cutting merge: bumps every touched path atomically", async () => {
-    await backend.readDoc(DOC_A);
-    await backend.readDoc(DOC_B);
-    const [draftId] = await backend.fork(DOC_A, 1);
-    await backend.writeDoc(DOC_A, draftId, "# a v2\nbody\n");
-    await backend.writeDoc(DOC_B, draftId, "# b v2\nbody\n");
-    await backend.propose(draftId);
-
-    const result = await backend.merge(draftId);
-    expect(result.versions).toHaveLength(2);
-    const byPath = new Map(result.versions.map((v) => [v.path, v]));
-    expect(byPath.get(DOC_A)).toEqual({ path: DOC_A, from: 1, to: 2 });
-    expect(byPath.get(DOC_B)).toEqual({ path: DOC_B, from: 1, to: 2 });
-
-    const a = await backend.readDoc(DOC_A);
-    const b = await backend.readDoc(DOC_B);
-    expect(a.md).toBe("# a v2\nbody\n");
-    expect(b.md).toBe("# b v2\nbody\n");
-    expect(a.version_counter).toBe(2);
-    expect(b.version_counter).toBe(2);
-  });
-
-  it("conflict: throws merge_conflict, leaves main untouched, draft state unchanged", async () => {
-    await backend.readDoc(DOC_A);
-    const [draftId] = await backend.fork(DOC_A, 1);
-    await backend.writeDoc(DOC_A, draftId, "# a v2\nbody\n");
-    await backend.propose(draftId);
-
-    // Simulate a competing accept landing on main: another draft bumps the
-    // counter for DOC_A past the draft's base_version.
-    const [other] = await backend.fork(DOC_A, 1);
-    await backend.writeDoc(DOC_A, other, "# a other\nbody\n");
-    await backend.propose(other);
-    await backend.merge(other);
-
-    const events: BackendEvent[] = [];
-    backend.subscribe((e) => events.push(e));
-
-    let thrown: unknown;
-    try {
-      await backend.merge(draftId);
-    } catch (e) {
-      thrown = e;
-    }
-    expect(thrown).toBeDefined();
-    expect((thrown as { code?: string }).code).toBe("merge_conflict");
-    expect((thrown as { conflicts?: unknown[] }).conflicts).toEqual([
-      { path: DOC_A, base_version: 1, main_version: 2 },
-    ]);
-
-    // Main reflects the *other* draft, not this one. No new merge events.
-    const main = await backend.readDoc(DOC_A);
-    expect(main.md).toBe("# a other\nbody\n");
-    expect(main.version_counter).toBe(2);
-
-    const drafts = await backend.listDrafts();
-    const meta = drafts.find((d) => d.draft_id === draftId)!;
-    expect(meta.state).toBe("submitted");
-
-    expect(events.filter((e) => e.kind === "draft_merged")).toHaveLength(0);
-  });
-
-  it("cascades-decline unaccepted sub-drafts on parent merge", async () => {
-    await backend.readDoc(DOC_A);
-    const [parentId] = await backend.fork(DOC_A, 1);
-    const [subA, subB] = await backend.fork(
-      DOC_A,
-      2,
-      undefined,
-      undefined,
-      parentId,
-    );
-    await backend.writeDoc(DOC_A, parentId, "# a v2\nbody\n");
-    await backend.propose(parentId);
-
-    await backend.merge(parentId);
-
-    const drafts = await backend.listDrafts();
-    expect(drafts.find((d) => d.draft_id === subA)!.state).toBe("declined");
-    expect(drafts.find((d) => d.draft_id === subB)!.state).toBe("declined");
-  });
-});
-describe("backend versions_behind on DraftSummary (Phase J)", () => {
-  let root: string;
-  let backend: StubBackend;
-  const DOC = "workspaces/ws/docs/a.md";
-
-  beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
-    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
-      recursive: true,
-    });
-    await fs.writeFile(
-      path.join(root, "workspaces", "ws", "docs", "a.md"),
-      "# a\nbody\n",
-    );
-    backend = new StubBackend(root);
-  });
-
-  afterEach(async () => {
-    await fs.rm(root, { recursive: true, force: true });
-  });
-
-  it("is 0 for a fresh draft pinned to current main", async () => {
-    await backend.readDoc(DOC);
-    const [draftId] = await backend.fork(DOC, 1);
-    const drafts = await backend.listDrafts();
-    expect(drafts.find((d) => d.draft_id === draftId)!.versions_behind).toBe(
-      0,
-    );
-  });
-
-  it("advances when a sibling draft accepts to main", async () => {
-    await backend.readDoc(DOC);
-    const [draftId] = await backend.fork(DOC, 1);
-
-    const [other] = await backend.fork(DOC, 1);
-    await backend.writeDoc(DOC, other, "# a v2\nbody\n");
-    await backend.propose(other);
-    await backend.merge(other);
-
-    const drafts = await backend.listDrafts();
-    expect(drafts.find((d) => d.draft_id === draftId)!.versions_behind).toBe(
-      1,
-    );
-  });
-
-  it("clamps to 0 when the main counter has not advanced", async () => {
-    const [draftId] = await backend.fork(DOC, 1);
-    // No reads on main, no merges. main counter is unset; versions_behind
-    // must not go negative.
-    const drafts = await backend.listDrafts();
-    expect(drafts.find((d) => d.draft_id === draftId)!.versions_behind).toBe(
-      0,
-    );
-  });
-});
-
-describe("backend.reopenThread (Phase J)", () => {
+describe("backend.reopenThread (thread-on-doc)", () => {
   let root: string;
   let backend: StubBackend;
   const DOC = "workspaces/ws/docs/a.md";
@@ -1574,66 +800,11 @@ describe("backend.reopenThread (Phase J)", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("flips an accepted thread to open and appends a `current` leaf", async () => {
-    const { draft_id } = await backend.forkAndAttachThreads({
-      base_path: DOC,
-      base_version: 1,
-      name: "v2",
-      initial_threads: [
-        {
-          targets: [{ path: DOC, char_range: { from: 9, to: 17 } }],
-          message: "tighten",
-        },
-      ],
-    });
-    const [t] = await backend.listThreads({ ref: draft_id });
-    await backend.resolveThread(t.id);
-
-    const events: BackendEvent[] = [];
-    backend.subscribe((e) => events.push(e), { role: "ui" });
-    events.length = 0;
-
-    await backend.reopenThread(t.id);
-
-    const after = await backend.readThread(t.id);
-    expect(after.status).toBe("open");
-    const last = after.messages[after.messages.length - 1];
-    expect(last.author).toBe("system");
-    expect(last.draft_options).toBeDefined();
-    expect(last.draft_options).toHaveLength(1);
-    expect(last.draft_options![0].name).toBe("current");
-    expect(typeof last.draft_options![0].new_md).toBe("string");
-
-    const changed = events.filter((e) => e.kind === "thread_changed");
-    expect(changed).toHaveLength(1);
-  });
-
-  it("rejects reopening an already-open thread", async () => {
-    const { draft_id } = await backend.forkAndAttachThreads({
-      base_path: DOC,
-      base_version: 1,
-      name: "v2",
-      initial_threads: [
-        {
-          targets: [{ path: DOC, char_range: { from: 9, to: 17 } }],
-          message: "tighten",
-        },
-      ],
-    });
-    const [t] = await backend.listThreads({ ref: draft_id });
-    await expect(backend.reopenThread(t.id)).rejects.toThrow();
-  });
-
-  it("unresolves a thread-on-doc thread with no `current` leaf", async () => {
-    // Thread-on-doc threads (no draft_id) are the Obsidian mode. Reopening one
-    // must resurrect it plainly — flip to open with a bare `reopened` message —
-    // rather than append a `current` option leaf, which would misrender as a
-    // one-choice picker in the panel.
+  it("unresolves a resolved thread with a bare `reopened` message (no leaf)", async () => {
     const id = await backend.addThread({
       targets: [{ path: DOC, char_range: { from: 9, to: 17 } }],
       message: "tighten",
       author: "user",
-      ref: "main",
     });
     await backend.resolveThread(id);
     expect((await backend.readThread(id)).status).toBe("accepted");
@@ -1655,57 +826,18 @@ describe("backend.reopenThread (Phase J)", () => {
     const changed = events.filter((e) => e.kind === "thread_changed");
     expect(changed).toHaveLength(1);
   });
-});
 
-describe("backend.merge accept_blocked gating (Phase J)", () => {
-  let root: string;
-  let backend: StubBackend;
-  const DOC = "workspaces/ws/docs/a.md";
-
-  beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
-    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
-      recursive: true,
+  it("rejects reopening an already-open thread", async () => {
+    const id = await backend.addThread({
+      targets: [{ path: DOC, char_range: { from: 9, to: 17 } }],
+      message: "tighten",
+      author: "user",
     });
-    await fs.writeFile(
-      path.join(root, "workspaces", "ws", "docs", "a.md"),
-      "# a\nbody\n",
-    );
-    backend = new StubBackend(root);
-    setBackend(backend);
-  });
-
-  afterEach(async () => {
-    setBackend(null);
-    await fs.rm(root, { recursive: true, force: true });
-  });
-
-  it("merge throws accept_blocked when an open thread remains", async () => {
-    const { draft_id } = await backend.forkAndAttachThreads({
-      base_path: DOC,
-      base_version: 1,
-      name: "v2",
-      initial_threads: [
-        {
-          targets: [{ path: DOC, char_range: { from: 0, to: 3 } }],
-          message: "scope",
-        },
-      ],
-    });
-    await backend.propose(draft_id);
-
-    let thrown: unknown;
-    try {
-      await backend.merge(draft_id);
-    } catch (e) {
-      thrown = e;
-    }
-    expect((thrown as { code?: string }).code).toBe("accept_blocked");
-    expect((thrown as { open_count?: number }).open_count).toBe(1);
+    await expect(backend.reopenThread(id)).rejects.toThrow();
   });
 });
 
-describe("POST /api/ui/threads/[id]/reopen (Phase J)", () => {
+describe("POST /api/ui/threads/[id]/reopen", () => {
   let root: string;
   let backend: StubBackend;
   const DOC = "workspaces/ws/docs/a.md";
@@ -1729,27 +861,17 @@ describe("POST /api/ui/threads/[id]/reopen (Phase J)", () => {
   });
 
   it("returns 200 on success", async () => {
-    const { draft_id } = await backend.forkAndAttachThreads({
-      base_path: DOC,
-      base_version: 1,
-      name: "v2",
-      initial_threads: [
-        {
-          targets: [{ path: DOC, char_range: { from: 0, to: 3 } }],
-          message: "scope",
-        },
-      ],
+    const id = await backend.addThread({
+      targets: [{ path: DOC, char_range: { from: 0, to: 3 } }],
+      message: "scope",
+      author: "user",
     });
-    const [t] = await backend.listThreads({ ref: draft_id });
-    await backend.resolveThread(t.id);
+    await backend.resolveThread(id);
 
-    const req = new Request(
-      `http://localhost/api/ui/threads/${t.id}/reopen`,
-      { method: "POST" },
-    );
-    const res = await reopenPOST(req, {
-      params: Promise.resolve({ id: t.id }),
+    const req = new Request(`http://localhost/api/ui/threads/${id}/reopen`, {
+      method: "POST",
     });
+    const res = await reopenPOST(req);
     expect(res.status).toBe(200);
   });
 
@@ -1758,127 +880,119 @@ describe("POST /api/ui/threads/[id]/reopen (Phase J)", () => {
     const req = new Request(`http://localhost/api/ui/threads/${id}/reopen`, {
       method: "POST",
     });
-    const res = await reopenPOST(req, {
-      params: Promise.resolve({ id }),
-    });
+    const res = await reopenPOST(req);
     expect(res.status).toBe(404);
   });
 });
 
-describe("backend.merge populates version_history (Phase K)", () => {
-  let root: string;
-  let backend: StubBackend;
-  const DOC_A = "workspaces/ws/docs/a.md";
-  const DOC_B = "workspaces/ws/docs/b.md";
-
-  beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
-    await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
-      recursive: true,
-    });
-    await fs.writeFile(
-      path.join(root, "workspaces", "ws", "docs", "a.md"),
-      "# a\nbody\n",
-    );
-    await fs.writeFile(
-      path.join(root, "workspaces", "ws", "docs", "b.md"),
-      "# b\nbody\n",
-    );
-    backend = new StubBackend(root);
-  });
-
-  afterEach(async () => {
-    await fs.rm(root, { recursive: true, force: true });
-  });
-
-  it("appends an entry on single-doc merge with the new version, draft_id, and timestamp", async () => {
-    await backend.readDoc(DOC_A);
-    const [draftId] = await backend.fork(DOC_A, 1);
-    await backend.writeDoc(DOC_A, draftId, "# a v2\nbody\n");
-    await backend.propose(draftId);
-    const t0 = Date.now();
-    await backend.merge(draftId);
-
-    const history = await backend.listVersionHistory(DOC_A);
-    expect(history).toHaveLength(1);
-    expect(history[0].version).toBe(2);
-    expect(history[0].draft_id).toBe(draftId);
-    expect(history[0].accepted_at).toBeGreaterThanOrEqual(t0 - 1);
-  });
-
-  it("appends entries for every touched path on a cross-cutting merge", async () => {
-    await backend.readDoc(DOC_A);
-    await backend.readDoc(DOC_B);
-    const [draftId] = await backend.fork(DOC_A, 1);
-    await backend.writeDoc(DOC_A, draftId, "# a v2\nbody\n");
-    await backend.writeDoc(DOC_B, draftId, "# b v2\nbody\n");
-    await backend.propose(draftId);
-    await backend.merge(draftId);
-
-    const histA = await backend.listVersionHistory(DOC_A);
-    const histB = await backend.listVersionHistory(DOC_B);
-    expect(histA).toHaveLength(1);
-    expect(histB).toHaveLength(1);
-    expect(histA[0].draft_id).toBe(draftId);
-    expect(histB[0].draft_id).toBe(draftId);
-    expect(histA[0].version).toBe(2);
-    expect(histB[0].version).toBe(2);
-  });
-
-  it("accumulates entries across successive merges of the same doc", async () => {
-    await backend.readDoc(DOC_A);
-    const [d1] = await backend.fork(DOC_A, 1);
-    await backend.writeDoc(DOC_A, d1, "# a v2\nbody\n");
-    await backend.propose(d1);
-    await backend.merge(d1);
-
-    const [d2] = await backend.fork(DOC_A, 1);
-    await backend.writeDoc(DOC_A, d2, "# a v3\nbody\n");
-    await backend.propose(d2);
-    await backend.merge(d2);
-
-    const history = await backend.listVersionHistory(DOC_A);
-    expect(history.map((e) => e.version)).toEqual([2, 3]);
-    expect(history[0].draft_id).toBe(d1);
-    expect(history[1].draft_id).toBe(d2);
-  });
-
-  it("returns an empty history for a doc that has never been merged", async () => {
-    const history = await backend.listVersionHistory(DOC_A);
-    expect(history).toEqual([]);
-  });
-});
-describe("draft.state === 'accepted' for merged drafts (Phase K)", () => {
+describe("thread-on-doc loop end-to-end (main)", () => {
   let root: string;
   let backend: StubBackend;
   const DOC = "workspaces/ws/docs/a.md";
 
   beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-loop-"));
     await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
       recursive: true,
     });
     await fs.writeFile(
       path.join(root, "workspaces", "ws", "docs", "a.md"),
-      "# a\nbody\n",
+      "# title\n\nbody one\n\nbody two\n",
     );
     backend = new StubBackend(root);
+    setBackend(backend);
   });
 
   afterEach(async () => {
+    setBackend(null);
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("a merged draft reports state === 'accepted' so the editor renders read-only", async () => {
-    await backend.readDoc(DOC);
-    const [draftId] = await backend.fork(DOC, 1);
-    await backend.writeDoc(DOC, draftId, "# a v2\nbody\n");
-    await backend.propose(draftId);
-    await backend.merge(draftId);
+  it("add → list → show → reply → AttachDraftPayload(options) → resolve → reopen; stored thread has no draft_id", async () => {
+    // add (REST, origin ui) — no ?ref
+    const addReq = new Request("http://localhost/api/ui/threads", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        path: DOC,
+        targets: [{ char_range: { from: 9, to: 17 } }],
+        message: "tighten this passage",
+      }),
+    });
+    const addRes = await threadsPOST(addReq);
+    expect(addRes.status).toBe(201);
+    const id = ((await addRes.json()) as { thread_id: string }).thread_id;
 
-    const drafts = await backend.listDrafts();
-    const meta = drafts.find((d) => d.draft_id === draftId);
-    expect(meta).toBeDefined();
-    expect(meta!.state).toBe("accepted");
+    // list (REST GET, no ?ref)
+    const listReq = new Request(
+      `http://localhost/api/ui/threads?path=${encodeURIComponent(DOC)}`,
+    );
+    const listRes = await threadsGET(listReq);
+    expect(listRes.status).toBe(200);
+    const listed = (await listRes.json()) as { threads: { id: string }[] };
+    expect(listed.threads.map((t) => t.id)).toContain(id);
+
+    // show (backend read) — a stored thread carries NO draft_id field
+    const shown = await backend.readThread(id);
+    expect(shown.messages[0].body).toBe("tighten this passage");
+    expect(Object.keys(shown)).not.toContain("draft_id");
+    expect((shown as { draft_id?: unknown }).draft_id).toBeUndefined();
+
+    // reply (REST, origin ui)
+    const replyReq = new Request(
+      `http://localhost/api/ui/threads/${id}/reply`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ message: "any angle is fine" }),
+      },
+    );
+    expect((await replyPOST(replyReq)).status).toBe(200);
+
+    // AttachDraftPayload with options (agent) — a preview, not applied
+    await backend.attachDraftPayload(id, {
+      author: "agent",
+      message: "two takes",
+      draft_options: [
+        { name: "punchy", new_md: "punchy body\n" },
+        { name: "measured", new_md: "measured body\n" },
+      ],
+    });
+    const withOptions = await backend.readThread(id);
+    const lastOpt = withOptions.messages[withOptions.messages.length - 1];
+    expect(lastOpt.draft_options?.map((o) => o.name)).toEqual([
+      "punchy",
+      "measured",
+    ]);
+
+    // resolve (REST) — flips status, never writes the preview to the doc
+    const resolveReq = new Request(
+      `http://localhost/api/ui/threads/${id}/resolve`,
+      { method: "POST" },
+    );
+    expect((await resolvePOST(resolveReq)).status).toBe(200);
+    expect((await backend.readThread(id)).status).toBe("accepted");
+    expect((await backend.readDoc(DOC)).md).toBe(
+      "# title\n\nbody one\n\nbody two\n",
+    );
+
+    // reopen (REST) — back to open with a bare system message
+    const reopenReq = new Request(
+      `http://localhost/api/ui/threads/${id}/reopen`,
+      { method: "POST" },
+    );
+    expect((await reopenPOST(reopenReq)).status).toBe(200);
+    const reopened = await backend.readThread(id);
+    expect(reopened.status).toBe("open");
+    expect(reopened.messages[reopened.messages.length - 1].body).toBe(
+      "reopened",
+    );
+
+    // The on-disk thread format never carries draft_id.
+    const onDisk = await fs.readFile(
+      path.join(root, "workspaces", "ws", "docs", "a.md"),
+      "utf8",
+    );
+    expect(onDisk).not.toContain("draft_id");
   });
 });

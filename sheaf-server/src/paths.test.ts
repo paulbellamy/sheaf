@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  assertDraftId,
   assertThreadId,
   assertVaultPath,
   safeJoin,
@@ -70,20 +69,15 @@ describe("safeJoin", () => {
   });
 });
 
-describe("assertDraftId / assertThreadId", () => {
+describe("assertThreadId", () => {
   it("accepts the canonical form", () => {
-    expect(() =>
-      assertDraftId("draft_00000000-0000-4000-8000-000000000000"),
-    ).not.toThrow();
     expect(() =>
       assertThreadId("thrd_00000000-0000-4000-8000-000000000000"),
     ).not.toThrow();
   });
 
   it("rejects empty / path-escape forms", () => {
-    expect(() => assertDraftId("draft_-")).toThrow();
-    expect(() => assertDraftId("draft_../etc")).toThrow();
-    expect(() => assertDraftId("draft_")).toThrow();
     expect(() => assertThreadId("thrd_../etc")).toThrow();
+    expect(() => assertThreadId("thrd_")).toThrow();
   });
 });

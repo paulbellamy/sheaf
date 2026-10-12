@@ -13,7 +13,7 @@ import { pipeEvents, reserveSseClient, type SseSink } from "./events";
 import {
   addThread,
   type HandlerResult,
-  listDocsAndDrafts,
+  listDocs,
   listThreadsForDoc,
   readDoc,
   reopenThread,
@@ -194,14 +194,13 @@ export function buildSheafApp(
   /* ----------------------------------------------------------- UI: docs -- */
 
   app.get("/api/ui/docs", (_req, reply) =>
-    run(reply, () => listDocsAndDrafts(backend)),
+    run(reply, () => listDocs(backend)),
   );
 
   app.get("/api/ui/doc/*", (req, reply) =>
     run(reply, () =>
       readDoc(backend, {
         path: (req.params as Record<string, string>)["*"],
-        ref: q(req, "ref") ?? "main",
       }),
     ),
   );
@@ -212,15 +211,12 @@ export function buildSheafApp(
     run(reply, () =>
       listThreadsForDoc(backend, {
         path: q(req, "path"),
-        ref: q(req, "ref") ?? "main",
       }),
     ),
   );
 
   app.post("/api/ui/threads", (req, reply) =>
-    run(reply, () =>
-      addThread(backend, { ref: q(req, "ref") ?? "main", body: req.body }),
-    ),
+    run(reply, () => addThread(backend, { body: req.body })),
   );
 
   app.post("/api/ui/threads/:id/reply", (req, reply) =>
@@ -236,8 +232,6 @@ export function buildSheafApp(
     run(reply, () =>
       resolveThread(backend, {
         id: (req.params as { id: string }).id,
-        optionIndex: q(req, "option_index"),
-        skipApply: q(req, "apply") === "false",
       }),
     ),
   );

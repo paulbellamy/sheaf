@@ -132,9 +132,7 @@ Branch on \`kind\`:
   server restarted. Events may have been missed while you were disconnected,
   so re-run \`ListThreads\` and work whatever is open.
 - **agent_presence** — connection lifecycle for the watcher itself. Ignore.
-
-Other event kinds may arrive (\`draft_*\`); they're not part of this workflow
-and can be ignored.`;
+`;
 
 /** The standalone (\`--no-daemon\`) replacement: no live stream exists. */
 const STANDALONE_SUBSCRIBE = `## Staying current (no live events)
@@ -145,7 +143,7 @@ you as it happens (there is no daemon fanning events out). Do **not** run
 \`sheaf events follow\` (it needs a running daemon) or a curl loop (nothing is
 listening).
 
-Instead, **poll**: re-run \`ListThreads(ref:"main")\` whenever you finish a piece
+Instead, **poll**: re-run \`ListThreads()\` whenever you finish a piece
 of work (and whenever you want to check for new work). The thread store on disk
 is the source of truth — the open threads whose latest message is from the user
 are your queue, exactly as in the loop above.`;
@@ -160,7 +158,7 @@ mark the thread resolved. The user sees your edits land in their editor live.
 
 ## The loop
 
-1. **Subscribe** to events (one-time, see below), then \`ListThreads(ref:"main")\`
+1. **Subscribe** to events (one-time, see below), then \`ListThreads()\`
    to load your queue — see **Your work queue**.
 2. Work each open thread that's yours (latest message from the user; not one
    another agent already grabbed) — a \`thread_changed\` event or a re-list
@@ -214,7 +212,7 @@ mark the thread resolved. The user sees your edits land in their editor live.
       - **Commit a single edit** (no options) when there's just one clear
         change — the brief is fully specified ("rename Foo to Bar", "fix
         this typo"), or one approach is plainly right. Use \`Edit\`/\`Write\`
-        with \`ref="main"\` then \`ResolveThread\`.
+        then \`ResolveThread\`.
    d. **When the user picks an option** (a *Selected option N* reply on a
       thread where you proposed options), make the actual change now, scoped
       to the first target — then \`ResolveThread\`:
@@ -235,8 +233,8 @@ you're waiting on them.
 \`ResolveThread\` means *done* — the work the thread asked for has landed and
 nothing is left for the user. **Only resolve when all of these hold:**
 
-- The requested change is actually written to the doc (an \`Edit\`/\`Write\` on
-  \`ref="main"\` has succeeded), or the thread genuinely needs no edit.
+- The requested change is actually written to the doc (an \`Edit\`/\`Write\`
+  has succeeded), or the thread genuinely needs no edit.
 - You have **no outstanding question** for the user — if you asked anything
   (clarification, options to pick, "should I also…"), leave the thread open;
   resolving discards the question.
@@ -252,7 +250,7 @@ and leave it open — the user can resolve it themselves.
 ## Your work queue
 
 Open threads are your queue — and it lives in the **thread store**, not the
-event stream. \`ListThreads(ref:"main")\` returns every thread with its status;
+event stream. \`ListThreads()\` returns every thread with its status;
 the open ones whose latest message is from the user are yours to do.
 
 - **On connect, and after you finish each thread, \`ListThreads\` and take the
@@ -294,11 +292,11 @@ __SHEAF_SUBSCRIBE_SECTION__
 ## Tools you'll use
 
 - \`ReadThread(thread_id)\` — full thread. Each target has a \`scope\` field: \`"range"\` carries an \`anchor\` (\`anchored_text\`, \`context_before/after\`, \`rel_pos\`); \`"doc"\` has no anchor.
-- \`ReadThreads({path, ref:"main"})\` — the full content of **every** thread on a doc in one call (the batch form of \`ReadThread\`). Prefer this over \`ListThreads\` + a \`ReadThread\` per id when you want the whole queue with its messages and anchors.
-- \`ListThreads({path, ref:"main"})\` — lightweight summaries (id, status, preview) when you only need to see what's there, not every message.
-- \`Read(file_path)\` — full doc contents. \`ref\` defaults to \`"main"\`.
-- \`Edit(file_path, old_string, new_string)\` — surgical replace. Pass \`ref="main"\` (or omit). Prefer this for small changes; \`old_string\` should be unique in the doc.
-- \`Write(file_path, content)\` — full-doc rewrite. Pass \`ref="main"\` (or omit). Use this for doc-level briefs or when many edits would be needed.
+- \`ReadThreads({path})\` — the full content of **every** thread on a doc in one call (the batch form of \`ReadThread\`). Prefer this over \`ListThreads\` + a \`ReadThread\` per id when you want the whole queue with its messages and anchors.
+- \`ListThreads({path})\` — lightweight summaries (id, status, preview) when you only need to see what's there, not every message.
+- \`Read(file_path)\` — full doc contents.
+- \`Edit(file_path, old_string, new_string)\` — surgical replace. Prefer this for small changes; \`old_string\` should be unique in the doc.
+- \`Write(file_path, content)\` — full-doc rewrite. Use this for doc-level briefs or when many edits would be needed.
 - \`ReplyThread(thread_id, message)\` — add a message to the thread. Use for clarifying questions.
 - \`ResolveThread(thread_id)\` — mark thread done. Call this once your edit has landed.
 - \`Glob(pattern)\` / \`Grep({pattern, ...})\` — search the vault.
@@ -367,7 +365,7 @@ it:
 
 ## What not to do
 
-- Don't write to \`.\`-prefixed paths (dotfiles, \`.drafts/\`, \`.obsidian/\`) — those are rejected.
+- Don't write to \`.\`-prefixed paths (dotfiles, \`.obsidian/\`, \`.git/\`) — those are rejected.
 - Don't loop on \`doc_changed\` events — your own edits are never echoed back,
   so one always means outside activity, not your write landing.
 

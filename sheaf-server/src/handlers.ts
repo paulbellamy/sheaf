@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import type { Backend, ThreadDraftBody, ThreadMessage } from "./backend/index";
+import type { Backend } from "./backend/index";
 import { assertThreadId } from "./paths";
 
 /**
@@ -29,10 +29,7 @@ function folderOf(p: string): string {
   return p.includes("/") ? p.slice(0, p.indexOf("/")) : "(root)";
 }
 
-export async function listDocsAndDrafts(backend: Backend): Promise<HandlerResult> {
-  // TODO(phase 2): with the draft surfaces gone, `drafts` is always empty here.
-  // Drop the `.drafts/` scan + the `drafts` response key (and rename this
-  // handler) when the draft/ref data model is excised.
+export async function listDocs(backend: Backend): Promise<HandlerResult> {
   const allDocs = await backend.listDocs();
   const docs = allDocs
     .map((d) => ({
@@ -43,46 +40,19 @@ export async function listDocsAndDrafts(backend: Backend): Promise<HandlerResult
     }))
     .sort((a, b) => b.updated_at - a.updated_at);
 
-  const allDrafts = await backend.listDrafts();
-  const active = allDrafts.filter(
-    (d) => d.state === "open" || d.state === "submitted",
-  );
-  const drafts = (
-    await Promise.all(
-      active.map(async (d) => {
-        const changes = await backend.draftChanges(d.draft_id);
-        const changedPaths = changes.map((c) => c.path);
-        const primaryPath = changedPaths.includes(d.base_path)
-          ? d.base_path
-          : (changedPaths[0] ?? d.base_path);
-        return {
-          draft_id: d.draft_id,
-          base_path: d.base_path,
-          primary_path: primaryPath,
-          changed_paths: changedPaths,
-          name: d.name,
-          state: d.state,
-          author: d.author,
-          workspace: folderOf(primaryPath),
-          created_at: d.created_at,
-        };
-      }),
-    )
-  ).sort((a, b) => b.created_at - a.created_at);
-
-  return { status: 200, json: { docs, drafts } };
+  return { status: 200, json: { docs } };
 }
 
 /* -------------------------------------------------------------- doc read -- */
 
 export async function readDoc(
   backend: Backend,
-  opts: { path: string; ref: string },
+  opts: { path: string },
 ): Promise<HandlerResult> {
-  const { md, version_counter } = await backend.readDoc(opts.path, opts.ref);
+  const { md, version_counter } = await backend.readDoc(opts.path);
   return {
     status: 200,
-    json: { path: opts.path, ref: opts.ref, md, version_counter },
+    json: { path: opts.path, md, version_counter },
   };
 }
 
@@ -129,21 +99,21 @@ const addThreadBodySchema = z.union([
 
 export async function listThreadsForDoc(
   backend: Backend,
-  opts: { path?: string; ref: string },
+  opts: { path?: string },
 ): Promise<HandlerResult> {
-  const summaries = await backend.listThreads({ path: opts.path, ref: opts.ref });
+  const summaries = await backend.listThreads({ path: opts.path });
   const threads = await Promise.all(
     summaries.map((s) => backend.readThread(s.id)),
   );
   return {
     status: 200,
-    json: { path: opts.path, ref: opts.ref, threads },
+    json: { path: opts.path, threads },
   };
 }
 
 export async function addThread(
   backend: Backend,
-  opts: { ref: string; body: unknown },
+  opts: { body: unknown },
 ): Promise<HandlerResult> {
   const parsed = addThreadBodySchema.safeParse(opts.body);
   if (!parsed.success) return invalidBody(parsed.error);
@@ -170,7 +140,6 @@ export async function addThread(
               }),
         );
   const id = await backend.addThread({
-    ref: opts.ref,
     author: "user",
     message: body.message,
     draft: body.draft,
@@ -199,63 +168,15 @@ export async function replyThread(
 }
 
 /**
- * Walk the thread message log newest-first and pick the latest message that
- * carries `draft_options` or a single `draft`. Returns the leaf to apply, or
- * null if the thread has no payload to apply.
- */
-function pickLeaf(
-  messages: ThreadMessage[],
-  optionIndex: number | undefined,
-): ThreadDraftBody | null {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (m.draft_options && m.draft_options.length > 0) {
-      const idx = optionIndex ?? 0;
-      return m.draft_options[idx] ?? m.draft_options[0];
-    }
-    if (m.draft) return m.draft;
-  }
-  return null;
-}
-
-const optionIndexSchema = z.coerce.number().int().min(0).max(7).optional();
-
-/**
- * Optionally apply a chosen leaf before resolving — but only for draft-mode
- * threads (those with a `draft_id`). Thread-on-doc threads never auto-apply:
- * the pick is routed back to the agent, which makes the real edit.
+ * Resolve a thread. In the thread-on-doc workflow a resolve never auto-writes
+ * a leaf to the doc: an option's `new_md` is a preview routed back to the agent
+ * (which makes the real edit), so resolve just flips the thread's status.
  */
 export async function resolveThread(
   backend: Backend,
-  opts: { id: string; optionIndex?: string | null; skipApply: boolean },
+  opts: { id: string },
 ): Promise<HandlerResult> {
   assertThreadId(opts.id);
-  const optionParsed = optionIndexSchema.safeParse(opts.optionIndex ?? undefined);
-  if (!optionParsed.success) {
-    return { status: 400, json: { error: "invalid option_index" } };
-  }
-  const optionIndex = optionParsed.data;
-
-  const thread = await backend.readThread(opts.id);
-  const applyRef = thread.draft_id;
-  const leaf =
-    opts.skipApply || !applyRef ? null : pickLeaf(thread.messages, optionIndex);
-  if (leaf && applyRef && thread.targets.length > 0) {
-    for (const target of thread.targets) {
-      try {
-        if (target.scope === "range") {
-          const oldString = target.anchor.anchored_text;
-          if (oldString.length === 0) continue;
-          await backend.editDoc(target.path, applyRef, oldString, leaf.new_md, false);
-        } else {
-          await backend.writeDoc(target.path, applyRef, leaf.new_md);
-        }
-      } catch {
-        // Anchored text drifted, or the write conflicted. Fall through to
-        // resolve so the thread doesn't get stuck on a stale anchor.
-      }
-    }
-  }
   await backend.resolveThread(opts.id);
   return { status: 200, json: { ok: true } };
 }

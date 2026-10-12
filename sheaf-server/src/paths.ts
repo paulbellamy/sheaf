@@ -12,8 +12,7 @@ import { err } from "./errors";
  * - Doc paths MUST be repo-root-relative and contain no `.`-prefixed segment.
  *   Obsidian hides anything beginning with a dot, so this one rule scopes
  *   sheaf to the *visible* vault and simultaneously blocks `..` traversal and
- *   infra dirs (`.drafts/`, `.op_log.json`, `.obsidian/`, `.git/`, `.trash/`).
- * - Draft ids MUST match `DRAFT_ID_RE` before being used as path segments.
+ *   infra dirs (`.op_log.json`, `.obsidian/`, `.git/`, `.trash/`).
  * - Thread ids MUST match `THREAD_ID_RE` before being used as path segments.
  *
  * A bare `!includes("..")` check is insufficient: null bytes and absolute
@@ -23,9 +22,6 @@ import { err } from "./errors";
 
 // Keep tight: alphanumerics, underscores, hyphens, and dots for segment
 // separators. Length-bound to prevent pathological inputs.
-export const DRAFT_ID_RE =
-  /^draft_[A-Za-z0-9]{6,64}(?:-[A-Za-z0-9]{1,64}){0,8}$/;
-
 export const THREAD_ID_RE =
   /^thrd_[A-Za-z0-9]{6,64}(?:-[A-Za-z0-9]{1,64}){0,8}$/;
 
@@ -66,12 +62,6 @@ export function assertVaultPath(p: string): void {
   // `a/../b` into a path we never validated.
   if (p.split("/").some((seg) => seg.length === 0 || seg.startsWith("."))) {
     throw err.invalidPath(p);
-  }
-}
-
-export function assertDraftId(id: string): void {
-  if (typeof id !== "string" || !DRAFT_ID_RE.test(id)) {
-    throw err.invalidRef(String(id));
   }
 }
 

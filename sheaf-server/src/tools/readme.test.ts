@@ -32,7 +32,7 @@ describe("renderReadMe", () => {
     // Tells the agent to poll ListThreads instead.
     expect(text).toContain("no live events");
     expect(text.toLowerCase()).toContain("poll");
-    expect(text).toContain("ListThreads(ref:");
+    expect(text).toContain("ListThreads()");
     // The rest of the guide is intact.
     expect(text).toContain("## Tools you'll use");
   });

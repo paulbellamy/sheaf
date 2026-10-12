@@ -83,7 +83,6 @@ export interface CommandSpec {
 }
 
 // Shared option fragments, kept consistent across commands.
-const REF: Record<string, OptionDef> = { ref: { type: "string" } };
 const AS_MESSAGE: Record<string, OptionDef> = {
   message: { type: "string", short: "m" },
   as: { type: "string" },
@@ -181,10 +180,9 @@ export const REGISTRY: Record<string, CommandSpec> = {
   read: {
     name: "read",
     summary: "Read a document",
-    usage: "sheaf read <path> [--ref REF]",
+    usage: "sheaf read <path>",
     step: 6,
     needsDaemon: true,
-    options: { ...REF },
     run: readCommand,
   },
 
@@ -192,7 +190,7 @@ export const REGISTRY: Record<string, CommandSpec> = {
     name: "grep",
     summary: "Search document contents",
     usage:
-      "sheaf grep <pattern> [--path P] [--glob G] [-i] [-A n] [-B n] [--multiline] [--head-limit n] [--output-mode M] [--ref REF]",
+      "sheaf grep <pattern> [--path P] [--glob G] [-i] [-A n] [-B n] [--multiline] [--head-limit n] [--output-mode M]",
     step: 6,
     needsDaemon: true,
     options: {
@@ -204,7 +202,6 @@ export const REGISTRY: Record<string, CommandSpec> = {
       multiline: { type: "boolean" },
       "head-limit": { type: "string" },
       "output-mode": { type: "string" },
-      ...REF,
     },
     run: grepCommand,
   },
@@ -212,10 +209,9 @@ export const REGISTRY: Record<string, CommandSpec> = {
   glob: {
     name: "glob",
     summary: "List documents matching a glob",
-    usage: "sheaf glob <pattern> [--ref REF]",
+    usage: "sheaf glob <pattern>",
     step: 6,
     needsDaemon: true,
-    options: { ...REF },
     run: globCommand,
   },
 
@@ -228,10 +224,10 @@ export const REGISTRY: Record<string, CommandSpec> = {
       list: {
         name: "list",
         summary: "List threads",
-        usage: "sheaf thread list [--path P] [--ref REF]",
+        usage: "sheaf thread list [--path P]",
         step: 6,
         needsDaemon: true,
-        options: { path: { type: "string" }, ...REF },
+        options: { path: { type: "string" } },
         run: threadListCommand,
       },
       show: {
@@ -246,14 +242,13 @@ export const REGISTRY: Record<string, CommandSpec> = {
         name: "add",
         summary: "Start a new thread",
         usage:
-          "sheaf thread add --path P [--range from:to | --doc] -m MSG [--as ui|agent] [--ref REF]",
+          "sheaf thread add --path P [--range from:to | --doc] -m MSG [--as ui|agent]",
         step: 6,
         needsDaemon: true,
         options: {
           path: { type: "string" },
           range: { type: "string" },
           doc: { type: "boolean" },
-          ...REF,
           ...AS_MESSAGE,
         },
         run: threadAddCommand,
@@ -270,20 +265,13 @@ export const REGISTRY: Record<string, CommandSpec> = {
       resolve: {
         name: "resolve",
         summary: "Resolve a thread",
-        usage:
-          "sheaf thread resolve <id> [--as ui|agent] [--no-apply] [--option N]",
+        usage: "sheaf thread resolve <id> [--as ui|agent]",
         details:
-          "On the ui path (default), resolve APPLIES an attached draft leaf into the doc —\n" +
-          "\"resolve & take\". Pass --no-apply to resolve without taking, and\n" +
-          "--option N to choose which option leaf to apply. Both are ui-only; --as agent just\n" +
-          "flips the thread's status.",
+          "Marks the thread accepted (closes the conversation). --as ui (default) routes\n" +
+          "through REST; --as agent flips status over the MCP tool.",
         step: 6,
         needsDaemon: true,
-        options: {
-          as: { type: "string" },
-          "no-apply": { type: "boolean" },
-          option: { type: "string" },
-        },
+        options: { as: { type: "string" } },
         run: threadResolveCommand,
       },
       reopen: {

@@ -25,14 +25,14 @@ import type {
 
 import { connectDaemon, requireDaemonAllowed } from "./client";
 import type { RunContext } from "./commands";
-import { intFlag, parseAs, requireThreadId, strFlag } from "./flags";
+import { parseAs, requireThreadId, strFlag } from "./flags";
 import { EXIT, usageError, type ExitCode } from "./io";
 import { callTool } from "./tool-call";
 
 /* ------------------------------------------------------------------ reads -- */
 
 /**
- * `sheaf thread list [--path P] [--ref REF]` → the `ListThreads` tool. Prints a
+ * `sheaf thread list [--path P]` → the `ListThreads` tool. Prints a
  * compact line per thread (id, status, target paths, message count, last-
  * message preview) or the raw `{ threads }` payload (`--format json`).
  */
@@ -40,14 +40,12 @@ export async function threadListCommand(ctx: RunContext): Promise<ExitCode> {
   requireDaemonAllowed(ctx.globals, "sheaf thread list");
 
   const path = strFlag(ctx.values, "path");
-  const ref = strFlag(ctx.values, "ref");
 
   const client = await connectDaemon(ctx.vault, ctx.io.env);
   try {
     const mcp = await client.mcp();
     const result = await callTool(mcp, "ListThreads", {
       ...(path !== undefined ? { path } : {}),
-      ...(ref !== undefined ? { ref } : {}),
     });
     const threads =
       (result.structuredContent as { threads?: ThreadSummary[] } | undefined)
@@ -149,11 +147,10 @@ function parseRange(spec: string): { from: number; to: number } {
 }
 
 /**
- * `sheaf thread add --path P (--range FROM:TO | --doc) -m MSG [--as ui|agent]
- * [--ref REF]`. Builds exactly one target and creates the thread: `--as ui`
- * (default) via `POST /api/ui/threads` (author `user`, origin `ui`, wakes the
- * agent); `--as agent` via the `AddThread` tool (origin `agent`). Prints the
- * new thread id.
+ * `sheaf thread add --path P (--range FROM:TO | --doc) -m MSG [--as ui|agent]`.
+ * Builds exactly one target and creates the thread: `--as ui` (default) via
+ * `POST /api/ui/threads` (author `user`, origin `ui`, wakes the agent); `--as
+ * agent` via the `AddThread` tool (origin `agent`). Prints the new thread id.
  */
 export async function threadAddCommand(ctx: RunContext): Promise<ExitCode> {
   requireDaemonAllowed(ctx.globals, "sheaf thread add");
@@ -174,7 +171,6 @@ export async function threadAddCommand(ctx: RunContext): Promise<ExitCode> {
     );
   }
   const as = parseAs(ctx.values.as);
-  const ref = strFlag(ctx.values, "ref");
 
   // Validate the unsupported agent+doc combo before touching the daemon, so it
   // surfaces as a usage error (exit 2) even when no daemon is running.
@@ -196,7 +192,6 @@ export async function threadAddCommand(ctx: RunContext): Promise<ExitCode> {
         "POST",
         "/api/ui/threads",
         {
-          query: ref !== undefined ? { ref } : undefined,
           body: { targets: [target], message },
         },
       );
@@ -206,7 +201,6 @@ export async function threadAddCommand(ctx: RunContext): Promise<ExitCode> {
       const result = await callTool(mcp, "AddThread", {
         targets: [target],
         message,
-        ...(ref !== undefined ? { ref } : {}),
       });
       threadId = (result.structuredContent as { thread_id: string }).thread_id;
     }
@@ -255,15 +249,12 @@ export async function threadReplyCommand(ctx: RunContext): Promise<ExitCode> {
 }
 
 /**
- * `sheaf thread resolve <id> [--as ui|agent] [--no-apply] [--option N]`.
+ * `sheaf thread resolve <id> [--as ui|agent]`. Marks the thread accepted.
  *
- * `--as ui` → `POST /api/ui/threads/:id/resolve`; `--as agent` → the
- * `ResolveThread` tool. On the `ui` path a resolve **applies an attached draft
- * leaf into the doc by default** (the plugin's "resolve & take"): `--no-apply`
- * (`?apply=false`) resolves without taking, and `--option N` (`?option_index=N`)
- * picks which option leaf to apply. Both are `ui`-only — the `agent` tool just
- * flips status — but `--option` is still parsed on both paths so a malformed
- * value is a clean usage error.
+ * `--as ui` (default) → `POST /api/ui/threads/:id/resolve`; `--as agent` → the
+ * `ResolveThread` tool. Both just flip the thread's status — a resolve never
+ * writes anything to the doc (an option's preview is routed back to the agent,
+ * which makes the real edit).
  */
 export async function threadResolveCommand(ctx: RunContext): Promise<ExitCode> {
   requireDaemonAllowed(ctx.globals, "sheaf thread resolve");
@@ -272,8 +263,6 @@ export async function threadResolveCommand(ctx: RunContext): Promise<ExitCode> {
   if (id === undefined) throw usageError("sheaf thread resolve requires a <id>");
   requireThreadId(id);
   const as = parseAs(ctx.values.as);
-  const noApply = ctx.values["no-apply"] === true;
-  const option = intFlag(ctx.values, "option", "--option", 0);
 
   const client = await connectDaemon(ctx.vault, ctx.io.env);
   try {
@@ -281,12 +270,6 @@ export async function threadResolveCommand(ctx: RunContext): Promise<ExitCode> {
       await client.rest(
         "POST",
         `/api/ui/threads/${encodeURIComponent(id)}/resolve`,
-        {
-          query: {
-            apply: noApply ? "false" : undefined,
-            option_index: option,
-          },
-        },
       );
     } else {
       const mcp = await client.mcp();

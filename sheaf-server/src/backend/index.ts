@@ -7,8 +7,8 @@
  * and case-2 sync (design §4.2) without touching any tool code.
  *
  * Paths are always repo-root-relative (vault-relative), e.g. "notes/proposal.md"
- * or "proposal.md" at the vault root. Refs are either "main" or a draft id of
- * the form "draft_<uuid>".
+ * or "proposal.md" at the vault root. Everything operates on the single live
+ * tree (main); there is no draft/ref model.
  */
 
 export {
@@ -19,10 +19,7 @@ export {
 } from "../rfm/index";
 export type { ReviewMarkerGroup, ReviewMarkerKind } from "../rfm/index";
 
-export type Ref = "main" | string;
-
 export type DocPath = string;
-export type DraftId = string;
 export type ThreadId = string;
 export type OpId = string;
 
@@ -48,17 +45,16 @@ export type DocContent = {
    */
   version_token: string;
   /**
-   * Monotonic per-doc version counter. Bumped atomically on draft accept
-   * (Phase I); surfaced as the `vN` badge in the UI. Distinct from
+   * Monotonic per-doc version counter, surfaced as the `vN` badge in the UI.
+   * `1` for a doc with prose, `0` for an empty doc. Distinct from
    * `version_token`, which is an opaque stale-check handle.
    */
   version_counter: number;
   /**
-   * Which tree the bytes actually came from. `readDoc(path, draftId)` falls
-   * through to main when the draft has no override; `origin` tells callers
-   * which tree they're looking at without another round-trip.
+   * Which tree the bytes came from. Always `"main"` — there is only one tree.
+   * Kept on the read result so callers don't need another round-trip.
    */
-  origin: "main" | "draft";
+  origin: "main";
 };
 
 export type WriteResult = {
@@ -84,77 +80,12 @@ export type GrepOptions = {
   after_context?: number;
   multiline?: boolean;
   head_limit?: number;
-  ref?: Ref;
 };
 
 export type GrepResult =
   | { mode: "content"; matches: GrepMatch[] }
   | { mode: "files_with_matches"; paths: DocPath[] }
   | { mode: "count"; counts: { path: DocPath; count: number }[] };
-
-/**
- * One entry in a doc's version history. Phase K: populated on every
- * `merge()` for each touched path. The earliest version produced by a
- * merge is `from + 1`; the entry records that resulting version, the
- * source draft, and when it landed. v1 (the initial state) has no entry —
- * the dropdown renders it as plain text without a `view threads` link.
- */
-export type VersionHistoryEntry = {
-  version: number;
-  draft_id: DraftId;
-  accepted_at: number;
-};
-
-export type DraftSummary = {
-  draft_id: DraftId;
-  base_path: DocPath;
-  /**
-   * Natural-language description of the draft's intent. Set at Fork time,
-   * editable at Propose time. Replaces the previous `seed_prompt`+`note`
-   * split — both were always shown to the same reviewer audience.
-   */
-  intent?: string;
-  author: string;
-  state: "open" | "submitted" | "accepted" | "declined";
-  created_at: number;
-  submitted_at?: number;
-  /** Human-friendly label shown in the review queue. */
-  name?: string;
-  /**
-   * Server-rendered display name: `"<name> #<4hex>"`, where the suffix is
-   * the first 4 chars of `draft_id` after the `draft_` prefix. Set when the
-   * draft is created via `forkAndAttachThreads` (Phase C); absent on legacy
-   * drafts created via the bare `fork()` MCP path until they're touched.
-   */
-  display_name?: string;
-  /**
-   * Doc paths the draft has touched. Initialized to `[base_path]` at
-   * fork time; Phase H expands as cross-cutting edits land.
-   */
-  touches: DocPath[];
-  /**
-   * Per-doc version counter of `base_path` at fork time. Surfaced as
-   * "based on v<base_version>" in the draft-mode banner.
-   */
-  base_version: number;
-  /**
-   * When set, this draft was forked off another draft (a sub-draft used for
-   * multi-option exploration; Phase G). Sub-drafts share lineage with their
-   * parent all the way back to main: `base_version` still tracks main, not
-   * the parent. On parent merge (Phase I), all sub-drafts where
-   * `parent_draft_id === parent` and `state !== "accepted"` are
-   * cascade-declined; declined sub-draft refs persist in git history per the
-   * resolved decision on rejected-alternatives storage.
-   */
-  parent_draft_id?: DraftId;
-  /**
-   * Phase J: how many `vN` bumps `base_path` has accumulated on main since
-   * this draft was forked. Computed at read time from
-   * `version_counter[base_path] - base_version`, clamped to ≥ 0. Surfaced as
-   * the "main has advanced N versions" pill in the draft-mode banner.
-   */
-  versions_behind: number;
-};
 
 /**
  * Input shape passed to `addThread`. Discriminated by `scope`:
@@ -227,7 +158,6 @@ export type Thread = {
   id: ThreadId;
   created: number;
   status: ThreadStatus;
-  draft_id?: DraftId;
   targets: ThreadTarget[];
   messages: ThreadMessage[];
 };
@@ -236,7 +166,6 @@ export type ThreadSummary = {
   id: ThreadId;
   status: ThreadStatus;
   created: number;
-  draft_id?: DraftId;
   target_paths: DocPath[];
   message_count: number;
   last_message_preview: string;
@@ -246,14 +175,13 @@ export interface Backend {
   /** All visible docs on main, optionally filtered to a path prefix. */
   listDocs(prefix?: string): Promise<DocSummary[]>;
 
-  glob(pattern: string, ref?: Ref): Promise<DocSummary[]>;
+  glob(pattern: string): Promise<DocSummary[]>;
   grep(opts: GrepOptions): Promise<GrepResult>;
 
-  readDoc(path: DocPath, ref?: Ref): Promise<DocContent>;
+  readDoc(path: DocPath): Promise<DocContent>;
 
   writeDoc(
     path: DocPath,
-    ref: Ref,
     content: string,
     opId?: OpId,
     origin?: Origin,
@@ -261,7 +189,6 @@ export interface Backend {
 
   editDoc(
     path: DocPath,
-    ref: Ref,
     oldString: string,
     newString: string,
     replaceAll: boolean,
@@ -269,101 +196,9 @@ export interface Backend {
     origin?: Origin,
   ): Promise<WriteResult>;
 
-  /**
-   * Fork the doc at `path` into `n` parallel drafts.
-   *
-   * When `parent` is omitted, each new draft branches off `main` with
-   * `parent_draft_id` unset. When `parent` is set (Phase G: multi-option
-   * exploration), each new draft is a sub-draft branched off the parent's
-   * current draft content for that path — the parent's edits are visible
-   * to the sub-draft as its starting point. `base_path` is inherited from
-   * the parent (same doc identity); `base_version` is inherited too, so
-   * sub-drafts share lineage with the parent all the way back to main.
-   *
-   * Acceptance lifecycle: on parent merge (Phase I), all sub-drafts where
-   * `parent_draft_id === parent` and `state !== "accepted"` are
-   * cascade-declined. Phase G exposes `_cascadeDeclineSubDrafts` for that
-   * call; Phase I wires it into `merge()`.
-   */
-  fork(
-    path: DocPath,
-    n: number,
-    intent?: string,
-    author?: string,
-    parent?: DraftId,
-  ): Promise<DraftId[]>;
-
-  /**
-   * Atomic Start-Draft primitive: forks a single draft off `base_path` and
-   * persists `initial_threads` against the new draft ref in one shot. Used
-   * by the UI's `POST /api/ui/drafts` (Phase C) so the alice-clicks-Start-Draft
-   * gesture creates draft + threads as one transaction.
-   *
-   * Distinct from `fork()` so the MCP tool's existing one-arg surface stays
-   * untouched — callers there don't need the threads-in-one-shot semantics.
-   */
-  forkAndAttachThreads(opts: {
-    base_path: DocPath;
-    base_version?: number;
-    name: string;
-    author?: string;
-    intent?: string;
-    initial_threads: {
-      targets: ThreadAnchor[];
-      message: string;
-      draft?: ThreadDraftBody;
-    }[];
-  }): Promise<{
-    draft_id: DraftId;
-    display_name: string;
-    base_version: number;
-  }>;
-
-  propose(
-    draftId: DraftId,
-    intent?: string,
-    name?: string,
-  ): Promise<{ diff_url: string }>;
-
-  /**
-   * Atomic accept of every path in the draft's `touches`. On success, every
-   * touched path's `version_counter` is bumped by one and a single
-   * `draft_merged` event is emitted carrying the per-path `{from, to}`
-   * versions. Returns the resulting `commit` (pseudo id in the stub) plus
-   * the per-path version transitions.
-   *
-   * Atomic on conflict: if any touched path has overlapping changes (Phase I
-   * stub heuristic: main's `version_counter[path]` has advanced past the
-   * draft's `base_version`), the call throws a `merge_conflict` SheafError
-   * with per-path details and *nothing* is committed — no main writes, no
-   * version bumps, no events.
-   */
-  merge(draftId: DraftId): Promise<{
-    commit: string;
-    versions: { path: DocPath; from: number; to: number }[];
-  }>;
-
-  declineDraft(draftId: DraftId): Promise<void>;
-
-  listDrafts(path?: DocPath): Promise<DraftSummary[]>;
-
-  /** Files changed in a draft relative to main, for UI diff rendering. */
-  draftChanges(
-    draftId: DraftId,
-  ): Promise<{ path: DocPath; main_md: string; draft_md: string }[]>;
-
-  /**
-   * Phase K: per-doc version history. Entries are appended on every
-   * `merge()` for each touched path. The pre-merge version (v1 for an
-   * untouched doc) has no entry — the version dropdown renders it as
-   * plain text without an associated draft.
-   */
-  listVersionHistory(path: DocPath): Promise<VersionHistoryEntry[]>;
-
   listThreads(opts: {
     path?: DocPath;
     thread_id?: ThreadId;
-    ref?: Ref;
   }): Promise<ThreadSummary[]>;
 
   readThread(id: ThreadId): Promise<Thread>;
@@ -378,7 +213,6 @@ export interface Backend {
   readThreads(opts: {
     path?: DocPath;
     thread_id?: ThreadId;
-    ref?: Ref;
   }): Promise<Thread[]>;
 
   addThread(opts: {
@@ -386,7 +220,6 @@ export interface Backend {
     message: string;
     author?: string;
     draft?: ThreadDraftBody;
-    ref?: Ref;
     origin?: Origin;
   }): Promise<ThreadId>;
 
@@ -400,8 +233,8 @@ export interface Backend {
 
   /**
    * Append a system-style message to an existing thread carrying one or more
-   * proposed leaves. Phase F: this is how claude attaches an α-style payload
-   * to an existing thread instead of spawning a sibling redline thread.
+   * proposed leaves. This is how claude attaches an α-style payload to an
+   * existing thread instead of spawning a sibling redline thread.
    *
    * Exactly one of `draft` or `draft_options` must be set. `draft_options` is
    * canonical for >1 leaf; `draft` is the single-leaf shortcut. Implementations
@@ -419,21 +252,13 @@ export interface Backend {
   ): Promise<void>;
 
   /**
-   * Reopen a resolved thread — flip its status back to `open`. Two shapes,
-   * keyed on whether the thread lives on a draft:
+   * Reopen a resolved thread — a plain "unresolve": flip its status back to
+   * `open` and resurrect it as an outstanding item with a bare `reopened`
+   * message. The escape hatch for an agent that resolved too eagerly.
    *
-   *  - Draft-mode (`draft_id` set) — the Phase J "remix": appends a
-   *    system-style message carrying a `current` leaf (a snapshot of the
-   *    current draft prose for the thread's primary target) so the reviewer can
-   *    attach further options via `attachDraftPayload`. Throws `invalid_payload`
-   *    if the thread is `declined` (declined draft threads cannot be reopened).
-   *  - Thread-on-doc (`draft_id` absent) — a plain "unresolve": resurrects the
-   *    thread as an outstanding item with a bare `reopened` message and no
-   *    payload leaf. The escape hatch for an agent that resolved too eagerly.
-   *
-   * Either way, emits a `thread_changed` (stamped with `origin`, default `ui`)
-   * so the panel and the connected agent see the thread return to the queue.
-   * Throws `invalid_payload` if the thread is already open (no-op signal).
+   * Emits a `thread_changed` (stamped with `origin`, default `ui`) so the panel
+   * and the connected agent see the thread return to the queue. Throws
+   * `invalid_payload` if the thread is already open (no-op signal).
    */
   reopenThread(id: ThreadId, origin?: Origin): Promise<void>;
 
@@ -442,7 +267,7 @@ export interface Backend {
    *
    * Used by the SSE route to push live updates to the /doc browser UI.
    * Emitted from any mutation that changes what a reviewer would see:
-   * Fork, Write, Edit, Propose, Merge, declineDraft.
+   * Write, Edit, and thread mutations.
    *
    * `role` distinguishes UI subscribers (passive observers, the default)
    * from agent subscribers (the MCP/event-watcher session). Only `"agent"`
@@ -478,38 +303,6 @@ import { z } from "zod";
  */
 export const backendEventSchema = z.discriminatedUnion("kind", [
   z.object({
-    kind: z.literal("draft_created"),
-    draft_id: z.string(),
-    base_path: z.string(),
-  }),
-  z.object({
-    kind: z.literal("draft_changed"),
-    draft_id: z.string(),
-    path: z.string(),
-  }),
-  z.object({
-    kind: z.literal("draft_state"),
-    draft_id: z.string(),
-    state: z.enum(["open", "submitted", "accepted", "declined"]),
-  }),
-  z.object({
-    kind: z.literal("draft_merged"),
-    draft_id: z.string(),
-    /** Paths merged into main. */
-    target_paths: z.array(z.string()),
-    /**
-     * Per-path version transitions. Phase I: `from` is main's pre-merge
-     * counter, `to` is `from + 1`. Same length and order as `target_paths`.
-     */
-    versions: z.array(
-      z.object({
-        path: z.string(),
-        from: z.number(),
-        to: z.number(),
-      }),
-    ),
-  }),
-  z.object({
     kind: z.literal("thread_changed"),
     thread_id: z.string(),
     /** Docs the thread anchors onto; consumers scope refetches by these. */
@@ -517,10 +310,8 @@ export const backendEventSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     /**
-     * A direct edit to main, with no draft involved. Used by the
-     * thread-on-doc prototype: when an agent calls Write/Edit with
-     * ref="main", consumers see this rather than `draft_changed`.
-     * Distinct from `draft_merged` (which still goes through fork+propose+merge).
+     * A direct edit to a doc on main. Used by the thread-on-doc workflow: when
+     * an agent calls Write/Edit, consumers see this.
      */
     kind: z.literal("doc_changed"),
     path: z.string(),
@@ -557,6 +348,5 @@ export type BackendEvent = z.infer<typeof backendEventSchema>;
  *   - case-2 sync (diff md -> yjs ops -> verify render) from design §4.2
  *   - git commits (paired md + ycrdt) and branch storage
  *   - artifact-fs cold mount
- *   - multi-agent shared drafts (design §8)
  *   - authentication / authorization
  */
