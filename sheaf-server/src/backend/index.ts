@@ -44,17 +44,6 @@ export type DocContent = {
    * callers may round-trip it as a stale-check handle but must not parse it.
    */
   version_token: string;
-  /**
-   * Monotonic per-doc version counter, surfaced as the `vN` badge in the UI.
-   * `1` for a doc with prose, `0` for an empty doc. Distinct from
-   * `version_token`, which is an opaque stale-check handle.
-   */
-  version_counter: number;
-  /**
-   * Which tree the bytes came from. Always `"main"` — there is only one tree.
-   * Kept on the read result so callers don't need another round-trip.
-   */
-  origin: "main";
 };
 
 export type WriteResult = {

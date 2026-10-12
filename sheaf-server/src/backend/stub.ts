@@ -553,8 +553,6 @@ export class StubBackend implements Backend {
     return {
       md,
       version_token: `v-${sha(md).slice(0, 12)}`,
-      version_counter: md.length > 0 ? 1 : 0,
-      origin: "main",
     };
   }
 

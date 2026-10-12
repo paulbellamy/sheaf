@@ -137,10 +137,10 @@ sheaf daemon  status | stop
 sheaf mcp     [--doc PATH] [--tools full|thread-only] [--no-daemon]
 sheaf mcp install [client...] [--name NAME] [--dry-run]
 sheaf docs
-sheaf read    <path> [--ref REF]
+sheaf read    <path>
 sheaf grep    <pattern> [--path P] [--glob G] [-i] [-A n] [-B n] ...
-sheaf glob    <pattern> [--ref REF]
-sheaf thread  list   [--path P] [--ref REF]
+sheaf glob    <pattern>
+sheaf thread  list   [--path P]
 sheaf thread  show   <id>
 sheaf thread  add    --path P [--range from:to | --doc] -m MSG [--as ui|agent]
 sheaf thread  reply  <id> -m MSG [--as ui|agent]
@@ -159,7 +159,10 @@ verbs, `style *`, draft lifecycle (`fork/propose/merge`) as CLI verbs.
 > **Superseded:** the draft-review and voice/style surfaces (incl. the `style *`
 > and `fork/propose/merge` tools) were removed, so `--tools`/`thread-only` and
 > its Fork-gating are gone; only the `write`/`edit` CLI verbs remain genuinely
-> deferred.
+> deferred. The draft/ref data model was then excised too: there is only `main`,
+> so the `--ref` flag (on `read`/`grep`/`glob`/`thread list`/`thread add`) and
+> `thread resolve`'s `--no-apply`/`--option` flags are gone — a resolve just
+> flips status and never writes an option to the doc.
 
 ## `sheaf mcp` — the stdio bridge
 

@@ -26,10 +26,10 @@ import { callTool, firstText } from "./tool-call";
  * `sheaf read <path>` → the `Read` tool.
  *
  * Text mode prints the doc's markdown (the tool's first text block — the body,
- * without the `version` footer the tool appends for agents). JSON mode emits
- * a clean domain object `{ path, md, version_counter, version_token, origin }`,
- * parsed out of the tool's body + footer blocks, so consumers get one flat
- * object like the other verbs rather than the raw `content` array.
+ * without the `version_token` footer the tool appends for agents). JSON mode
+ * emits a clean domain object `{ path, md, version_token }`, parsed out of the
+ * tool's body + footer blocks, so consumers get one flat object like the other
+ * verbs rather than the raw `content` array.
  */
 export async function readCommand(ctx: RunContext): Promise<ExitCode> {
   requireDaemonAllowed(ctx.globals, "sheaf read");
@@ -45,7 +45,7 @@ export async function readCommand(ctx: RunContext): Promise<ExitCode> {
     });
 
     // The Read tool emits two text blocks: [0] the doc body, [1] a
-    // `--\nv: … version_token: … origin: …` footer.
+    // `--\nversion_token: …` footer.
     const blocks = (result.content ?? []).filter(
       (b): b is { type: "text"; text: string } =>
         b.type === "text" && typeof b.text === "string",
@@ -63,9 +63,8 @@ export async function readCommand(ctx: RunContext): Promise<ExitCode> {
   }
 }
 
-/** The Read tool's footer, e.g. `--\nv: 1  version_token: v-ab  origin: main`. */
-const READ_FOOTER_RE =
-  /v:\s*(\d+)\s+version_token:\s*(\S+)\s+origin:\s*(\S+)/;
+/** The Read tool's footer, e.g. `--\nversion_token: v-ab`. */
+const READ_FOOTER_RE = /version_token:\s*(\S+)/;
 
 /**
  * Fold the Read tool's body + footer blocks into a flat domain object. The
@@ -81,9 +80,7 @@ function parseReadResult(
   return {
     path,
     md,
-    ...(m ? { version_counter: Number(m[1]) } : {}),
-    ...(m ? { version_token: m[2] } : {}),
-    ...(m ? { origin: m[3] } : {}),
+    ...(m ? { version_token: m[1] } : {}),
   };
 }
 

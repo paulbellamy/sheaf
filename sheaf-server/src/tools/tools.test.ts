@@ -323,9 +323,37 @@ describe("resolve route does NOT auto-apply options to the doc", () => {
     const { md: onDisk } = await backend.readDoc("workspaces/ws/docs/a.md");
     expect(onDisk).toBe("hello world"); // unchanged
   });
+
+  it("ignores stale ?option_index/?apply query params (accepts, no doc change)", async () => {
+    // Clients from before phase 2 may still send `?option_index=1&apply=true`.
+    // The route no longer reads them: the resolve must succeed and the doc must
+    // stay untouched (the params are silently ignored, not an error).
+    const threadId = await backend.addThread({
+      targets: [{ path: docPath, scope: "range", char_range: { from: 0, to: 5 } }],
+      message: "fix",
+      author: "user",
+    });
+    await backend.attachDraftPayload(threadId, {
+      author: "agent",
+      draft_options: [
+        { name: "a", new_md: "AAA" },
+        { name: "b", new_md: "BBB" },
+      ],
+    });
+
+    const req = new Request(
+      `http://localhost/api/ui/threads/${threadId}/resolve?option_index=1&apply=true`,
+      { method: "POST" },
+    );
+    const res = await resolvePOST(req);
+    expect(res.status).toBe(200);
+    const { md: onDisk } = await backend.readDoc("workspaces/ws/docs/a.md");
+    expect(onDisk).toBe("hello world"); // unchanged — params ignored
+    expect((await backend.readThread(threadId)).status).toBe("accepted");
+  });
 });
 
-describe("backend.readDoc version_counter", () => {
+describe("backend.readDoc version_token", () => {
   let root: string;
   let backend: StubBackend;
 
@@ -345,17 +373,15 @@ describe("backend.readDoc version_counter", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("returns version_counter: 1 for a fresh doc with prose", async () => {
-    const result = await backend.readDoc("workspaces/ws/docs/a.md");
-    expect(result.version_counter).toBe(1);
-  });
-
   it("exposes version_token (renamed from version) on the read result", async () => {
     const result = await backend.readDoc("workspaces/ws/docs/a.md");
     expect(typeof result.version_token).toBe("string");
     expect(result.version_token).toMatch(/^v-/);
     // The legacy `version` field must not exist on the new shape.
     expect((result as { version?: unknown }).version).toBeUndefined();
+    // version_counter / origin were excised with the draft/ref model.
+    expect((result as { version_counter?: unknown }).version_counter).toBeUndefined();
+    expect((result as { origin?: unknown }).origin).toBeUndefined();
   });
 
   it("writeDoc result carries version_token (renamed from version)", async () => {

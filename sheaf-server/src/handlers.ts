@@ -49,10 +49,10 @@ export async function readDoc(
   backend: Backend,
   opts: { path: string },
 ): Promise<HandlerResult> {
-  const { md, version_counter } = await backend.readDoc(opts.path);
+  const { md } = await backend.readDoc(opts.path);
   return {
     status: 200,
-    json: { path: opts.path, md, version_counter },
+    json: { path: opts.path, md },
   };
 }
 

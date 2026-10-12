@@ -188,6 +188,24 @@ describe("per-command flags parse", () => {
   });
 });
 
+describe("removed draft/ref flags are now unknown options (exit 2)", () => {
+  // Phase 2 excised the draft/ref model: `--ref` on the read/thread verbs and
+  // `--no-apply`/`--option` on `thread resolve` no longer exist, so parse must
+  // reject them (exit 2) before any daemon connection is attempted.
+  it.each([
+    [["read", "notes.md", "--ref", "v3"]],
+    [["grep", "foo", "--ref", "v3"]],
+    [["glob", "**/*.md", "--ref", "v3"]],
+    [["thread", "list", "--ref", "v3"]],
+    [["thread", "add", "--path", "a.md", "-m", "hi", "--range", "0:5", "--ref", "v3"]],
+    [["thread", "resolve", "thrd_abcdef", "--no-apply"]],
+    [["thread", "resolve", "thrd_abcdef", "--option", "1"]],
+  ])("`%s` is a usage error (exit 2)", async (argv) => {
+    const { io } = makeIo();
+    expect(await run(argv as string[], io)).toBe(2);
+  });
+});
+
 describe("usage errors (exit 2)", () => {
   it("unknown top-level command", async () => {
     const { io, stderr } = makeIo();

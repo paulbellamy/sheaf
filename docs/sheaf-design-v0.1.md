@@ -197,6 +197,10 @@ comments:
 
 ## 6. branch / draft model
 
+> **Superseded (dated history):** this draft/branch model and its `fork/propose/merge`
+> API below were never shipped and have since been excised from the prototype — the
+> backend now operates only on `main` (thread-on-doc). Kept here as original design history.
+
 no autosave. every editing session is implicitly a branch.
 
 - **open doc** → fork current main into `draft-<user>-<doc>-<ts>`. the editor's yjs client connects to a DO keyed on this branch.

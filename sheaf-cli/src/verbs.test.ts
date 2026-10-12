@@ -97,19 +97,16 @@ describe("sheaf read", () => {
     const body = json<{
       path: string;
       md: string;
-      version_counter: number;
       version_token: string;
-      origin: string;
     }>(j.stdout);
     // One flat object like the other verbs — no raw `content` array / footer.
-    expect(body).toMatchObject({
-      path: "note.md",
-      origin: "main",
-      version_counter: 1,
-    });
+    expect(body).toMatchObject({ path: "note.md" });
     expect(body.md).toContain("The quick brown fox");
     expect(typeof body.version_token).toBe("string");
     expect(body).not.toHaveProperty("content");
+    // version_counter / origin are gone from the read result.
+    expect(body).not.toHaveProperty("version_counter");
+    expect(body).not.toHaveProperty("origin");
   });
 
   it("errors (exit 1) with the server code for a missing doc", async () => {
