@@ -8,7 +8,6 @@ import { registerListDocs } from "./tools/list-docs";
 import { registerRead } from "./tools/read";
 import { registerReadMe } from "./tools/readme";
 import { registerThreadTools } from "./tools/threads";
-import { registerWorkspaceTools } from "./tools/workspaces";
 import { registerWrite } from "./tools/write";
 
 export interface BuildServerOptions {
@@ -69,7 +68,6 @@ export function buildServer(
   registerGlob(server, backend);
   registerGrep(server, backend);
   registerListDocs(server, backend);
-  registerWorkspaceTools(server, backend);
   registerThreadTools(server, backend, docScope);
 
   return server;

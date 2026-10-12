@@ -156,6 +156,11 @@ Global flags: `--vault/-C <dir>`, `--format text|json`, `--no-daemon`.
 Deferred past v0.1 (agents still reach them via `sheaf mcp`): `write`/`edit`
 verbs, `style *`, draft lifecycle (`fork/propose/merge`) as CLI verbs.
 
+> **Superseded:** the draft-review and voice/style surfaces (incl. the `style *`
+> and `fork/propose/merge` tools) were removed, so `--tools`/`thread-only` and
+> its Fork-gating are gone; only the `write`/`edit` CLI verbs remain genuinely
+> deferred.
+
 ## `sheaf mcp` — the stdio bridge
 
 Gives the agent a stdio MCP server (what `mcp install` points at) while the

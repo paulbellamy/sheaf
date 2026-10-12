@@ -111,8 +111,8 @@ comments — and strips the prefix, leaving one JSON event per line, exactly lik
 reconnects (\`sleep 1\`). Keep \`role=agent\` here too.
 
 A single wake-up may still carry **one or more** event lines (several can land
-in the same instant — e.g. a rename that moves many threads at once). Handle
-each line independently; each is an event of the form:
+in the same instant — e.g. a panel review posting several threads at once).
+Handle each line independently; each is an event of the form:
 
 \`\`\`
 {"kind":"thread_changed","thread_id":"thrd_...","target_paths":["notes/foo.md"]}

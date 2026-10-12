@@ -30,6 +30,9 @@ function folderOf(p: string): string {
 }
 
 export async function listDocsAndDrafts(backend: Backend): Promise<HandlerResult> {
+  // TODO(phase 2): with the draft surfaces gone, `drafts` is always empty here.
+  // Drop the `.drafts/` scan + the `drafts` response key (and rename this
+  // handler) when the draft/ref data model is excised.
   const allDocs = await backend.listDocs();
   const docs = allDocs
     .map((d) => ({

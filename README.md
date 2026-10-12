@@ -70,10 +70,10 @@ REST covers only a subset, and REST mutations hard-code origin `ui`. So:
 
 ```
 sheaf --help | --version
-sheaf serve   [--port N] [--host H] [--tools full|thread-only] [--allow-origin O]...
+sheaf serve   [--port N] [--host H] [--allow-origin O]...
 sheaf daemon  status | stop
-sheaf mcp     [--doc PATH] [--tools full|thread-only] [--no-daemon]
-sheaf mcp install [client...] [--name NAME] [--tools full|thread-only] [--dry-run]
+sheaf mcp     [--doc PATH] [--no-daemon]
+sheaf mcp install [client...] [--name NAME] [--dry-run]
 sheaf docs
 sheaf read    <path> [--ref REF]
 sheaf grep    <pattern> [--path P] [--glob G] [-i] [-A n] [-B n] [--multiline] [--head-limit n] [--output-mode M] [--ref REF]
@@ -133,8 +133,8 @@ diff and writes nothing.
 
 ## Deferred past v0.1
 
-Agents still reach these through `sheaf mcp`; they're just not CLI verbs yet:
-`write`/`edit`, `style *`, and the draft lifecycle (`fork`/`propose`/`merge`).
+The `Write`/`Edit` MCP tools exist; there's just no human-facing CLI `write`/`edit`
+verb yet (agents reach them through `sheaf mcp`).
 
 ## Monorepo packages
 

@@ -239,7 +239,7 @@ export function registerThreadTools(
     {
       title: "AttachDraftPayload",
       description:
-        "Attach one or more proposed leaves (α-style payload) to an existing thread. Pass `draft` for a single leaf, `draft_options` for two or more. The thread message becomes a redline (single) or a leaf selector (multi).",
+        "Attach one or more proposed options to an existing thread. Pass `draft` for a single leaf, `draft_options` for two or more. The thread message becomes a redline (single) or a leaf selector (multi).",
       inputSchema: {
         thread_id: threadIdArg,
         message: messageArg.optional(),
