@@ -69,23 +69,6 @@ export function assertVaultPath(p: string): void {
   }
 }
 
-/**
- * Remap `p` when it sits at or under a renamed path `from` → `to`. Returns the
- * rewritten path, or null when `p` is unaffected. One routine covers both
- * Obsidian rename shapes: a file rename (`p === from`) and a folder rename
- * (`p` is a descendant of the folder, `from + "/…"`). Pure string logic — the
- * caller decides what to do with the result.
- */
-export function remapRenamedPath(
-  p: string,
-  from: string,
-  to: string,
-): string | null {
-  if (p === from) return to;
-  if (p.startsWith(from + "/")) return to + p.slice(from.length);
-  return null;
-}
-
 export function assertDraftId(id: string): void {
   if (typeof id !== "string" || !DRAFT_ID_RE.test(id)) {
     throw err.invalidRef(String(id));

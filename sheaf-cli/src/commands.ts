@@ -84,7 +84,6 @@ export interface CommandSpec {
 
 // Shared option fragments, kept consistent across commands.
 const REF: Record<string, OptionDef> = { ref: { type: "string" } };
-const TOOLS: Record<string, OptionDef> = { tools: { type: "string" } };
 const AS_MESSAGE: Record<string, OptionDef> = {
   message: { type: "string", short: "m" },
   as: { type: "string" },
@@ -99,12 +98,11 @@ export const REGISTRY: Record<string, CommandSpec> = {
     name: "serve",
     summary: "Run the sheaf daemon for a vault",
     usage:
-      "sheaf serve [--port N] [--host H] [--tools full|thread-only] [--allow-origin O]...",
+      "sheaf serve [--port N] [--host H] [--allow-origin O]...",
     step: 2,
     options: {
       port: { type: "string" },
       host: { type: "string" },
-      ...TOOLS,
       "allow-origin": { type: "string", multiple: true },
     },
     run: serveCommand,
@@ -136,11 +134,11 @@ export const REGISTRY: Record<string, CommandSpec> = {
   mcp: {
     name: "mcp",
     summary: "Run the stdio MCP bridge (or `mcp install`)",
-    usage: "sheaf mcp [--doc PATH] [--tools full|thread-only] [--no-daemon]",
+    usage: "sheaf mcp [--doc PATH] [--no-daemon]",
     step: 4,
     runnable: true,
     // `--no-daemon` is a global flag, so it already parses here.
-    options: { doc: { type: "string" }, ...TOOLS },
+    options: { doc: { type: "string" } },
     // Running `mcp` (no subcommand) starts the stdio bridge. It is the one
     // command allowed to auto-spawn a daemon, and the one place `--no-daemon`
     // is meaningful (its standalone escape hatch), so it is NOT `needsDaemon`.
@@ -150,7 +148,7 @@ export const REGISTRY: Record<string, CommandSpec> = {
         name: "install",
         summary: "Install sheaf as an MCP server in an agent's config",
         usage:
-          "sheaf mcp install [client...] [--name NAME] [--tools full|thread-only] [--dry-run]",
+          "sheaf mcp install [client...] [--name NAME] [--dry-run]",
         details:
           "Writes an absolute stdio invocation (command: node, args: <abs bin/sheaf.js> mcp\n" +
           "--vault <abs vault>) into each client's config, upserting only the `--name` entry\n" +
@@ -162,12 +160,9 @@ export const REGISTRY: Record<string, CommandSpec> = {
           "node version manager (nvm/volta/asdf), switching node later can stale that path —\n" +
           "re-run `sheaf mcp install` after such a switch.",
         step: 5,
-        // `--tools` (shared TOOLS fragment) is appended to the written args; it
-        // is not a global, so it must be declared here to parse on `install`.
         options: {
           name: { type: "string" },
           "dry-run": { type: "boolean" },
-          ...TOOLS,
         },
         run: mcpInstallCommand,
       },

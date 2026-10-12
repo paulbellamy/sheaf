@@ -83,7 +83,7 @@ import {
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 
-import { StubBackend, buildServer, type ToolSurface } from "sheaf-server";
+import { StubBackend, buildServer } from "sheaf-server";
 import {
   daemonBaseUrl,
   findDaemon,
@@ -139,15 +139,6 @@ function errMessage(e: unknown): string {
  */
 export function sheafBinPath(): string {
   return fileURLToPath(import.meta.url);
-}
-
-/** Validate `--tools`; anything but the two surfaces is a usage error (exit 2). */
-export function parseTools(value: unknown): ToolSurface | undefined {
-  if (value === undefined) return undefined;
-  if (value === "full" || value === "thread-only") return value;
-  throw usageError(
-    `--tools must be 'full' or 'thread-only' (got '${String(value)}')`,
-  );
 }
 
 /**
@@ -236,13 +227,12 @@ function isResponse(m: JsonRpcish): m is JsonRpcish & { id: string | number } {
 export async function mcpBridgeCommand(ctx: RunContext): Promise<ExitCode> {
   const err = (line: string): void => ctx.io.err(`${line}\n`);
   try {
-    const tools = parseTools(ctx.values.tools);
     const rawDoc = typeof ctx.values.doc === "string" ? ctx.values.doc : undefined;
     const doc =
       rawDoc !== undefined ? normalizeDocScope(ctx.vault, rawDoc) : undefined;
 
     if (ctx.globals.noDaemon) {
-      return await runStandalone(ctx.vault, tools, doc, err);
+      return await runStandalone(ctx.vault, doc, err);
     }
 
     // Per-doc scope travels as a request header (ACP §3.1); the daemon resolves
@@ -253,11 +243,10 @@ export async function mcpBridgeCommand(ctx: RunContext): Promise<ExitCode> {
       headers["x-sheaf-doc"] = doc;
     }
 
-    const info = await resolveDaemon(ctx.vault, ctx.io.env, { tools, log: err });
+    const info = await resolveDaemon(ctx.vault, ctx.io.env, { log: err });
     return await runBridge({
       vault: ctx.vault,
       env: ctx.io.env,
-      tools,
       headers,
       info,
       drainCapMs: readDrainCapMs(ctx.io.env),
@@ -285,13 +274,13 @@ export async function mcpBridgeCommand(ctx: RunContext): Promise<ExitCode> {
 async function resolveDaemon(
   vault: string,
   env: NodeJS.ProcessEnv,
-  opts: { tools?: ToolSurface; log: (line: string) => void },
+  opts: { log: (line: string) => void },
 ): Promise<DaemonInfo> {
   const existing = await findDaemon(vault, env);
   if (existing) return existing;
 
   opts.log(`sheaf mcp: no daemon for ${vault}; starting one`);
-  const child = spawnDaemon(vault, env, opts.tools, opts.log);
+  const child = spawnDaemon(vault, env, opts.log);
 
   // Watch the child so a boot failure ends the poll early instead of costing
   // the full window. A lock-loser exits 0 (someone else is the daemon) — that
@@ -355,18 +344,16 @@ async function resolveDaemon(
  *
  * Re-execs *this* binary via `process.execPath` + the absolute path to the
  * running entry (`import.meta.url`, which esbuild resolves to `bin/sheaf.js`),
- * passing `--vault` (absolute) and `--tools` through; `$SHEAF_HOME` rides along
- * in the inherited `env`.
+ * passing `--vault` (absolute) through; `$SHEAF_HOME` rides along in the
+ * inherited `env`.
  */
 function spawnDaemon(
   vault: string,
   env: NodeJS.ProcessEnv,
-  tools: ToolSurface | undefined,
   log: (line: string) => void,
 ): ChildProcess | undefined {
   const selfPath = sheafBinPath();
   const args = [selfPath, "serve", "--vault", vault];
-  if (tools) args.push("--tools", tools);
   try {
     const child = spawn(process.execPath, args, {
       detached: true,
@@ -390,13 +377,12 @@ function spawnDaemon(
 function runBridge(opts: {
   vault: string;
   env: NodeJS.ProcessEnv;
-  tools?: ToolSurface;
   headers: Record<string, string>;
   info: DaemonInfo;
   drainCapMs: number;
   err: (line: string) => void;
 }): Promise<ExitCode> {
-  const { vault, env, tools, headers, err } = opts;
+  const { vault, env, headers, err } = opts;
   const mcpUrl = (info: DaemonInfo): URL =>
     new URL(`${daemonBaseUrl(info)}/api/mcp`);
 
@@ -587,7 +573,7 @@ function runBridge(opts: {
     }
     let info: DaemonInfo;
     try {
-      info = await resolveDaemon(vault, env, { tools, log: err });
+      info = await resolveDaemon(vault, env, { log: err });
     } catch (e) {
       err(`sheaf mcp: reconnect failed: ${errMessage(e)}`);
       return false;
@@ -697,7 +683,6 @@ function runBridge(opts: {
  */
 async function runStandalone(
   vault: string,
-  tools: ToolSurface | undefined,
   doc: string | undefined,
   err: (line: string) => void,
 ): Promise<ExitCode> {
@@ -708,7 +693,6 @@ async function runStandalone(
 
   const backend = new StubBackend(vault);
   const server = buildServer(backend, {
-    tools,
     docScope: doc,
     standalone: true,
   });

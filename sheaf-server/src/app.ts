@@ -6,27 +6,16 @@ import Fastify, {
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
 import type { Backend } from "./backend/index";
-import { buildServer, type ToolSurface } from "./server";
+import { buildServer } from "./server";
 import { err, errorResult } from "./errors";
 import { assertVaultPath } from "./paths";
 import { pipeEvents, reserveSseClient, type SseSink } from "./events";
 import {
-  acceptDraft,
   addThread,
-  attachPayload,
-  buildStyleGuide,
-  createDraft,
-  declineDraft,
-  docVersions,
-  getDraft,
-  getStyleConfig,
   type HandlerResult,
   listDocsAndDrafts,
-  listDrafts,
   listThreadsForDoc,
-  putStyleConfig,
   readDoc,
-  renameDoc,
   reopenThread,
   replyThread,
   resolveThread,
@@ -98,7 +87,6 @@ export function buildSheafApp(
   backend: Backend,
   opts: {
     allowedOrigins?: string[];
-    tools?: ToolSurface;
     /**
      * Daemon identity reported by `GET /api/health`. `sheaf serve` threads it
      * in so liveness probes can confirm this server owns the *expected* vault
@@ -218,18 +206,6 @@ export function buildSheafApp(
     ),
   );
 
-  app.post("/api/ui/rename", (req, reply) =>
-    run(reply, () => renameDoc(backend, { body: req.body })),
-  );
-
-  app.get("/api/ui/doc-versions/*", (req, reply) =>
-    run(reply, () =>
-      docVersions(backend, {
-        path: (req.params as Record<string, string>)["*"],
-      }),
-    ),
-  );
-
   /* -------------------------------------------------------- UI: threads -- */
 
   app.get("/api/ui/threads", (req, reply) =>
@@ -270,57 +246,6 @@ export function buildSheafApp(
     run(reply, () =>
       reopenThread(backend, { id: (req.params as { id: string }).id }),
     ),
-  );
-
-  app.post("/api/ui/threads/:id/payload", (req, reply) =>
-    run(reply, () =>
-      attachPayload(backend, {
-        id: (req.params as { id: string }).id,
-        body: req.body,
-      }),
-    ),
-  );
-
-  /* --------------------------------------------------------- UI: drafts -- */
-
-  app.get("/api/ui/drafts", (_req, reply) =>
-    run(reply, () => listDrafts(backend)),
-  );
-
-  app.post("/api/ui/drafts", (req, reply) =>
-    run(reply, () => createDraft(backend, { body: req.body })),
-  );
-
-  app.get("/api/ui/drafts/:id", (req, reply) =>
-    run(reply, () =>
-      getDraft(backend, { id: (req.params as { id: string }).id }),
-    ),
-  );
-
-  app.post("/api/ui/drafts/:id/accept", (req, reply) =>
-    run(reply, () =>
-      acceptDraft(backend, { id: (req.params as { id: string }).id }),
-    ),
-  );
-
-  app.post("/api/ui/drafts/:id/decline", (req, reply) =>
-    run(reply, () =>
-      declineDraft(backend, { id: (req.params as { id: string }).id }),
-    ),
-  );
-
-  /* ---------------------------------------------------------- UI: style -- */
-
-  app.get("/api/ui/style/config", (_req, reply) =>
-    run(reply, () => getStyleConfig(backend)),
-  );
-
-  app.put("/api/ui/style/config", (req, reply) =>
-    run(reply, () => putStyleConfig(backend, { body: req.body })),
-  );
-
-  app.post("/api/ui/style/build", (_req, reply) =>
-    run(reply, () => buildStyleGuide(backend)),
   );
 
   /* ----------------------------------------------------- SSE event stream -- */
@@ -439,7 +364,6 @@ export function buildSheafApp(
           ? opts.publicUrl()
           : opts.publicUrl;
       const server = buildServer(backend, {
-        tools: opts.tools,
         docScope,
         publicUrl,
       });

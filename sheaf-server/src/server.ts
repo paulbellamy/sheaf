@@ -1,37 +1,17 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { Backend } from "./backend/index";
-import { registerDeclineDraft } from "./tools/decline";
-import { registerDraftChanges } from "./tools/draft-changes";
 import { registerEdit } from "./tools/edit";
-import { registerFork } from "./tools/fork";
 import { registerGlob } from "./tools/glob";
 import { registerGrep } from "./tools/grep";
 import { registerListDocs } from "./tools/list-docs";
-import { registerMerge } from "./tools/merge";
-import { registerPropose } from "./tools/propose";
 import { registerRead } from "./tools/read";
 import { registerReadMe } from "./tools/readme";
-import { registerStyleTools } from "./tools/style";
 import { registerThreadTools } from "./tools/threads";
 import { registerWorkspaceTools } from "./tools/workspaces";
 import { registerWrite } from "./tools/write";
 
-/**
- * Which tool surface to expose (selected via `sheaf serve`/`sheaf mcp
- * --tools`).
- *
- * - `"full"` (default) — every tool, including the draft-workflow tools
- *   (Fork, Propose, Merge, DeclineDraft, DraftChanges) that drive the
- *   fork/propose/merge flow.
- * - `"thread-only"` — omits the draft-workflow tools, for callers that work in
- *   thread-on-doc mode and never touch drafts. The draft tools stay in the
- *   backend; they're just not registered on this surface.
- */
-export type ToolSurface = "full" | "thread-only";
-
 export interface BuildServerOptions {
-  tools?: ToolSurface;
   /**
    * Clamp the thread tools to a single doc path (a per-connection scope). When
    * set, `ListThreads` only returns that doc's threads and the id-keyed thread
@@ -64,15 +44,12 @@ export interface BuildServerOptions {
  * request in stateless mode. The caller supplies the `backend`, which is shared
  * across those per-request servers so on-disk (and in-memory) state carries
  * across requests.
- *
- * `opts.tools` selects the tool surface (see {@link ToolSurface}); it defaults
- * to `"full"`.
  */
 export function buildServer(
   backend: Backend,
   opts: BuildServerOptions = {},
 ): McpServer {
-  const { tools = "full", docScope, publicUrl, standalone } = opts;
+  const { docScope, publicUrl, standalone } = opts;
   const server = new McpServer(
     {
       name: "sheaf",
@@ -91,17 +68,9 @@ export function buildServer(
   registerEdit(server, backend);
   registerGlob(server, backend);
   registerGrep(server, backend);
-  if (tools !== "thread-only") {
-    registerFork(server, backend);
-    registerPropose(server, backend);
-    registerMerge(server, backend);
-    registerDeclineDraft(server, backend);
-    registerDraftChanges(server, backend);
-  }
   registerListDocs(server, backend);
   registerWorkspaceTools(server, backend);
   registerThreadTools(server, backend, docScope);
-  registerStyleTools(server, backend);
 
   return server;
 }

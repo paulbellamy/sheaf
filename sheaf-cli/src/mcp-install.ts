@@ -1,5 +1,5 @@
 /**
- * `sheaf mcp install [client...] [--name NAME] [--dry-run] [--tools full|thread-only]`
+ * `sheaf mcp install [client...] [--name NAME] [--dry-run]`
  * — wire sheaf's stdio MCP bridge into an agent host's configuration.
  *
  * The installer writes ONE MCP server entry, with an **absolute** invocation,
@@ -9,7 +9,7 @@
  * not resolve — the entry is therefore:
  *
  *     command: process.execPath              (the node that is running us)
- *     args:    [<abs bin/sheaf.js>, "mcp", "--vault", <abs vault>, ...--tools?]
+ *     args:    [<abs bin/sheaf.js>, "mcp", "--vault", <abs vault>]
  *
  * `<abs bin/sheaf.js>` comes from {@link sheafBinPath} (shared with the bridge's
  * auto-spawn), and `<abs vault>` is `ctx.vault` (already realpath'd). We do NOT
@@ -119,11 +119,10 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
 import { parse as parseToml, stringify as stringifyToml } from "smol-toml";
-import type { ToolSurface } from "sheaf-server";
 
 import type { RunContext } from "./commands";
 import { CliError, EXIT, usageError, type ExitCode, type Output } from "./io";
-import { parseTools, sheafBinPath } from "./mcp";
+import { sheafBinPath } from "./mcp";
 
 /** The stdio MCP server entry we write into a client config. */
 export interface McpEntry {
@@ -137,9 +136,8 @@ export interface McpEntry {
  * absolute path that differs between the bundled binary and the vitest source
  * load — see {@link sheafBinPath}).
  */
-export function buildSheafEntry(vault: string, tools?: ToolSurface): McpEntry {
+export function buildSheafEntry(vault: string): McpEntry {
   const args = [sheafBinPath(), "mcp", "--vault", vault];
-  if (tools) args.push("--tools", tools);
   return { command: process.execPath, args };
 }
 
@@ -745,9 +743,8 @@ export function mcpInstallCommand(ctx: RunContext): ExitCode {
   const rc: ResolveCtx = { env: io.env, vault };
 
   const name = resolveName(ctx.values.name);
-  const tools = parseTools(ctx.values.tools);
   const dryRun = ctx.values["dry-run"] === true;
-  const entry = buildSheafEntry(vault, tools);
+  const entry = buildSheafEntry(vault);
 
   const clients = selectClients(ctx.positionals, rc, out);
   if (clients.length === 0) {

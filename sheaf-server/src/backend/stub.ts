@@ -31,7 +31,6 @@ import {
   assertDraftId,
   assertThreadId,
   assertVaultPath,
-  remapRenamedPath,
   safeJoin,
 } from "../paths";
 import { draftMetaSchema, opLogSchema } from "../persistence-schemas";
@@ -40,13 +39,6 @@ import {
   parseReviewDoc,
   serializeReviewDoc,
 } from "./review-doc";
-import {
-  type CorpusFile,
-  type StyleConfig,
-  type StyleProfile,
-  defaultStyleConfig,
-} from "../style/profile";
-import { styleConfigSchema, styleProfileSchema } from "../style/schemas";
 
 /**
  * Filesystem-backed stub backend — the one `StubBackend` the daemon owns per
@@ -229,16 +221,6 @@ async function writeFileNoFollow(abs: string, content: string): Promise<void> {
 }
 
 /**
- * Symlink-hostile copy. Rejects symlinks at both ends.
- */
-async function copyFileNoFollow(src: string, dest: string): Promise<void> {
-  const srcStat = await fs.lstat(src);
-  if (!srcStat.isFile()) throw err.invalidPath(src);
-  const content = await readFileNoFollow(src);
-  await writeFileNoFollow(dest, content);
-}
-
-/**
  * Replay-buffer depth for resumable SSE subscriptions. Sized for the gap a
  * reconnect loop actually spans (about a second, plus a debounce window) —
  * a subscriber further behind than this gets a `stream_reset` and re-syncs
@@ -249,9 +231,6 @@ const MAX_REPLAY_EVENTS = 256;
 export class StubBackend implements Backend {
   private root: string;
   private opLogPath: string;
-  /** Hidden cache for the style profile + bridged config (see `.sheaf/`). */
-  private styleProfilePath: string;
-  private styleConfigPath: string;
   private opLogCache: OpLog | null = null;
   private lockChain: Promise<unknown> = Promise.resolve();
   private subscribers = new Set<(event: BackendEvent, eventId?: string) => void>();
@@ -294,8 +273,6 @@ export class StubBackend implements Backend {
   constructor(root: string) {
     this.root = root;
     this.opLogPath = path.join(root, ".op_log.json");
-    this.styleProfilePath = path.join(root, ".sheaf", "style-profile.json");
-    this.styleConfigPath = path.join(root, ".sheaf", "config.json");
   }
 
   subscribe(
@@ -792,130 +769,6 @@ export class StubBackend implements Backend {
       version_counter: version_counter ?? 0,
       origin,
     };
-  }
-
-  renameDoc(from: DocPath, to: DocPath, origin: Origin = "ui"): Promise<ThreadId[]> {
-    return this.withLock(async () => {
-      assertVaultPath(from);
-      assertVaultPath(to);
-      if (from === to) return [];
-
-      // `from`/`to` may name a single doc or a whole folder — `remapRenamedPath`
-      // covers both, reconciling every descendant in one pass. The vault has
-      // already moved the visible bytes, and a doc's threads now travel inside
-      // its `.md` (no sidecars), so we only fix what the vault can't see: our
-      // hidden `.drafts/` overrides, the per-doc counters, and the target paths
-      // recorded inside each doc's review endmatter.
-
-      // 1. Repoint each draft's meta and move its override `.md` working copies
-      //    under `.drafts/` (the vault never touches that hidden tree). Do this
-      //    before the endmatter remap so overrides sit at their new paths.
-      for (const d of await this.listDrafts()) {
-        const meta = await this.loadDraftMeta(d.draft_id);
-        const touches = meta.touches ?? [meta.base_path];
-        let metaChanged = false;
-        for (const tp of touches) {
-          const np = remapRenamedPath(tp, from, to);
-          if (np === null) continue;
-          const src = this.absDraft(d.draft_id, tp);
-          try {
-            await fs.stat(src);
-            const dest = this.absDraft(d.draft_id, np);
-            await this.ensureDir(path.dirname(dest));
-            await copyFileNoFollow(src, dest);
-            await fs.rm(src, { force: true });
-          } catch {
-            // No override on disk for this path — meta repoint is enough.
-          }
-        }
-        const nbp = remapRenamedPath(meta.base_path, from, to);
-        if (nbp !== null) {
-          meta.base_path = nbp;
-          metaChanged = true;
-        }
-        if (meta.touches) {
-          const rewritten = meta.touches.map(
-            (p) => remapRenamedPath(p, from, to) ?? p,
-          );
-          if (rewritten.some((p, i) => p !== meta.touches![i])) {
-            meta.touches = rewritten;
-            metaChanged = true;
-          }
-        }
-        if (metaChanged) await this.saveDraftMeta(meta);
-      }
-
-      // 2. Rewrite the target paths stored in every doc's endmatter. The byte
-      //    move already carried each home doc (threads and all) to its new
-      //    path; only the paths recorded inside the records are stale.
-      const moved: { id: ThreadId; target_paths: DocPath[] }[] = [];
-      for (const file of await this.allReviewDocFiles()) {
-        // Fail loud on a non-ENOENT read error (oversized doc, EIO) instead of
-        // silently skipping: the vault already moved the bytes, so skipping
-        // would strand this doc's stored target paths at the old location.
-        // ENOENT (the file vanished) is the one benign case — skip it.
-        const raw = await this.readRawForRewrite(file.abs);
-        if (raw === null) continue;
-        const { prose, threads } = parseReviewDoc(raw, file.draftId);
-        let changed = false;
-        for (const t of threads) {
-          let tChanged = false;
-          t.targets = t.targets.map((tg) => {
-            const np = remapRenamedPath(tg.path, from, to);
-            if (np === null) return tg;
-            tChanged = true;
-            return { ...tg, path: np };
-          }) as Thread["targets"];
-          if (tChanged) {
-            changed = true;
-            moved.push({
-              id: t.id,
-              target_paths: t.targets.map((tg) => tg.path),
-            });
-          }
-        }
-        if (changed) {
-          await writeFileNoFollow(
-            file.abs,
-            serializeReviewDoc(prose, threads, file.homePath),
-          );
-        }
-      }
-
-      // 3. Carry per-doc version counters + history onto their new paths (the
-      //    doc's identity is its path). Don't clobber an existing destination.
-      this.remapMapKeys(this.versionCounters, from, to);
-      this.remapMapKeys(this.versionHistory, from, to);
-
-      // 4. Tell every consumer (UI panels + the connected agent) the threads
-      //    now live on their new paths so they re-resolve.
-      for (const m of moved) {
-        this.emit(
-          { kind: "thread_changed", thread_id: m.id, target_paths: m.target_paths },
-          origin,
-        );
-      }
-      return moved.map((m) => m.id);
-    });
-  }
-
-  /**
-   * Move every key of `map` that sits at or under `from` onto its remapped
-   * path, in place. Skips a destination that already has a value (a real
-   * collision shouldn't happen — the vault wouldn't allow two docs at one
-   * path — but we don't overwrite if it does).
-   */
-  private remapMapKeys<V>(
-    map: Map<DocPath, V>,
-    from: DocPath,
-    to: DocPath,
-  ): void {
-    for (const [p, v] of [...map]) {
-      const np = remapRenamedPath(p, from, to);
-      if (np === null) continue;
-      map.delete(p);
-      if (!map.has(np)) map.set(np, v);
-    }
   }
 
   writeDoc(
@@ -1737,97 +1590,6 @@ export class StubBackend implements Backend {
           target_paths: thread.targets.map((t) => t.path),
         },
         opts.origin,
-      );
-    });
-  }
-
-  // --- Style / voice matching -------------------------------------------
-
-  /**
-   * Every visible `*.md` doc with mtime + size, no content read. `walk` skips
-   * dot-dirs, so `.sheaf/` and `.drafts/` are excluded automatically. This is
-   * the cheap primitive `style/corpus.ts` fingerprints the corpus from.
-   */
-  async statCorpus(): Promise<CorpusFile[]> {
-    const files = await walk(this.root);
-    const out: CorpusFile[] = [];
-    for (const f of files) {
-      if (!f.endsWith(".md")) continue;
-      try {
-        const st = await fs.lstat(f);
-        if (!st.isFile()) continue;
-        out.push({
-          path: path.relative(this.root, f).replace(/\\/g, "/"),
-          mtime_ms: st.mtimeMs,
-          size: st.size,
-        });
-      } catch {
-        continue;
-      }
-    }
-    return out.sort((a, b) => a.path.localeCompare(b.path));
-  }
-
-  async readStyleConfig(): Promise<StyleConfig> {
-    let raw: string;
-    try {
-      raw = await readFileNoFollow(this.styleConfigPath);
-    } catch {
-      return defaultStyleConfig();
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      return defaultStyleConfig();
-    }
-    const validated = styleConfigSchema.safeParse(parsed);
-    if (!validated.success) {
-      console.error("[stub] style config failed schema validation; using defaults");
-      return defaultStyleConfig();
-    }
-    return validated.data as StyleConfig;
-  }
-
-  writeStyleConfig(config: StyleConfig): Promise<void> {
-    return this.withLock(async () => {
-      const validated = styleConfigSchema.parse(config);
-      await this.ensureDir(path.dirname(this.styleConfigPath));
-      await writeFileNoFollow(
-        this.styleConfigPath,
-        JSON.stringify(validated, null, 2),
-      );
-    });
-  }
-
-  async readStyleProfile(): Promise<StyleProfile | null> {
-    let raw: string;
-    try {
-      raw = await readFileNoFollow(this.styleProfilePath);
-    } catch {
-      return null;
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      return null;
-    }
-    const validated = styleProfileSchema.safeParse(parsed);
-    if (!validated.success) {
-      console.error("[stub] style profile failed schema validation; ignoring");
-      return null;
-    }
-    return validated.data as StyleProfile;
-  }
-
-  writeStyleProfile(profile: StyleProfile): Promise<void> {
-    return this.withLock(async () => {
-      const validated = styleProfileSchema.parse(profile);
-      await this.ensureDir(path.dirname(this.styleProfilePath));
-      await writeFileNoFollow(
-        this.styleProfilePath,
-        JSON.stringify(validated, null, 2),
       );
     });
   }

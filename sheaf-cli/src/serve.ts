@@ -35,7 +35,7 @@ import {
 import type { AddressInfo } from "node:net";
 import { dirname, join } from "node:path";
 
-import { StubBackend, type ToolSurface } from "sheaf-server";
+import { StubBackend } from "sheaf-server";
 import { buildSheafApp } from "sheaf-server/app";
 import {
   acquireLock,
@@ -88,7 +88,6 @@ export interface StartServerOptions {
   host?: string;
   /** Bound port; `0` (the default) picks an ephemeral one. */
   port?: number;
-  tools?: ToolSurface;
   allowedOrigins?: string[];
   version: string;
   /** `$SHEAF_HOME` / `SHEAF_IDLE_MS` source (defaults to `process.env`). */
@@ -373,7 +372,6 @@ export async function startServer(
     // actually reached rather than a guessed port.
     let boundUrl: string | undefined;
     app = buildSheafApp(backend, {
-      tools: opts.tools,
       allowedOrigins: opts.allowedOrigins,
       health: { vault, startedAt, version: opts.version },
       forceCloseConnections: true,
@@ -445,15 +443,6 @@ export async function startServer(
   }
 }
 
-/** Validate `--tools`; anything but the two surfaces is a usage error. */
-function parseTools(value: unknown): ToolSurface | undefined {
-  if (value === undefined) return undefined;
-  if (value === "full" || value === "thread-only") return value;
-  throw usageError(
-    `--tools must be 'full' or 'thread-only' (got '${String(value)}')`,
-  );
-}
-
 /** Resolve the bound port: `--port` › config `defaultPort` › `0` (ephemeral). */
 function resolvePort(flag: unknown, configured: number | undefined): number {
   if (flag !== undefined) {
@@ -486,7 +475,6 @@ export async function serveCommand(ctx: RunContext): Promise<ExitCode> {
   const { out, io, vault } = ctx;
   const config = loadConfig(io.env);
 
-  const tools = parseTools(ctx.values.tools);
   const host =
     typeof ctx.values.host === "string" ? ctx.values.host : "127.0.0.1";
   assertLoopbackHost(host);
@@ -504,7 +492,6 @@ export async function serveCommand(ctx: RunContext): Promise<ExitCode> {
       vault,
       host,
       port,
-      tools,
       allowedOrigins,
       version: VERSION,
       env: io.env,

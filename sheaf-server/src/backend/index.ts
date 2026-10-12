@@ -11,21 +11,6 @@
  * the form "draft_<uuid>".
  */
 
-import type {
-  CorpusFile,
-  StyleConfig,
-  StyleProfile,
-} from "../style/profile";
-
-export type {
-  CorpusFile,
-  CorpusFingerprint,
-  StyleConfig,
-  StyleProfile,
-} from "../style/profile";
-
-export { defaultStyleConfig } from "../style/profile";
-export { remapRenamedPath } from "../paths";
 export {
   stripReviewMarkup,
   cleanOffset,
@@ -266,23 +251,6 @@ export interface Backend {
 
   readDoc(path: DocPath, ref?: Ref): Promise<DocContent>;
 
-  /**
-   * Reconcile sheaf's review state after a rename `from` → `to`. `from`/`to`
-   * may name a single doc OR a folder — a folder rename reconciles every
-   * descendant in one pass (see `remapRenamedPath`).
-   *
-   * The byte move itself is the caller's job (the editor renames out from
-   * under us). A doc's threads travel inline with its
-   * `.md`, so this only fixes what the move can't: the target paths recorded
-   * inside each doc's review endmatter, per-doc version counters/history, the
-   * hidden `.drafts/` overrides, and any draft whose `base_path`/`touches` sat
-   * under `from`. Emits a `thread_changed` for every moved thread so the UI
-   * and the connected agent re-resolve against the new paths.
-   *
-   * No-op when `from === to`. Returns the ids of the threads that moved.
-   */
-  renameDoc(from: DocPath, to: DocPath, origin?: Origin): Promise<ThreadId[]>;
-
   writeDoc(
     path: DocPath,
     ref: Ref,
@@ -468,21 +436,6 @@ export interface Backend {
    * Throws `invalid_payload` if the thread is already open (no-op signal).
    */
   reopenThread(id: ThreadId, origin?: Origin): Promise<void>;
-
-  /**
-   * Style / voice matching. The vault is the corpus; these expose the cheap
-   * primitives the `style/*` modules orchestrate.
-   *
-   * `statCorpus` lists every visible `*.md` doc with mtime + size and *no*
-   * content read, so a corpus fingerprint can be computed without touching
-   * file bodies. The profile/config live under the hidden `.sheaf/` dir, so
-   * they never surface as vault docs.
-   */
-  statCorpus(): Promise<CorpusFile[]>;
-  readStyleConfig(): Promise<StyleConfig>;
-  writeStyleConfig(config: StyleConfig): Promise<void>;
-  readStyleProfile(): Promise<StyleProfile | null>;
-  writeStyleProfile(profile: StyleProfile): Promise<void>;
 
   /**
    * Subscribe to mutation events. Returns an unsubscribe function.

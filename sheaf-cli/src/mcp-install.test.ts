@@ -64,7 +64,6 @@ interface CtxOpts {
   home: string;
   clients?: string[];
   name?: string;
-  tools?: string;
   dryRun?: boolean;
   format?: "text" | "json";
   /** PATH the resolvers see; default "" (⇒ no `claude` on PATH). */
@@ -84,7 +83,6 @@ function makeCtx(opts: CtxOpts): { ctx: RunContext; cap: Captured } {
   const format = opts.format ?? "text";
   const values: Record<string, unknown> = { format };
   if (opts.name !== undefined) values.name = opts.name;
-  if (opts.tools !== undefined) values.tools = opts.tools;
   if (opts.dryRun) values["dry-run"] = true;
   const ctx: RunContext = {
     globals: { format, noDaemon: false, help: false, version: false },
@@ -371,22 +369,6 @@ describe("written invocation is absolute", () => {
     expect(entry.command).toBe(process.execPath);
     expect(entry.args[0]).toBe(sheafBinPath());
     expect(entry.args.slice(1, 4)).toEqual(["mcp", "--vault", vault]);
-  });
-
-  it("--tools is appended to args", () => {
-    const vault = tmp("sheaf-vault-");
-    const home = tmp("sheaf-home-");
-    install({ vault, home, clients: ["codex"], tools: "thread-only" });
-    const entry = (readToml(join(home, ".codex", "config.toml"))
-      .mcp_servers as Record<string, McpEntry>).sheaf;
-    expect(entry.args.slice(-2)).toEqual(["--tools", "thread-only"]);
-  });
-
-  it("an invalid --tools value is a usage error (exit 2)", () => {
-    const vault = tmp("sheaf-vault-");
-    const home = tmp("sheaf-home-");
-    const { ctx } = makeCtx({ vault, home, clients: ["codex"], tools: "bogus" });
-    expect(caught(() => mcpInstallCommand(ctx)).exitCode).toBe(EXIT.USAGE);
   });
 });
 
