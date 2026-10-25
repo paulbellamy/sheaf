@@ -107,7 +107,7 @@ describe("buildSheafApp over a real socket", () => {
 
   it("streams SSE events with a primed connection frame", async () => {
     const ctrl = new AbortController();
-    const res = await fetch(`${base}/api/ui/drafts/stream?role=ui`, {
+    const res = await fetch(`${base}/api/ui/events?role=ui`, {
       headers: { accept: "text/event-stream" },
       signal: ctrl.signal,
     });
@@ -125,7 +125,7 @@ describe("buildSheafApp over a real socket", () => {
 
   it("resumes a reconnect from Last-Event-ID without a gap", async () => {
     // First connection: catch the id of a thread_changed frame.
-    const res1 = await fetch(`${base}/api/ui/drafts/stream?role=agent`, {
+    const res1 = await fetch(`${base}/api/ui/events?role=agent`, {
       headers: { accept: "text/event-stream" },
     });
     const reader1 = res1.body!.getReader();
@@ -157,7 +157,7 @@ describe("buildSheafApp over a real socket", () => {
     await post("second — missed");
 
     // Reconnect with Last-Event-ID: the missed event is replayed, no reset.
-    const res2 = await fetch(`${base}/api/ui/drafts/stream?role=agent`, {
+    const res2 = await fetch(`${base}/api/ui/events?role=agent`, {
       headers: {
         accept: "text/event-stream",
         "last-event-id": lastId!,
@@ -178,7 +178,7 @@ describe("buildSheafApp over a real socket", () => {
   it("sends stream_reset when the resume position can't be honored", async () => {
     // An id minted by "another instance" (unknown epoch) → explicit reset,
     // so a restart gap is never silent.
-    const res = await fetch(`${base}/api/ui/drafts/stream?role=agent`, {
+    const res = await fetch(`${base}/api/ui/events?role=agent`, {
       headers: {
         accept: "text/event-stream",
         "last-event-id": "deadbeef.42",
@@ -203,7 +203,7 @@ describe("buildSheafApp over a real socket", () => {
     // Monitor still subscribed to the *old* backend — kept open by the
     // keep-alive ping, never reconnecting, silently missing every event
     // emitted on the restarted instance (user replies included).
-    const res = await fetch(`${base}/api/ui/drafts/stream?role=agent`, {
+    const res = await fetch(`${base}/api/ui/events?role=agent`, {
       headers: { accept: "text/event-stream" },
     });
     expect(res.status).toBe(200);

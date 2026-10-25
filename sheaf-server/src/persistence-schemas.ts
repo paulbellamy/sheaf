@@ -102,13 +102,21 @@ export const threadOnDiskSchema = z.preprocess(
   }),
 );
 
+/** One op-log entry: when the write carrying that `op_id` was applied (unix ms). */
+const opLogEntrySchema = z.object({ applied_at: z.number() });
+
 /**
- * Op log is a map of op_id to WriteResult. Shape is open-ended (backend may
- * evolve WriteResult), so we only assert the outer container.
+ * Op log: the set of write `op_id`s already applied, as `op_id → { applied_at }`.
+ * Only key presence is load-bearing — a present key means "applied; a repeat is
+ * a no-op". Values are read leniently so an entry in any other shape (e.g. the
+ * earlier `{ version_token }` record) still counts as applied; it's normalized
+ * to `applied_at: 0` ("unknown") rather than failing the whole log, which would
+ * forget every applied op and let a retry re-apply its write.
  */
 export const opLogSchema = z.record(
   z.string().max(128),
-  z.object({
-    version_token: z.string().max(128),
+  z.unknown().transform((v) => {
+    const entry = opLogEntrySchema.safeParse(v);
+    return entry.success ? entry.data : { applied_at: 0 };
   }),
 );

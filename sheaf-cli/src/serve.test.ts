@@ -324,7 +324,7 @@ describe("idle-exit accounting", () => {
     const file = daemonFile(vault, env);
 
     const ctrl = new AbortController();
-    const res = await fetch(`${handle.url}/api/ui/drafts/stream?role=agent`, {
+    const res = await fetch(`${handle.url}/api/ui/events?role=agent`, {
       headers: { accept: "text/event-stream" },
       signal: ctrl.signal,
     });

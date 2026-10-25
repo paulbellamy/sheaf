@@ -389,7 +389,7 @@ export async function startServer(
       const pathOnly = req.url.split("?")[0];
       if (pathOnly === "/api/mcp" && req.method === "POST") {
         lastActivity = Date.now();
-      } else if (pathOnly === "/api/ui/drafts/stream") {
+      } else if (pathOnly === "/api/ui/events") {
         openStreams += 1;
         lastActivity = Date.now();
         req.raw.on("close", () => {

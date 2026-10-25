@@ -2,9 +2,9 @@
  * Backend interface for the sheaf MCP server.
  *
  * This interface is the boundary between MCP tool handlers and the storage
- * substrate. `StubBackend` (stub.ts) implements it over the local filesystem
- * with no real CRDT or git; the production backend will plug in yjs, git,
- * and case-2 sync (design §4.2) without touching any tool code.
+ * substrate. `StubBackend` (stub.ts) implements it over the local filesystem;
+ * another storage substrate can implement the same interface without touching
+ * any tool code.
  *
  * Paths are always repo-root-relative (vault-relative), e.g. "notes/proposal.md"
  * or "proposal.md" at the vault root. Everything operates on the single live
@@ -39,16 +39,6 @@ export type DocSummary = {
 
 export type DocContent = {
   md: string;
-  /**
-   * Opaque version token. Meaningful only to the backend that emitted it;
-   * callers may round-trip it as a stale-check handle but must not parse it.
-   */
-  version_token: string;
-};
-
-export type WriteResult = {
-  /** Opaque version token. Same semantics as DocContent.version_token. */
-  version_token: string;
 };
 
 export type GrepMatch = {
@@ -169,12 +159,17 @@ export interface Backend {
 
   readDoc(path: DocPath): Promise<DocContent>;
 
+  /**
+   * `writeDoc` / `editDoc` take an optional `opId` for idempotent retries: once
+   * an op id has been applied, a repeat call carrying it is a no-op (the write
+   * is not re-applied and no event is emitted).
+   */
   writeDoc(
     path: DocPath,
     content: string,
     opId?: OpId,
     origin?: Origin,
-  ): Promise<WriteResult>;
+  ): Promise<void>;
 
   editDoc(
     path: DocPath,
@@ -183,7 +178,7 @@ export interface Backend {
     replaceAll: boolean,
     opId?: OpId,
     origin?: Origin,
-  ): Promise<WriteResult>;
+  ): Promise<void>;
 
   listThreads(opts: {
     path?: DocPath;
@@ -330,12 +325,3 @@ export const backendEventSchema = z.discriminatedUnion("kind", [
 ]);
 
 export type BackendEvent = z.infer<typeof backendEventSchema>;
-
-/**
- * Deferred for the real backend:
- *   - yjs / ycrdt doc synthesis and state-vector accounting
- *   - case-2 sync (diff md -> yjs ops -> verify render) from design §4.2
- *   - git commits (paired md + ycrdt) and branch storage
- *   - artifact-fs cold mount
- *   - authentication / authorization
- */

@@ -99,7 +99,7 @@ over HTTP and can't run the CLI, tail the SSE stream with curl against the
 
 \`\`\`
 Monitor({
-  command: 'while true; do curl -sN "__SHEAF_PUBLIC_URL__/api/ui/drafts/stream?role=agent" | sed -n -u "s/^data: //p"; sleep 1; done',
+  command: 'while true; do curl -sN "__SHEAF_PUBLIC_URL__/api/ui/events?role=agent" | sed -n -u "s/^data: //p"; sleep 1; done',
   description: "sheaf events",
   persistent: true,
 })

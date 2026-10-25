@@ -35,15 +35,9 @@ export function registerRead(server: McpServer, backend: Backend): void {
     },
     async ({ file_path, offset, limit }) => {
       try {
-        const { md, version_token } = await backend.readDoc(file_path);
+        const { md } = await backend.readDoc(file_path);
         return {
-          content: [
-            { type: "text", text: sliceText(md, offset, limit) },
-            {
-              type: "text",
-              text: `\n--\nversion_token: ${version_token}`,
-            },
-          ],
+          content: [{ type: "text", text: sliceText(md, offset, limit) }],
         };
       } catch (e) {
         return toToolError(e);

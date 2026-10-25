@@ -88,25 +88,15 @@ describe("sheaf read", () => {
     const s = scratch();
     await serve(s);
 
+    // Text mode is the doc's markdown and nothing else (no metadata footer).
     const text = await cli(s, "read", "note.md");
     expect(text.code).toBe(0);
-    expect(text.stdout).toContain("The quick brown fox jumps over the lazy dog.");
+    expect(text.stdout).toBe(`${NOTE_MD}\n`);
 
+    // JSON mode is exactly `{ path, md }` — no raw `content` array, no token.
     const j = await cli(s, "--format", "json", "read", "note.md");
     expect(j.code).toBe(0);
-    const body = json<{
-      path: string;
-      md: string;
-      version_token: string;
-    }>(j.stdout);
-    // One flat object like the other verbs — no raw `content` array / footer.
-    expect(body).toMatchObject({ path: "note.md" });
-    expect(body.md).toContain("The quick brown fox");
-    expect(typeof body.version_token).toBe("string");
-    expect(body).not.toHaveProperty("content");
-    // version_counter / origin are gone from the read result.
-    expect(body).not.toHaveProperty("version_counter");
-    expect(body).not.toHaveProperty("origin");
+    expect(json(j.stdout)).toEqual({ path: "note.md", md: NOTE_MD });
   });
 
   it("errors (exit 1) with the server code for a missing doc", async () => {

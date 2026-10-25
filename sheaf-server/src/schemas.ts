@@ -52,7 +52,7 @@ export const opIdArg = z
   .max(LIMITS.opId)
   .optional()
   .describe(
-    "Client-supplied idempotency key. Retrying a write with the same op_id returns the original result without re-applying.",
+    "Client-supplied idempotency key. Retrying a write with an already-applied op_id is a no-op: the write is not re-applied.",
   );
 
 /** Author handle — restricted charset blocks attribution forgery with

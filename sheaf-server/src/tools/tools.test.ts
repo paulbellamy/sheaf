@@ -353,19 +353,17 @@ describe("resolve route does NOT auto-apply options to the doc", () => {
   });
 });
 
-describe("backend.readDoc version_token", () => {
+describe("backend read/write result shapes", () => {
   let root: string;
   let backend: StubBackend;
+  const doc = "workspaces/ws/docs/a.md";
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-tools-"));
     await fs.mkdir(path.join(root, "workspaces", "ws", "docs"), {
       recursive: true,
     });
-    await fs.writeFile(
-      path.join(root, "workspaces", "ws", "docs", "a.md"),
-      "# a\n",
-    );
+    await fs.writeFile(path.join(root, doc), "# a\n");
     backend = new StubBackend(root);
   });
 
@@ -373,22 +371,107 @@ describe("backend.readDoc version_token", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("exposes version_token (renamed from version) on the read result", async () => {
-    const result = await backend.readDoc("workspaces/ws/docs/a.md");
-    expect(typeof result.version_token).toBe("string");
-    expect(result.version_token).toMatch(/^v-/);
-    // The legacy `version` field must not exist on the new shape.
-    expect((result as { version?: unknown }).version).toBeUndefined();
-    // version_counter / origin were excised with the draft/ref model.
-    expect((result as { version_counter?: unknown }).version_counter).toBeUndefined();
-    expect((result as { origin?: unknown }).origin).toBeUndefined();
+  it("readDoc returns just the markdown", async () => {
+    expect(await backend.readDoc(doc)).toEqual({ md: "# a\n" });
   });
 
-  it("writeDoc result carries version_token (renamed from version)", async () => {
-    const result = await backend.writeDoc("workspaces/ws/docs/a.md", "# a v2\n");
-    expect(typeof result.version_token).toBe("string");
-    expect(result.version_token).toMatch(/^v-/);
-    expect((result as { version?: unknown }).version).toBeUndefined();
+  it("writeDoc / editDoc resolve to nothing", async () => {
+    expect(await backend.writeDoc(doc, "# a v2\n")).toBeUndefined();
+    expect(await backend.editDoc(doc, "v2", "v3", false)).toBeUndefined();
+    expect((await backend.readDoc(doc)).md).toBe("# a v3\n");
+  });
+});
+
+describe("op_id idempotency (op log)", () => {
+  let root: string;
+  const doc = "note.md";
+  const opLogFile = () => path.join(root, ".op_log.json");
+  const readOpLogFile = async () =>
+    JSON.parse(await fs.readFile(opLogFile(), "utf8")) as Record<
+      string,
+      unknown
+    >;
+
+  /** A backend over `root` that counts the `doc_changed` events it emits. */
+  function countingBackend(): { backend: StubBackend; changes: () => number } {
+    const backend = new StubBackend(root);
+    let n = 0;
+    backend.subscribe((e) => {
+      if (e.kind === "doc_changed") n += 1;
+    });
+    return { backend, changes: () => n };
+  }
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-oplog-"));
+    await fs.writeFile(path.join(root, doc), "x");
+  });
+
+  afterEach(async () => {
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("a repeated writeDoc op_id is a no-op and records the op as applied", async () => {
+    const { backend, changes } = countingBackend();
+    await backend.writeDoc(doc, "first", "op-w");
+    await backend.writeDoc(doc, "second", "op-w");
+    expect((await backend.readDoc(doc)).md).toBe("first");
+    expect(changes()).toBe(1);
+    const log = await readOpLogFile();
+    expect(Object.keys(log)).toEqual(["op-w"]);
+    expect(log["op-w"]).toEqual({ applied_at: expect.any(Number) });
+  });
+
+  it("a repeated editDoc op_id does not re-apply the edit", async () => {
+    const { backend, changes } = countingBackend();
+    await backend.editDoc(doc, "x", "xy", false, "op-e");
+    // Re-applying would match the leading `x` again and yield "xyy".
+    await backend.editDoc(doc, "x", "xy", false, "op-e");
+    expect((await backend.readDoc(doc)).md).toBe("xy");
+    expect(changes()).toBe(1);
+  });
+
+  it("dedups across backend instances (the op log is persisted)", async () => {
+    await new StubBackend(root).writeDoc(doc, "first", "op-p");
+    const { backend, changes } = countingBackend();
+    await backend.writeDoc(doc, "second", "op-p");
+    expect((await backend.readDoc(doc)).md).toBe("first");
+    expect(changes()).toBe(0);
+  });
+
+  it("does not record a failed write, so a retry can still apply", async () => {
+    const backend = new StubBackend(root);
+    await expect(
+      backend.editDoc(doc, "missing", "y", false, "op-f"),
+    ).rejects.toMatchObject({ code: "edit_no_match" });
+    await backend.writeDoc(doc, "missing", undefined);
+    await backend.editDoc(doc, "missing", "found", false, "op-f");
+    expect((await backend.readDoc(doc)).md).toBe("found");
+  });
+
+  it("treats an op id that shadows an Object.prototype key as unapplied", async () => {
+    const backend = new StubBackend(root);
+    await backend.writeDoc(doc, "applied", "constructor");
+    expect((await backend.readDoc(doc)).md).toBe("applied");
+  });
+
+  it("loads a legacy `{ version_token }` op log and still dedups its ids", async () => {
+    await fs.writeFile(
+      opLogFile(),
+      JSON.stringify({ "op-old": { version_token: "v-0123456789ab" } }),
+    );
+    const { backend, changes } = countingBackend();
+    // The legacy id counts as applied: replaying it is a no-op.
+    await backend.writeDoc(doc, "replayed", "op-old");
+    expect((await backend.readDoc(doc)).md).toBe("x");
+    expect(changes()).toBe(0);
+    // New ids still apply, and the rewrite normalizes the legacy entry.
+    await backend.writeDoc(doc, "fresh", "op-new");
+    expect((await backend.readDoc(doc)).md).toBe("fresh");
+    expect(await readOpLogFile()).toEqual({
+      "op-old": { applied_at: 0 },
+      "op-new": { applied_at: expect.any(Number) },
+    });
   });
 });
 
@@ -438,7 +521,7 @@ describe("operates on any vault doc (not just workspaces/)", () => {
   let backend: StubBackend;
 
   beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-anydoc-"));
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-any-doc-"));
     await fs.writeFile(path.join(root, "note.md"), "hello world");
     await fs.mkdir(path.join(root, "notes"), { recursive: true });
     await fs.writeFile(path.join(root, "notes", "x.md"), "hello world");

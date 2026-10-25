@@ -8,7 +8,6 @@
     ".": "./src/index.ts",
     "./types": "./src/backend/index.ts",
     "./app": "./src/app.ts",
-    "./ydoc": "./src/ydoc/sync.ts",
     "./home": "./src/home.ts",
     "./daemon": "./src/daemon.ts"
   },
@@ -22,7 +21,6 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "fastify": "^5.8.0",
     "yaml": "^2.8.3",
-    "yjs": "^13.6.31",
     "zod": "^4.3.6"
   },
   "devDependencies": {

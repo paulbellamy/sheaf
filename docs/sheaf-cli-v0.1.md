@@ -47,7 +47,7 @@ in which case there are no human events to miss anyway. Not the default.
 - **`sheaf serve`** = the daemon. Owns the one `StubBackend(vault, vault)`
   (constructed directly — **not** via `getBackend()`'s env/cwd factory). Binds
   loopback on an **ephemeral port** and serves the existing surface: UI REST
-  (`/api/ui/*`), SSE (`/api/ui/drafts/stream`), MCP Streamable-HTTP
+  (`/api/ui/*`), SSE (`/api/ui/events`), MCP Streamable-HTTP
   (`/api/mcp`), plus a new `GET /api/health`.
 - **Clients** (domain verbs, `events follow`, `sheaf mcp`) find the daemon via a
   discovery file and speak loopback HTTP. No client ever constructs a backend

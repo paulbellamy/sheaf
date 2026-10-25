@@ -48,7 +48,7 @@ export function registerEdit(server: McpServer, backend: Backend): void {
             isError: true,
           };
         }
-        const result = await backend.editDoc(
+        await backend.editDoc(
           file_path,
           old_string,
           new_string,
@@ -57,13 +57,7 @@ export function registerEdit(server: McpServer, backend: Backend): void {
           "agent",
         );
         return {
-          content: [
-            {
-              type: "text",
-              text: `edited ${file_path}  version_token=${result.version_token}`,
-            },
-          ],
-          structuredContent: result,
+          content: [{ type: "text", text: `edited ${file_path}` }],
         };
       } catch (e) {
         return toToolError(e);

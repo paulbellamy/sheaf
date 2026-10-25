@@ -11,7 +11,7 @@ describe("renderReadMe", () => {
     const text = renderReadMe({ publicUrl: "http://127.0.0.1:4242" });
     // Leads with the CLI tail and points curl at the real bound port.
     expect(text).toContain("sheaf events follow --role agent");
-    expect(text).toContain("http://127.0.0.1:4242/api/ui/drafts/stream");
+    expect(text).toContain("http://127.0.0.1:4242/api/ui/events");
     // The old hard-coded default is gone when a publicUrl is supplied.
     expect(text).not.toContain("31415");
   });
@@ -19,7 +19,7 @@ describe("renderReadMe", () => {
   it("falls back to a default origin when none is supplied", () => {
     const text = renderReadMe();
     expect(text).toContain("sheaf events follow --role agent");
-    expect(text).toContain("http://localhost:31415/api/ui/drafts/stream");
+    expect(text).toContain("http://localhost:31415/api/ui/events");
   });
 
   it("replaces the whole subscribe section in standalone mode", () => {
@@ -27,7 +27,7 @@ describe("renderReadMe", () => {
     // No daemon → no Monitor invocation of the CLI tail, no curl loop, no port.
     // (It may still name `sheaf events follow` to tell the agent NOT to run it.)
     expect(text).not.toContain("command: 'sheaf events follow --role agent'");
-    expect(text).not.toContain("/api/ui/drafts/stream");
+    expect(text).not.toContain("/api/ui/events");
     expect(text).not.toContain("31415");
     // Tells the agent to poll ListThreads instead.
     expect(text).toContain("no live events");

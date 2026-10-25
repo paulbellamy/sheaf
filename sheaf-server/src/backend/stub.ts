@@ -18,7 +18,6 @@ import {
   type ThreadDraftBody,
   type ThreadId,
   type ThreadSummary,
-  type WriteResult,
 } from "./index";
 import { McpError, err } from "../errors";
 import { globToRegex } from "../glob";
@@ -49,12 +48,14 @@ import {
  * Threads live inline in the doc markdown (CriticMarkup + a YAML endmatter
  * block — see `review-doc.ts`), not in sidecars; `readDoc` returns clean prose
  * with that markup stripped.
- *
- * No yjs, no git, no case-2 sync. Every "commit" is a new uuid so clients
- * that cache by commit hash behave correctly.
  */
 
-type OpLog = Record<string, WriteResult>;
+/**
+ * The applied-`op_id` set backing idempotent writes (`.op_log.json`, shape in
+ * `opLogSchema`): each applied op id → when it was applied. A Map (not a plain
+ * object) so an op id like `constructor` can't hit an inherited key.
+ */
+type OpLog = Map<OpId, { applied_at: number }>;
 
 function titleFromMd(md: string, fallback: string): string {
   const line = md.split("\n").find((l) => l.trim().length > 0) ?? "";
@@ -389,15 +390,15 @@ export class StubBackend implements Backend {
       const raw = await readFileNoFollow(this.opLogPath);
       const parsed = opLogSchema.safeParse(JSON.parse(raw));
       if (parsed.success) {
-        this.opLogCache = parsed.data as OpLog;
+        this.opLogCache = new Map(Object.entries(parsed.data));
       } else {
-        // Corrupt or drifted on-disk shape — keep going with an empty log
-        // rather than crashing the whole backend.
+        // Corrupt on-disk shape (not a string-keyed object) — keep going with
+        // an empty log rather than crashing the whole backend.
         console.error("[stub] op_log failed schema validation; resetting");
-        this.opLogCache = {};
+        this.opLogCache = new Map();
       }
     } catch {
-      this.opLogCache = {};
+      this.opLogCache = new Map();
     }
     return this.opLogCache;
   }
@@ -405,20 +406,28 @@ export class StubBackend implements Backend {
   private async writeOpLog(log: OpLog): Promise<void> {
     this.opLogCache = log;
     await this.ensureDir(path.dirname(this.opLogPath));
-    await writeFileNoFollow(this.opLogPath, JSON.stringify(log, null, 2));
+    await writeFileNoFollow(
+      this.opLogPath,
+      JSON.stringify(Object.fromEntries(log), null, 2),
+    );
   }
 
-  private async cachedWrite(
+  /**
+   * Run a write at most once per `opId`. A repeat of an op id already in the op
+   * log is a no-op — the write isn't re-run and no event fires. The id is only
+   * recorded after `run` succeeds, so a failed write can be retried. Without an
+   * `opId` the write always runs.
+   */
+  private async applyOnce(
     opId: OpId | undefined,
-    run: () => Promise<WriteResult>,
-  ): Promise<WriteResult> {
+    run: () => Promise<void>,
+  ): Promise<void> {
     if (!opId) return run();
     const log = await this.readOpLog();
-    if (log[opId]) return log[opId];
-    const result = await run();
-    log[opId] = result;
+    if (log.has(opId)) return;
+    await run();
+    log.set(opId, { applied_at: Date.now() });
     await this.writeOpLog(log);
-    return result;
   }
 
   /**
@@ -549,11 +558,7 @@ export class StubBackend implements Backend {
       throw err.docNotFound(p);
     }
     // The on-disk file carries inline review markup; readers see clean prose.
-    const md = cleanProse(raw);
-    return {
-      md,
-      version_token: `v-${sha(md).slice(0, 12)}`,
-    };
+    return { md: cleanProse(raw) };
   }
 
   writeDoc(
@@ -561,13 +566,12 @@ export class StubBackend implements Backend {
     content: string,
     opId?: OpId,
     origin: Origin = "ui",
-  ): Promise<WriteResult> {
+  ): Promise<void> {
     return this.withLock(() =>
-      this.cachedWrite(opId, async () => {
+      this.applyOnce(opId, async () => {
         assertVaultPath(p);
         await this.persistDoc(this.absMain(p), content, p);
         this.emit({ kind: "doc_changed", path: p }, origin);
-        return { version_token: `v-${sha(content).slice(0, 12)}` };
       }),
     );
   }
@@ -579,9 +583,9 @@ export class StubBackend implements Backend {
     replaceAll: boolean,
     opId?: OpId,
     origin: Origin = "ui",
-  ): Promise<WriteResult> {
+  ): Promise<void> {
     return this.withLock(() =>
-      this.cachedWrite(opId, async () => {
+      this.applyOnce(opId, async () => {
         assertVaultPath(p);
         const current = await this.readDoc(p);
         let next: string;
@@ -608,7 +612,6 @@ export class StubBackend implements Backend {
         }
         await this.persistDoc(this.absMain(p), next, p);
         this.emit({ kind: "doc_changed", path: p }, origin);
-        return { version_token: `v-${sha(next).slice(0, 12)}` };
       }),
     );
   }

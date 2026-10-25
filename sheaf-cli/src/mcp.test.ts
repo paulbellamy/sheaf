@@ -535,7 +535,7 @@ describe("sheaf mcp --no-daemon (standalone)", () => {
       // P2.3: standalone ReadMe must NOT instruct the agent to run the
       // daemon-only event stream (it may mention it to say "don't").
       expect(text).not.toContain("command: 'sheaf events follow --role agent'");
-      expect(text).not.toContain("/api/ui/drafts/stream");
+      expect(text).not.toContain("/api/ui/events");
       expect(text).toContain("no live events");
 
       // Standalone never touches discovery.

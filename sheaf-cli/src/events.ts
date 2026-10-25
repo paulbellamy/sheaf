@@ -134,7 +134,7 @@ export async function followEvents(opts: FollowOptions): Promise<void> {
     let established = false;
     try {
       diag(
-        `following ${url}/api/ui/drafts/stream?role=${opts.role}` +
+        `following ${url}/api/ui/events?role=${opts.role}` +
           (lastId !== undefined ? ` (since ${lastId})` : ""),
       );
       await streamOnce({
@@ -187,7 +187,7 @@ async function streamOnce(opts: {
   onId: (id: string) => void;
   onData: (jsonLine: string) => void;
 }): Promise<void> {
-  const url = new URL(`${opts.base}/api/ui/drafts/stream`);
+  const url = new URL(`${opts.base}/api/ui/events`);
   url.searchParams.set("role", opts.role);
 
   const headers: Record<string, string> = { accept: "text/event-stream" };

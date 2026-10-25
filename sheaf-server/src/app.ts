@@ -23,8 +23,8 @@ import {
 
 /**
  * The canonical sheaf HTTP API as a Fastify app: the `/api/ui/*` REST routes,
- * the `/api/ui/drafts/stream` SSE stream, and the `/api/mcp` MCP Streamable
- * HTTP endpoint. `sheaf serve` runs it in-process via `.listen()` as the
+ * the `/api/ui/events` SSE stream, and the `/api/mcp` MCP Streamable HTTP
+ * endpoint. `sheaf serve` runs it in-process via `.listen()` as the
  * per-vault daemon.
  *
  * Logging is disabled: the daemon does its own structured file logging (`sheaf
@@ -116,7 +116,7 @@ export function buildSheafApp(
 ): FastifyInstance {
   const app = Fastify({
     logger: false,
-    // Thread bodies / draft payloads can approach 1 MB; give headroom.
+    // Thread bodies / doc writes can approach 1 MB; give headroom.
     bodyLimit: 8 * 1024 * 1024,
     ...(opts.forceCloseConnections
       ? { forceCloseConnections: true as const }
@@ -137,7 +137,7 @@ export function buildSheafApp(
   const allowedAcao = (origin: string | undefined): string | undefined =>
     origin && allowedOrigins.has(origin.toLowerCase()) ? origin : undefined;
 
-  // Tolerate empty-bodied POSTs (resolve/accept/decline send none) even when a
+  // Tolerate empty-bodied POSTs (resolve/reopen send none) even when a
   // client sets `content-type: application/json`.
   app.addContentTypeParser(
     "application/json",
@@ -259,7 +259,7 @@ export function buildSheafApp(
     liveSseCleanups.clear();
   });
 
-  app.get("/api/ui/drafts/stream", (req, reply) => {
+  app.get("/api/ui/events", (req, reply) => {
     const role = q(req, "role") === "agent" ? "agent" : "ui";
     // Resume position: the standard SSE header (EventSource sends it on
     // reconnect automatically), with `?since=` as the curl-friendly fallback.

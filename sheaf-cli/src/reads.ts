@@ -25,10 +25,8 @@ import { callTool, firstText } from "./tool-call";
 /**
  * `sheaf read <path>` → the `Read` tool.
  *
- * Text mode prints the doc's markdown (the tool's first text block — the body,
- * without the `version_token` footer the tool appends for agents). JSON mode
- * emits a clean domain object `{ path, md, version_token }`, parsed out of the
- * tool's body + footer blocks, so consumers get one flat object like the other
+ * The tool returns the doc's markdown as its single text block. Text mode
+ * prints it; JSON mode emits a flat domain object `{ path, md }` like the other
  * verbs rather than the raw `content` array.
  */
 export async function readCommand(ctx: RunContext): Promise<ExitCode> {
@@ -44,16 +42,10 @@ export async function readCommand(ctx: RunContext): Promise<ExitCode> {
       file_path: path,
     });
 
-    // The Read tool emits two text blocks: [0] the doc body, [1] a
-    // `--\nversion_token: …` footer.
-    const blocks = (result.content ?? []).filter(
-      (b): b is { type: "text"; text: string } =>
-        b.type === "text" && typeof b.text === "string",
-    );
-    const md = blocks[0]?.text ?? firstText(result) ?? "";
+    const md = firstText(result) ?? "";
 
     if (ctx.out.format === "json") {
-      ctx.out.json(parseReadResult(path, md, blocks[1]?.text));
+      ctx.out.json({ path, md });
       return EXIT.OK;
     }
     ctx.out.text(md);
@@ -61,27 +53,6 @@ export async function readCommand(ctx: RunContext): Promise<ExitCode> {
   } finally {
     await client.close();
   }
-}
-
-/** The Read tool's footer, e.g. `--\nversion_token: v-ab`. */
-const READ_FOOTER_RE = /version_token:\s*(\S+)/;
-
-/**
- * Fold the Read tool's body + footer blocks into a flat domain object. The
- * footer is deterministic (see `sheaf-server/src/tools/read.ts`); if it ever
- * fails to parse, the doc `md` still comes through.
- */
-function parseReadResult(
-  path: string,
-  md: string,
-  footer: string | undefined,
-): Record<string, unknown> {
-  const m = footer ? READ_FOOTER_RE.exec(footer) : null;
-  return {
-    path,
-    md,
-    ...(m ? { version_token: m[1] } : {}),
-  };
 }
 
 /** The three ripgrep-shaped output modes the `Grep` tool understands. */
