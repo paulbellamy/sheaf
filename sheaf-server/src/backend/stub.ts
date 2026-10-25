@@ -26,7 +26,7 @@ import {
   assertVaultPath,
   safeJoin,
 } from "../paths";
-import { opLogSchema } from "../persistence-schemas";
+import { type OpLogEntry, parseOpLog } from "../persistence-schemas";
 import {
   cleanProse,
   parseReviewDoc,
@@ -51,11 +51,12 @@ import {
  */
 
 /**
- * The applied-`op_id` set backing idempotent writes (`.op_log.json`, shape in
- * `opLogSchema`): each applied op id → when it was applied. A Map (not a plain
- * object) so an op id like `constructor` can't hit an inherited key.
+ * The applied-`op_id` set backing idempotent writes (`.op_log.json`, parsed by
+ * `parseOpLog`): each applied op id → when it was applied. A Map (not a plain
+ * object) so an op id like `constructor` can't hit an inherited key; it's
+ * serialized via `Object.fromEntries`, which keeps even `__proto__` a real key.
  */
-type OpLog = Map<OpId, { applied_at: number }>;
+type OpLog = Map<OpId, OpLogEntry>;
 
 function titleFromMd(md: string, fallback: string): string {
   const line = md.split("\n").find((l) => l.trim().length > 0) ?? "";
@@ -385,22 +386,35 @@ export class StubBackend implements Backend {
   }
 
   private async readOpLog(): Promise<OpLog> {
-    if (this.opLogCache) return this.opLogCache;
-    try {
-      const raw = await readFileNoFollow(this.opLogPath);
-      const parsed = opLogSchema.safeParse(JSON.parse(raw));
-      if (parsed.success) {
-        this.opLogCache = new Map(Object.entries(parsed.data));
-      } else {
-        // Corrupt on-disk shape (not a string-keyed object) — keep going with
-        // an empty log rather than crashing the whole backend.
-        console.error("[stub] op_log failed schema validation; resetting");
-        this.opLogCache = new Map();
-      }
-    } catch {
-      this.opLogCache = new Map();
-    }
+    if (!this.opLogCache) this.opLogCache = await this.loadOpLog();
     return this.opLogCache;
+  }
+
+  /**
+   * Load the op log from disk. A missing file is the normal empty log; any
+   * other failure (unreadable, invalid JSON, not an object) is logged and also
+   * yields an empty log rather than crashing the whole backend.
+   */
+  private async loadOpLog(): Promise<OpLog> {
+    let json: unknown;
+    try {
+      json = JSON.parse(await readFileNoFollow(this.opLogPath));
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        const why = e instanceof Error ? e.message : String(e);
+        console.error(`[stub] op_log unreadable (${why}); resetting`);
+      }
+      return new Map();
+    }
+    const parsed = parseOpLog(json);
+    if (!parsed) {
+      console.error("[stub] op_log failed schema validation; resetting");
+      return new Map();
+    }
+    if (parsed.skipped > 0) {
+      console.error(`[stub] op_log: skipped ${parsed.skipped} invalid op id(s)`);
+    }
+    return parsed.entries;
   }
 
   private async writeOpLog(log: OpLog): Promise<void> {

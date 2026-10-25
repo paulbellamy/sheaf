@@ -103,20 +103,46 @@ export const threadOnDiskSchema = z.preprocess(
 );
 
 /** One op-log entry: when the write carrying that `op_id` was applied (unix ms). */
+export type OpLogEntry = { applied_at: number };
+
 const opLogEntrySchema = z.object({ applied_at: z.number() });
 
 /**
- * Op log: the set of write `op_id`s already applied, as `op_id → { applied_at }`.
- * Only key presence is load-bearing — a present key means "applied; a repeat is
- * a no-op". Values are read leniently so an entry in any other shape (e.g. the
- * earlier `{ version_token }` record) still counts as applied; it's normalized
- * to `applied_at: 0` ("unknown") rather than failing the whole log, which would
- * forget every applied op and let a retry re-apply its write.
+ * Parse a JSON-decoded `.op_log.json`: the set of write `op_id`s already
+ * applied, as `op_id → { applied_at }`. Returns `null` when the top level isn't
+ * a plain object (a corrupt log).
+ *
+ * Only key presence is load-bearing — a present key means "applied; a repeat
+ * is a no-op" — so the parse is lenient per entry rather than all-or-nothing
+ * (failing the whole log would forget every applied op and let each retry
+ * re-apply its write):
+ * - A value in any shape but `{ applied_at: number }` (e.g. the earlier
+ *   `{ version_token }` record) still counts as applied, normalized to
+ *   `applied_at: 0` ("unknown").
+ * - An invalid key (empty — no write records one) is skipped and counted in
+ *   `skipped`, not fatal. Length isn't capped here; the tool input schema
+ *   already bounds `op_id`.
+ *
+ * Keys are walked by hand, not through `z.record`: zod's record parse drops a
+ * `__proto__` key, which would forget an applied `__proto__` op on reload.
+ * `JSON.parse` makes `__proto__` an own property and `Object.entries` returns
+ * it, so every key survives.
  */
-export const opLogSchema = z.record(
-  z.string().max(128),
-  z.unknown().transform((v) => {
-    const entry = opLogEntrySchema.safeParse(v);
-    return entry.success ? entry.data : { applied_at: 0 };
-  }),
-);
+export function parseOpLog(
+  json: unknown,
+): { entries: Map<string, OpLogEntry>; skipped: number } | null {
+  if (typeof json !== "object" || json === null || Array.isArray(json)) {
+    return null;
+  }
+  const entries = new Map<string, OpLogEntry>();
+  let skipped = 0;
+  for (const [key, value] of Object.entries(json)) {
+    if (key === "") {
+      skipped += 1;
+      continue;
+    }
+    const entry = opLogEntrySchema.safeParse(value);
+    entries.set(key, entry.success ? entry.data : { applied_at: 0 });
+  }
+  return { entries, skipped };
+}

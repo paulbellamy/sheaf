@@ -37,14 +37,16 @@ install into an agent → post a thread → follow events).
 ## The daemon model
 
 `StubBackend` keeps critical state in one process's memory (the write-through
-op-log cache, the mutation lock chain, agent presence, the SSE replay buffer). Two backends on one vault diverge and corrupt each other. So the
-invariant is hard: **for a given vault there is exactly one live backend, inside
-exactly one process — the daemon (`sheaf serve`).** Everything else is a client.
+op-log cache, the mutation lock chain, agent presence, the SSE replay buffer).
+Two backends on one vault diverge and corrupt each other. So the invariant is
+hard: **for a given vault there is exactly one live backend, inside exactly one
+process — the daemon (`sheaf serve`).** Everything else is a client.
 
 - **`sheaf serve`** binds loopback on an ephemeral port and serves the whole
   surface: UI REST (`/api/ui/*`), the SSE event stream (`/api/ui/events`), MCP
-  Streamable HTTP (`/api/mcp`), and `GET /api/health`. It registers itself in a discovery file
-  under `$SHEAF_HOME` (default `~/.sheaf`) so clients can find it.
+  Streamable HTTP (`/api/mcp`), and `GET /api/health`. It registers itself in
+  a discovery file under `$SHEAF_HOME` (default `~/.sheaf`) so clients can find
+  it.
 - **Clients** locate the daemon via that discovery file and speak loopback HTTP.
   Finding no daemon, every command except `sheaf mcp` exits `3` with
   `no sheaf daemon for <vault>; run \`sheaf serve\``. Only `sheaf mcp` may

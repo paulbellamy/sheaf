@@ -13,10 +13,8 @@ import { z } from "zod";
  *  narrow use-cases; bump only when a concrete need appears. */
 export const LIMITS = {
   path: 512,
-  author: 64,
   opId: 128,
   message: 10_000,
-  intent: 2_048,
   name: 256,
   /** Option trade-off blurb — a sentence or two, not prose. */
   description: 1_000,
@@ -26,12 +24,6 @@ export const LIMITS = {
    *  itself is still bounded. */
   grepPattern: 1_024,
   glob: 256,
-  /** StyleCheck input — a passage to lint, not a whole book. */
-  styleText: 50_000,
-  /** AnalyzeSamples per-sample content — a fetched page/file, bounded. */
-  analyzeContent: 200_000,
-  /** Topic hint for exemplar selection — a phrase, not prose. */
-  topic: 256,
 } as const;
 
 export const pathArg = z
@@ -136,23 +128,3 @@ export const messageArg = z
   .min(1)
   .max(LIMITS.message)
   .describe("Thread message body (bounded).");
-
-export const intentArg = z
-  .string()
-  .max(LIMITS.intent)
-  .optional()
-  .describe("Natural-language intent string (bounded).");
-
-export const nameArg = z
-  .string()
-  .max(LIMITS.name)
-  .optional()
-  .describe("Draft name / label (bounded).");
-
-export const topicArg = z
-  .string()
-  .max(LIMITS.topic)
-  .optional()
-  .describe(
-    "Optional topic/keywords from the brief, used to bias exemplar selection toward on-topic samples of your writing.",
-  );

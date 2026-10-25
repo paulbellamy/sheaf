@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { StubBackend } from "../backend/stub";
 import { buildSheafApp } from "../app";
@@ -449,10 +449,79 @@ describe("op_id idempotency (op log)", () => {
     expect((await backend.readDoc(doc)).md).toBe("found");
   });
 
-  it("treats an op id that shadows an Object.prototype key as unapplied", async () => {
-    const backend = new StubBackend(root);
-    await backend.writeDoc(doc, "applied", "constructor");
-    expect((await backend.readDoc(doc)).md).toBe("applied");
+  it("keeps Object.prototype-named op ids across a reload from disk", async () => {
+    const keys = ["__proto__", "constructor", "hasOwnProperty", "toString"];
+    const first = new StubBackend(root);
+    for (const [i, k] of keys.entries()) {
+      await first.writeDoc(`p${i}.md`, `applied ${k}`, k);
+      // Applied on first sight — not mistaken for an inherited key.
+      expect((await first.readDoc(`p${i}.md`)).md).toBe(`applied ${k}`);
+    }
+    // Each is persisted as a real own key (`__proto__` included).
+    expect(Object.keys(await readOpLogFile()).sort()).toEqual([...keys].sort());
+
+    // A NEW instance reloads the log from disk: every replay is a no-op.
+    const { backend, changes } = countingBackend();
+    for (const [i, k] of keys.entries()) {
+      await backend.writeDoc(`p${i}.md`, `replayed ${k}`, k);
+      expect((await backend.readDoc(`p${i}.md`)).md).toBe(`applied ${k}`);
+    }
+    expect(changes()).toBe(0);
+  });
+
+  it("an over-long op id in the log doesn't reset the rest of it", async () => {
+    const long = "k".repeat(200); // > the tool schema's 128-char op_id cap
+    await fs.writeFile(
+      opLogFile(),
+      JSON.stringify({ [long]: { applied_at: 1 }, "keep-me": { applied_at: 2 } }),
+    );
+    const { backend, changes } = countingBackend();
+    await backend.writeDoc(doc, "replayed", "keep-me");
+    expect((await backend.readDoc(doc)).md).toBe("x");
+    // The read side doesn't cap key length, so the long id still dedups too.
+    await backend.writeDoc(doc, "replayed", long);
+    expect((await backend.readDoc(doc)).md).toBe("x");
+    expect(changes()).toBe(0);
+  });
+
+  it("skips an invalid (empty) op id with a warning, keeping the rest", async () => {
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await fs.writeFile(
+        opLogFile(),
+        JSON.stringify({ "": { applied_at: 1 }, "keep-me": { applied_at: 2 } }),
+      );
+      const { backend, changes } = countingBackend();
+      await backend.writeDoc(doc, "replayed", "keep-me");
+      expect((await backend.readDoc(doc)).md).toBe("x");
+      expect(changes()).toBe(0);
+      expect(warn).toHaveBeenCalledWith(
+        "[stub] op_log: skipped 1 invalid op id(s)",
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("warns and starts empty on an invalid-JSON op log, but not on a missing one", async () => {
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // No op log on disk yet: the normal empty case, silent.
+      await new StubBackend(root).writeDoc(doc, "a", "op-1");
+      expect(warn).not.toHaveBeenCalled();
+
+      await fs.writeFile(opLogFile(), "{not json");
+      const backend = new StubBackend(root);
+      // The unreadable log resets, so the (previously applied) id applies again.
+      await backend.writeDoc(doc, "b", "op-1");
+      expect((await backend.readDoc(doc)).md).toBe("b");
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toMatch(
+        /^\[stub\] op_log unreadable \(.+\); resetting$/,
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("loads a legacy `{ version_token }` op log and still dedups its ids", async () => {

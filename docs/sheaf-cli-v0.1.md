@@ -23,14 +23,14 @@ nothing here preserves their in-process embedding.
 Not "state crosses processes for free." `StubBackend` keeps critical state in a
 single instance's memory:
 
-- `versionCounters` / `versionHistory` — **in-memory only** (`stub.ts:288-300`,
-  comment says so). Two instances ⇒ diverging `vN` and broken merge-conflict
-  detection.
-- `.op_log.json` is **write-through cached** (`opLogCache`, `:263`,`:511-534`) —
-  two writers clobber each other's idempotency log.
-- Mutations serialize through a per-instance `lockChain` (`:264`,`:414`) — two
+- `.op_log.json` (the applied-`op_id` set behind idempotent writes) is
+  **write-through cached** in `opLogCache` — two instances clobber each other's
+  idempotency log, so a retried write can re-apply.
+- Mutations serialize through a per-instance `lockChain` (`withLock`) — two
   instances ⇒ unserialized `.md`/endmatter writes, i.e. corruption.
-- Agent presence + the SSE replay buffer + `subscribe` are per-instance.
+- The event bus is per-instance: `subscribe`, agent presence, and the SSE
+  replay buffer. A mutation on one instance never reaches another's
+  subscribers.
 
 So the invariant is hard: **for a given vault there is exactly one live
 `StubBackend`, inside exactly one process.** That process is the daemon. Docs
@@ -44,11 +44,11 @@ in which case there are no human events to miss anyway. Not the default.
 
 ## Architecture: one daemon + thin clients
 
-- **`sheaf serve`** = the daemon. Owns the one `StubBackend(vault, vault)`
-  (constructed directly — **not** via `getBackend()`'s env/cwd factory). Binds
-  loopback on an **ephemeral port** and serves the existing surface: UI REST
-  (`/api/ui/*`), SSE (`/api/ui/events`), MCP Streamable-HTTP
-  (`/api/mcp`), plus a new `GET /api/health`.
+- **`sheaf serve`** = the daemon. Owns the one `StubBackend`, constructed
+  directly as `new StubBackend(vault)`. Binds loopback on an **ephemeral port**
+  and serves the existing surface: UI REST (`/api/ui/*`), SSE
+  (`/api/ui/events`), MCP Streamable-HTTP (`/api/mcp`), plus a new
+  `GET /api/health`.
 - **Clients** (domain verbs, `events follow`, `sheaf mcp`) find the daemon via a
   discovery file and speak loopback HTTP. No client ever constructs a backend
   (except `mcp --no-daemon`).
@@ -224,7 +224,7 @@ file blind.
    codes. Unit tests: arg parse, vault precedence, config round-trip, `$SHEAF_
    HOME` isolation.
 2. **`sheaf serve` + discovery + health + lifecycle.** Construct
-   `new StubBackend(vault, vault)`, run `buildSheafApp` on an ephemeral port;
+   `new StubBackend(vault)`, run `buildSheafApp` on an ephemeral port;
    add `GET /api/health` and make `/api/mcp` GET → 405 (both in `sheaf-server`).
    `sheaf-server/daemon`: `registerDaemon`/`findDaemon`/lock/`realpath` liveness.
    `serve` SIGTERM/SIGINT cleanup + idle-exit; `daemon status|stop`. Tests:
@@ -241,7 +241,7 @@ file blind.
    (`readme.ts`) to lead with `sheaf events follow --role agent`, keep the curl
    loop as fallback but built from the daemon's **actual** bound host:port (pass
    a `publicUrl` into `buildServer` instead of the hard-coded `localhost:31415`
-   at `readme.ts:174`). **Update `app.test.ts:77-103`** (asserts the old
+   in `readme.ts`). **Update the ReadMe test in `app.test.ts`** (asserts the old
    one-liner). Tests: `initialize`+`tools/list`+`ReadMe` round-trip through the
    bridge to a live daemon; daemon-death yields `-32603`.
 5. **`sheaf mcp install`.** Config writers for claude (project `.mcp.json`),
@@ -266,6 +266,6 @@ lands before the human read/thread verbs.
 
 - `fs.watch`-based daemon-less event synthesis (fragile vs Obsidian atomic
   writes).
-- Persisting `versionCounters`/`versionHistory` (production backend concern).
 - Windows support.
-- `write`/`edit`/`style`/draft-lifecycle CLI verbs.
+- `write`/`edit` CLI verbs (the `style`/draft-lifecycle surfaces were removed
+  outright, not deferred).
