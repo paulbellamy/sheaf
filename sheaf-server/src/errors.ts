@@ -1,28 +1,15 @@
 export type SheafErrorCode =
   | "doc_not_found"
-  | "draft_not_found"
   | "thread_not_found"
-  | "write_to_main_forbidden"
   | "edit_no_match"
   | "edit_ambiguous"
   | "invalid_path"
-  | "invalid_ref"
   | "invalid_thread_id"
   | "invalid_payload"
   | "out_of_scope"
-  | "draft_not_submitted"
-  | "draft_already_submitted"
-  | "merge_conflict"
-  | "accept_blocked"
   | "anchor_orphaned"
   | "grep_timeout"
   | "payload_too_large";
-
-export type MergeConflictDetail = {
-  path: string;
-  base_version: number;
-  main_version: number;
-};
 
 /**
  * Thrown by the sheaf backend and tool layer. Surfaces through MCP
@@ -33,29 +20,11 @@ export type MergeConflictDetail = {
  */
 export class SheafError extends Error {
   code: SheafErrorCode;
-  /**
-   * Phase I: populated only on `merge_conflict`. Lists the touched paths
-   * whose main has advanced past the draft's `base_version`, so callers can
-   * render a per-path conflict banner without re-querying.
-   */
-  conflicts?: MergeConflictDetail[];
-  /**
-   * Phase J: populated only on `accept_blocked`. Number of open threads on
-   * the draft at the moment Accept was attempted, so callers can render
-   * `<N> threads still open · cannot accept` without re-querying.
-   */
-  open_count?: number;
 
-  constructor(
-    code: SheafErrorCode,
-    message: string,
-    extras?: { conflicts?: MergeConflictDetail[]; open_count?: number },
-  ) {
+  constructor(code: SheafErrorCode, message: string) {
     super(message);
     this.name = "SheafError";
     this.code = code;
-    if (extras?.conflicts) this.conflicts = extras.conflicts;
-    if (extras?.open_count !== undefined) this.open_count = extras.open_count;
   }
 }
 
@@ -70,15 +39,8 @@ export type McpErrorCode = SheafErrorCode;
 export const err = {
   docNotFound: (path: string) =>
     new SheafError("doc_not_found", `no doc at ${path}`),
-  draftNotFound: (draftId: string) =>
-    new SheafError("draft_not_found", `no draft ${draftId}`),
   threadNotFound: (id: string) =>
     new SheafError("thread_not_found", `no thread ${id}`),
-  writeToMainForbidden: () =>
-    new SheafError(
-      "write_to_main_forbidden",
-      "writes require a draft ref; call Fork first and pass ref=draft_id",
-    ),
   editNoMatch: (path: string) =>
     new SheafError(
       "edit_no_match",
@@ -94,11 +56,6 @@ export const err = {
       "invalid_path",
       `path must be a repo-root-relative vault path with no '.'-prefixed segment (no dotfiles, no '..'): got ${path}`,
     ),
-  invalidRef: (ref: string) =>
-    new SheafError(
-      "invalid_ref",
-      `ref must be "main" or a draft_<uuid>: got ${ref}`,
-    ),
   invalidThreadId: (id: string) =>
     new SheafError(
       "invalid_thread_id",
@@ -111,43 +68,6 @@ export const err = {
       "out_of_scope",
       `${subject} is outside this connection's doc scope (${scope})`,
     ),
-  draftNotSubmitted: (id: string, state: string) =>
-    new SheafError(
-      "draft_not_submitted",
-      `draft ${id} cannot be merged from state=${state}; call Propose first`,
-    ),
-  draftAlreadySubmitted: (id: string) =>
-    new SheafError(
-      "draft_already_submitted",
-      `draft ${id} is already submitted`,
-    ),
-  acceptBlocked: (openCount: number): SheafError =>
-    new SheafError(
-      "accept_blocked",
-      `accept blocked: ${openCount} open thread${openCount === 1 ? "" : "s"} on the draft; resolve before accepting`,
-      { open_count: openCount },
-    ),
-  mergeConflict: (
-    conflicts: MergeConflictDetail[] | string,
-  ): SheafError => {
-    if (typeof conflicts === "string") {
-      return new SheafError(
-        "merge_conflict",
-        `conflict merging ${conflicts}; re-fork off latest main and retry`,
-      );
-    }
-    const summary = conflicts
-      .map(
-        (c) =>
-          `${c.path}: main is at v${c.main_version}, draft based on v${c.base_version}`,
-      )
-      .join("; ");
-    return new SheafError(
-      "merge_conflict",
-      `conflict on ${conflicts.length} path${conflicts.length === 1 ? "" : "s"} (${summary}); re-fork off latest main and retry`,
-      { conflicts },
-    );
-  },
   anchorOrphaned: (threadId: string) =>
     new SheafError(
       "anchor_orphaned",
@@ -172,11 +92,9 @@ export const err = {
 export function statusForCode(code: SheafErrorCode): number {
   switch (code) {
     case "doc_not_found":
-    case "draft_not_found":
     case "thread_not_found":
       return 404;
     case "invalid_path":
-    case "invalid_ref":
     case "invalid_thread_id":
     case "invalid_payload":
     case "edit_no_match":
@@ -185,14 +103,8 @@ export function statusForCode(code: SheafErrorCode): number {
       return 400;
     case "out_of_scope":
       return 403;
-    case "write_to_main_forbidden":
-    case "draft_not_submitted":
-    case "draft_already_submitted":
-    case "merge_conflict":
     case "anchor_orphaned":
       return 409;
-    case "accept_blocked":
-      return 422;
     case "grep_timeout":
       return 504;
     default: {
@@ -215,8 +127,6 @@ export type ErrorResult = {
   json: {
     error: string;
     code: string;
-    conflicts?: MergeConflictDetail[];
-    open_count?: number;
   };
 };
 
@@ -227,10 +137,7 @@ export type ErrorResult = {
  */
 export function errorResult(e: unknown): ErrorResult {
   if (e instanceof SheafError) {
-    const json: ErrorResult["json"] = { error: e.message, code: e.code };
-    if (e.conflicts) json.conflicts = e.conflicts;
-    if (e.open_count !== undefined) json.open_count = e.open_count;
-    return { status: statusForCode(e.code), json };
+    return { status: statusForCode(e.code), json: { error: e.message, code: e.code } };
   }
   if (e instanceof Error) {
     console.error("[ui] internal error", e);

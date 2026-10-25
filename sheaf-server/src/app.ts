@@ -6,28 +6,16 @@ import Fastify, {
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
 import type { Backend } from "./backend/index";
-import { getBackend } from "./backend/factory";
-import { buildServer, type ToolSurface } from "./server";
+import { buildServer } from "./server";
 import { err, errorResult } from "./errors";
 import { assertVaultPath } from "./paths";
 import { pipeEvents, reserveSseClient, type SseSink } from "./events";
 import {
-  acceptDraft,
   addThread,
-  attachPayload,
-  buildStyleGuide,
-  createDraft,
-  declineDraft,
-  docVersions,
-  getDraft,
-  getStyleConfig,
   type HandlerResult,
-  listDocsAndDrafts,
-  listDrafts,
+  listDocs,
   listThreadsForDoc,
-  putStyleConfig,
   readDoc,
-  renameDoc,
   reopenThread,
   replyThread,
   resolveThread,
@@ -35,14 +23,13 @@ import {
 
 /**
  * The canonical sheaf HTTP API as a Fastify app: the `/api/ui/*` REST routes,
- * the `/api/ui/drafts/stream` SSE stream, and the `/api/mcp` MCP Streamable
- * HTTP endpoint. The Obsidian plugin runs this in-process via `.listen()`;
- * the Next prototype reuses the same handlers/transport cores through thin
- * route shims (it doesn't import this Fastify instance).
+ * the `/api/ui/events` SSE stream, and the `/api/mcp` MCP Streamable HTTP
+ * endpoint. `sheaf serve` runs it in-process via `.listen()` as the
+ * per-vault daemon.
  *
- * Logging is disabled so the bundle the plugin ships doesn't pull in pino's
- * worker-thread transport (which doesn't bundle cleanly into the Obsidian
- * single-file build).
+ * Logging is disabled: the daemon does its own structured file logging (`sheaf
+ * serve` → `$SHEAF_HOME/logs/<key>.log`), and Fastify's default per-request
+ * pino output would only add noise to the process's stdout/stderr.
  */
 /**
  * True if the HTTP `Host` header names a loopback address (any port). The
@@ -97,26 +84,60 @@ function resolveDocScope(req: FastifyRequest): string | undefined {
 }
 
 export function buildSheafApp(
-  backend: Backend = getBackend(),
-  opts: { allowedOrigins?: string[]; tools?: ToolSurface } = {},
+  backend: Backend,
+  opts: {
+    allowedOrigins?: string[];
+    /**
+     * Daemon identity reported by `GET /api/health`. `sheaf serve` threads it
+     * in so liveness probes can confirm this server owns the *expected* vault
+     * (a pid-reuse-proof check — see `isDaemonAlive` in `./daemon`). Optional so
+     * tests can build the app without it; when omitted, `vault`/`version` are
+     * absent and `startedAt` is the app's own construction time.
+     */
+    health?: { vault: string; startedAt: number; version: string };
+    /**
+     * Force-close lingering keep-alive sockets on `close()` so a daemon's
+     * shutdown is bounded (a client holding an idle HTTP/1.1 connection can't
+     * make `app.close()` hang). Left off by default (Fastify's graceful-drain
+     * behavior); `sheaf serve` turns it on.
+     */
+    forceCloseConnections?: boolean;
+    /**
+     * The server's real, reachable origin (`http://host:port`), passed through
+     * to `buildServer` so the MCP ReadMe's curl fallback names the actual
+     * address. Accepts a getter as well as a string because a daemon binds an
+     * *ephemeral* port: `sheaf serve` builds the app before it knows the port,
+     * so it hands in `() => daemonBaseUrl(...)` and fills the value in after
+     * `listen()`. Resolved per request (well after boot), so a getter that
+     * returns `undefined` early is harmless.
+     */
+    publicUrl?: string | (() => string | undefined);
+  } = {},
 ): FastifyInstance {
   const app = Fastify({
     logger: false,
-    // Thread bodies / draft payloads can approach 1 MB; give headroom.
+    // Thread bodies / doc writes can approach 1 MB; give headroom.
     bodyLimit: 8 * 1024 * 1024,
+    ...(opts.forceCloseConnections
+      ? { forceCloseConnections: true as const }
+      : {}),
   });
 
-  // Browser origins trusted to read responses cross-origin. The only one in
-  // the shipped plugin is Obsidian's renderer (its SSE uses `fetch`); the REST
-  // client uses Obsidian's CORS-exempt `requestUrl`, and the agent's MCP client
-  // isn't a browser — so the default allowlist is just the Obsidian origin.
+  // Fallback so `/api/health` always answers with a plausible `startedAt` even
+  // when no explicit daemon identity was supplied.
+  const healthStartedAt = opts.health?.startedAt ?? Date.now();
+
+  // Browser origins trusted to read responses cross-origin. Empty by default:
+  // the daemon's own clients (the CLI's REST/MCP callers) aren't browsers, so
+  // no cross-origin reader is trusted unless one is opted in explicitly (`sheaf
+  // serve --allow-origin <O>`). Other origins get no CORS header at all.
   const allowedOrigins = new Set(
-    (opts.allowedOrigins ?? ["app://obsidian.md"]).map((o) => o.toLowerCase()),
+    (opts.allowedOrigins ?? []).map((o) => o.toLowerCase()),
   );
   const allowedAcao = (origin: string | undefined): string | undefined =>
     origin && allowedOrigins.has(origin.toLowerCase()) ? origin : undefined;
 
-  // Tolerate empty-bodied POSTs (resolve/accept/decline send none) even when a
+  // Tolerate empty-bodied POSTs (resolve/reopen send none) even when a
   // client sets `content-type: application/json`.
   app.addContentTypeParser(
     "application/json",
@@ -173,25 +194,12 @@ export function buildSheafApp(
   /* ----------------------------------------------------------- UI: docs -- */
 
   app.get("/api/ui/docs", (_req, reply) =>
-    run(reply, () => listDocsAndDrafts(backend)),
+    run(reply, () => listDocs(backend)),
   );
 
   app.get("/api/ui/doc/*", (req, reply) =>
     run(reply, () =>
       readDoc(backend, {
-        path: (req.params as Record<string, string>)["*"],
-        ref: q(req, "ref") ?? "main",
-      }),
-    ),
-  );
-
-  app.post("/api/ui/rename", (req, reply) =>
-    run(reply, () => renameDoc(backend, { body: req.body })),
-  );
-
-  app.get("/api/ui/doc-versions/*", (req, reply) =>
-    run(reply, () =>
-      docVersions(backend, {
         path: (req.params as Record<string, string>)["*"],
       }),
     ),
@@ -203,15 +211,12 @@ export function buildSheafApp(
     run(reply, () =>
       listThreadsForDoc(backend, {
         path: q(req, "path"),
-        ref: q(req, "ref") ?? "main",
       }),
     ),
   );
 
   app.post("/api/ui/threads", (req, reply) =>
-    run(reply, () =>
-      addThread(backend, { ref: q(req, "ref") ?? "main", body: req.body }),
-    ),
+    run(reply, () => addThread(backend, { body: req.body })),
   );
 
   app.post("/api/ui/threads/:id/reply", (req, reply) =>
@@ -227,8 +232,6 @@ export function buildSheafApp(
     run(reply, () =>
       resolveThread(backend, {
         id: (req.params as { id: string }).id,
-        optionIndex: q(req, "option_index"),
-        skipApply: q(req, "apply") === "false",
       }),
     ),
   );
@@ -239,67 +242,15 @@ export function buildSheafApp(
     ),
   );
 
-  app.post("/api/ui/threads/:id/payload", (req, reply) =>
-    run(reply, () =>
-      attachPayload(backend, {
-        id: (req.params as { id: string }).id,
-        body: req.body,
-      }),
-    ),
-  );
-
-  /* --------------------------------------------------------- UI: drafts -- */
-
-  app.get("/api/ui/drafts", (_req, reply) =>
-    run(reply, () => listDrafts(backend)),
-  );
-
-  app.post("/api/ui/drafts", (req, reply) =>
-    run(reply, () => createDraft(backend, { body: req.body })),
-  );
-
-  app.get("/api/ui/drafts/:id", (req, reply) =>
-    run(reply, () =>
-      getDraft(backend, { id: (req.params as { id: string }).id }),
-    ),
-  );
-
-  app.post("/api/ui/drafts/:id/accept", (req, reply) =>
-    run(reply, () =>
-      acceptDraft(backend, { id: (req.params as { id: string }).id }),
-    ),
-  );
-
-  app.post("/api/ui/drafts/:id/decline", (req, reply) =>
-    run(reply, () =>
-      declineDraft(backend, { id: (req.params as { id: string }).id }),
-    ),
-  );
-
-  /* ---------------------------------------------------------- UI: style -- */
-
-  app.get("/api/ui/style/config", (_req, reply) =>
-    run(reply, () => getStyleConfig(backend)),
-  );
-
-  app.put("/api/ui/style/config", (req, reply) =>
-    run(reply, () => putStyleConfig(backend, { body: req.body })),
-  );
-
-  app.post("/api/ui/style/build", (_req, reply) =>
-    run(reply, () => buildStyleGuide(backend)),
-  );
-
   /* ----------------------------------------------------- SSE event stream -- */
 
   // Live SSE connections, ended on app.close(). Hijacked replies are invisible
   // to Fastify's shutdown: without this, `close()` waits forever on the open
-  // stream sockets. The Obsidian host's stop→start restart then leaves the old
-  // app alive with every subscriber bound to the *old* backend — the keep-alive
-  // ping holds the agent's Monitor connection open, so it never reconnects and
-  // silently misses every event emitted on the new instance. Closing the
-  // streams here gives clients an EOF, and their reconnect loops re-attach to
-  // the restarted server.
+  // stream sockets. A daemon restart would then leave the old app alive with
+  // every subscriber bound to the *old* backend — the keep-alive ping holds the
+  // agent's Monitor connection open, so it never reconnects and silently misses
+  // every event emitted on the new instance. Closing the streams here gives
+  // clients an EOF, and their reconnect loops re-attach to the restarted server.
   // `preClose` (not `onClose`) because Fastify's own server-close — which
   // waits for the sockets these streams hold open — runs before onClose hooks.
   const liveSseCleanups = new Set<() => void>();
@@ -308,7 +259,7 @@ export function buildSheafApp(
     liveSseCleanups.clear();
   });
 
-  app.get("/api/ui/drafts/stream", (req, reply) => {
+  app.get("/api/ui/events", (req, reply) => {
     const role = q(req, "role") === "agent" ? "agent" : "ui";
     // Resume position: the standard SSE header (EventSource sends it on
     // reconnect automatically), with `?since=` as the curl-friendly fallback.
@@ -329,7 +280,7 @@ export function buildSheafApp(
       "X-Accel-Buffering": "no",
     };
     // This route hijacks the reply, so the onSend CORS hook doesn't run —
-    // apply the same allowed-origin reflection here for the plugin's SSE fetch.
+    // apply the same allowed-origin reflection here for a cross-origin SSE fetch.
     const acao = allowedAcao(req.headers.origin);
     if (acao) {
       sseHeaders["Access-Control-Allow-Origin"] = acao;
@@ -348,10 +299,38 @@ export function buildSheafApp(
     });
   });
 
+  /* ------------------------------------------------------------- health -- */
+
+  // Liveness + identity probe. `sheaf daemon status`/`stop` and `isDaemonAlive`
+  // (see `./daemon`) hit this: a discovery file alone can't distinguish a live
+  // daemon from a stale record left by a crashed one whose pid has since been
+  // reused, so callers confirm `vault` matches the realpath they expect.
+  app.get("/api/health", (_req, reply) => {
+    reply.code(200).send({
+      vault: opts.health?.vault,
+      pid: process.pid,
+      startedAt: healthStartedAt,
+      version: opts.health?.version,
+    });
+  });
+
   /* ------------------------------------------------------------- MCP API -- */
 
+  // A GET to /api/mcp would drive the transport's server→client SSE stream, but
+  // this server is stateless (`enableJsonResponse: true`, `listChanged: false`)
+  // and never initiates messages, so that stream is pure overhead: each `sheaf
+  // mcp` bridge's post-`initialized` auto GET would otherwise strand a live
+  // `buildServer` + socket for the bridge's whole lifetime. Return 405 instead —
+  // the MCP client tolerates it and simply forgoes the (empty) stream.
+  app.get("/api/mcp", (_req, reply) => {
+    reply
+      .code(405)
+      .header("allow", "POST, DELETE")
+      .send({ error: "method not allowed", code: "method_not_allowed" });
+  });
+
   app.route({
-    method: ["GET", "POST", "DELETE"],
+    method: ["POST", "DELETE"],
     url: "/api/mcp",
     handler: async (req, reply) => {
       // Per-connection doc scope (ACP per-session MCP registration, §3.1).
@@ -372,7 +351,16 @@ export function buildSheafApp(
         sessionIdGenerator: undefined,
         enableJsonResponse: true,
       });
-      const server = buildServer(backend, { tools: opts.tools, docScope });
+      // Resolve `publicUrl` lazily (it may be a getter over an ephemeral port
+      // that only becomes known after `listen()`); by request time it's set.
+      const publicUrl =
+        typeof opts.publicUrl === "function"
+          ? opts.publicUrl()
+          : opts.publicUrl;
+      const server = buildServer(backend, {
+        docScope,
+        publicUrl,
+      });
       await server.connect(transport);
       reply.raw.on("close", () => {
         void server.close().catch(() => {});

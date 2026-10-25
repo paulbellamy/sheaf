@@ -8,116 +8,55 @@ import {
   type DocContent,
   type DocPath,
   type DocSummary,
-  type DraftId,
-  type DraftSummary,
   type GrepMatch,
   type GrepOptions,
   type GrepResult,
   type OpId,
   type Origin,
-  type Ref,
   type Thread,
   type ThreadAnchor,
   type ThreadDraftBody,
   type ThreadId,
   type ThreadSummary,
-  type VersionHistoryEntry,
-  type WriteResult,
 } from "./index";
-import { McpError, err, type MergeConflictDetail } from "../errors";
+import { McpError, err } from "../errors";
 import { globToRegex } from "../glob";
 import {
-  DRAFT_ID_RE,
-  PLUGIN_PATH_PREFIX,
-  assertDraftId,
-  assertReadablePath,
   assertThreadId,
   assertVaultPath,
-  isPluginPath,
-  remapRenamedPath,
   safeJoin,
 } from "../paths";
-import { draftMetaSchema, opLogSchema } from "../persistence-schemas";
+import { type OpLogEntry, parseOpLog } from "../persistence-schemas";
 import {
   cleanProse,
   parseReviewDoc,
   serializeReviewDoc,
 } from "./review-doc";
-import {
-  type CorpusFile,
-  type StyleConfig,
-  type StyleProfile,
-  defaultStyleConfig,
-} from "../style/profile";
-import { styleConfigSchema, styleProfileSchema } from "../style/schemas";
 
 /**
- * Filesystem-backed stub backend for the prototype.
+ * Filesystem-backed stub backend — the one `StubBackend` the daemon owns per
+ * vault (the CLI constructs it directly as `new StubBackend(vault)`).
  *
- * `<root>` is the Obsidian vault root. Any visible markdown file under it is a
- * sheaf doc — `<dir>/<name>.md` at any depth. Dot-prefixed entries (`.drafts/`,
- * `.op_log.json`, `.obsidian/`, …) are infra and never surfaced as docs.
+ * `<root>` is the vault root. Any visible markdown file under it is a
+ * sheaf doc — `<dir>/<name>.md` at any depth. Dot-prefixed entries
+ * (`.op_log.json`, `.obsidian/`, …) are infra and never surfaced as docs.
  *
  * Layout (all under `<root>`):
  *   <dir>/<name>.md                                        # prose + inline RFM review markup
- *   .drafts/<draft_id>/meta.json
- *   .drafts/<draft_id>/<dir>/<name>.md                     # changed files only
  *   .op_log.json
  *
  * Threads live inline in the doc markdown (CriticMarkup + a YAML endmatter
  * block — see `review-doc.ts`), not in sidecars; `readDoc` returns clean prose
  * with that markup stripped.
- *
- * No yjs, no git, no case-2 sync. Every "commit" is a new uuid so clients
- * that cache by commit hash behave correctly.
  */
-
-type DraftMeta = {
-  draft_id: DraftId;
-  base_path: DocPath;
-  /** Natural-language intent — set at Fork, editable at Propose. */
-  intent?: string;
-  author: string;
-  state: "open" | "submitted" | "accepted" | "declined";
-  created_at: number;
-  submitted_at?: number;
-  name?: string;
-  display_name?: string;
-  touches?: DocPath[];
-  base_version?: number;
-  parent_draft_id?: DraftId;
-};
-
-type OpLog = Record<string, WriteResult>;
-
-function assertDraftRef(ref: Ref): asserts ref is DraftId {
-  if (ref === "main") throw err.writeToMainForbidden();
-  assertDraftId(ref);
-}
 
 /**
- * Bump the per-doc version counter on a main write. Direct edits to main
- * (Obsidian-prototype mode: agent writes land without a draft round-trip)
- * still want a monotonic version number so callers can stale-check.
+ * The applied-`op_id` set backing idempotent writes (`.op_log.json`, parsed by
+ * `parseOpLog`): each applied op id → when it was applied. A Map (not a plain
+ * object) so an op id like `constructor` can't hit an inherited key; it's
+ * serialized via `Object.fromEntries`, which keeps even `__proto__` a real key.
  */
-function bumpCounter(
-  counters: Map<DocPath, number>,
-  p: DocPath,
-): void {
-  counters.set(p, (counters.get(p) ?? 0) + 1);
-}
-
-/**
- * `<name> #<4hex>` per the resolved-decisions rule. Suffix comes from the
- * first 4 chars of `draft_id` after stripping the `draft_` prefix; the id
- * remains the unique key, the suffix is just the human-legible disambiguator.
- */
-function renderDisplayName(name: string, draftId: DraftId): string {
-  const suffix = draftId.startsWith("draft_")
-    ? draftId.slice("draft_".length, "draft_".length + 4)
-    : draftId.slice(0, 4);
-  return `${name} #${suffix}`;
-}
+type OpLog = Map<OpId, OpLogEntry>;
 
 function titleFromMd(md: string, fallback: string): string {
   const line = md.split("\n").find((l) => l.trim().length > 0) ?? "";
@@ -142,10 +81,8 @@ async function walk(root: string): Promise<string[]> {
     }
     for (const e of entries) {
       // Skip dot-prefixed entries: Obsidian hides them, and they hold our own
-      // infra (`.drafts/`, `.op_log.json`) plus vault config (`.obsidian/`).
-      // This is what scopes the vault walk to visible docs. The `.drafts` and
-      // plugin trees are walked from inside (their roots are passed in), so
-      // their non-dot contents are unaffected.
+      // infra (`.op_log.json`) plus vault config (`.obsidian/`). This is what
+      // scopes the vault walk to visible docs.
       if (e.name.startsWith(".")) continue;
       const full = path.join(dir, e.name);
       // Silently skip symlinks/devices/sockets/FIFOs — `isFile()` /
@@ -231,16 +168,6 @@ async function writeFileNoFollow(abs: string, content: string): Promise<void> {
 }
 
 /**
- * Symlink-hostile copy. Rejects symlinks at both ends.
- */
-async function copyFileNoFollow(src: string, dest: string): Promise<void> {
-  const srcStat = await fs.lstat(src);
-  if (!srcStat.isFile()) throw err.invalidPath(src);
-  const content = await readFileNoFollow(src);
-  await writeFileNoFollow(dest, content);
-}
-
-/**
  * Replay-buffer depth for resumable SSE subscriptions. Sized for the gap a
  * reconnect loop actually spans (about a second, plus a debounce window) —
  * a subscriber further behind than this gets a `stream_reset` and re-syncs
@@ -250,16 +177,7 @@ const MAX_REPLAY_EVENTS = 256;
 
 export class StubBackend implements Backend {
   private root: string;
-  /**
-   * Repo-root dir that holds `.claude-plugin/`. Exposed read-only so remote
-   * agents can discover the bundled skills + scripts through `Read`/`Glob`/
-   * `Grep` without installing the plugin locally.
-   */
-  private pluginRoot: string;
   private opLogPath: string;
-  /** Hidden cache for the style profile + bridged config (see `.sheaf/`). */
-  private styleProfilePath: string;
-  private styleConfigPath: string;
   private opLogCache: OpLog | null = null;
   private lockChain: Promise<unknown> = Promise.resolve();
   private subscribers = new Set<(event: BackendEvent, eventId?: string) => void>();
@@ -276,7 +194,7 @@ export class StubBackend implements Backend {
    * `<epoch>.<seq>` (the SSE `id:` field) and a slot in a bounded replay
    * buffer, so a subscriber that reconnects with `sinceId` gets the events
    * it missed instead of a silent gap. The epoch is random per backend
-   * instance: an id minted by a previous instance (embedded-server restart)
+   * instance: an id minted by a previous instance (a daemon restart)
    * is detectably non-resumable and yields a `stream_reset` instead of a
    * wrong replay. Lifecycle events (`agent_presence`, `stream_reset`) are
    * connection state, not mutations — they get no id and aren't buffered
@@ -285,26 +203,10 @@ export class StubBackend implements Backend {
   private streamEpoch = randomUUID().slice(0, 8);
   private streamSeq = 0;
   private eventLog: { seq: number; origin: Origin; event: BackendEvent }[] = [];
-  /**
-   * Per-doc monotonic version counter. Initialized to 1 the first time a doc
-   * with prose is read on main; bumped on draft accept (Phase I wires the
-   * bump). In-memory only — production will derive from accept-commit
-   * metadata.
-   */
-  private versionCounters = new Map<DocPath, number>();
-  /**
-   * Phase K: per-doc accepted-draft history. Appended in `merge()` for each
-   * touched path. The initial v1 has no entry — readers should treat the
-   * absence as "no draft produced this version".
-   */
-  private versionHistory = new Map<DocPath, VersionHistoryEntry[]>();
 
-  constructor(root: string, pluginRoot?: string) {
+  constructor(root: string) {
     this.root = root;
-    this.pluginRoot = pluginRoot ?? path.resolve(root, "..");
     this.opLogPath = path.join(root, ".op_log.json");
-    this.styleProfilePath = path.join(root, ".sheaf", "style-profile.json");
-    this.styleConfigPath = path.join(root, ".sheaf", "config.json");
   }
 
   subscribe(
@@ -422,19 +324,6 @@ export class StubBackend implements Backend {
     return safeJoin(this.root, p);
   }
 
-  private absDraft(draftId: DraftId, p: DocPath): string {
-    assertDraftId(draftId);
-    assertVaultPath(p);
-    const draftRoot = path.join(this.root, ".drafts", draftId);
-    return safeJoin(draftRoot, p);
-  }
-
-  private absDraftMeta(draftId: DraftId): string {
-    assertDraftId(draftId);
-    const draftRoot = path.join(this.root, ".drafts", draftId);
-    return safeJoin(draftRoot, "meta.json");
-  }
-
   private async ensureDir(p: string): Promise<void> {
     await fs.mkdir(p, { recursive: true });
   }
@@ -464,160 +353,101 @@ export class StubBackend implements Backend {
     }
   }
 
-  private homeAbs(p: DocPath, draftId?: DraftId): string {
-    return draftId ? this.absDraft(draftId, p) : this.absMain(p);
-  }
-
   /**
    * Write clean prose while preserving the threads already homed in the doc, so
-   * a prose change never drops them. Used by `writeDoc`/`editDoc`/`merge`.
+   * a prose change never drops them. Used by `writeDoc`/`editDoc`.
    */
   private async persistDoc(
     abs: string,
     prose: string,
     homePath: DocPath,
-    draftId?: DraftId,
   ): Promise<void> {
     const raw = await this.readRawForRewrite(abs);
-    const existing = raw ? parseReviewDoc(raw, draftId).threads : [];
+    const existing = raw ? parseReviewDoc(raw).threads : [];
     await this.ensureDir(path.dirname(abs));
     await writeFileNoFollow(abs, serializeReviewDoc(prose, existing, homePath));
   }
 
   /**
-   * Every doc file that may carry threads — visible vault docs and per-draft
-   * overrides under `.drafts/`. The file's location is authoritative for a
-   * thread's `draft_id`.
+   * Every visible vault doc file that may carry threads.
    */
   private async allReviewDocFiles(): Promise<
-    { abs: string; homePath: DocPath; draftId?: DraftId }[]
+    { abs: string; homePath: DocPath }[]
   > {
-    const out: { abs: string; homePath: DocPath; draftId?: DraftId }[] = [];
+    const out: { abs: string; homePath: DocPath }[] = [];
     for (const f of await walk(this.root)) {
       if (!f.endsWith(".md")) continue;
-      out.push({ abs: f, homePath: path.relative(this.root, f).replace(/\\/g, "/") });
-    }
-    const draftsRoot = path.join(this.root, ".drafts");
-    for (const f of await walk(draftsRoot)) {
-      if (!f.endsWith(".md")) continue;
-      const parts = path.relative(draftsRoot, f).split(path.sep);
-      const draftId = parts[0];
-      if (!draftId || !DRAFT_ID_RE.test(draftId)) continue;
-      out.push({ abs: f, homePath: parts.slice(1).join("/"), draftId });
+      out.push({
+        abs: f,
+        homePath: path.relative(this.root, f).replace(/\\/g, "/"),
+      });
     }
     return out;
   }
 
   private async readOpLog(): Promise<OpLog> {
-    if (this.opLogCache) return this.opLogCache;
-    try {
-      const raw = await readFileNoFollow(this.opLogPath);
-      const parsed = opLogSchema.safeParse(JSON.parse(raw));
-      if (parsed.success) {
-        this.opLogCache = parsed.data as OpLog;
-      } else {
-        // Corrupt or drifted on-disk shape — keep going with an empty log
-        // rather than crashing the whole backend.
-        console.error("[stub] op_log failed schema validation; resetting");
-        this.opLogCache = {};
-      }
-    } catch {
-      this.opLogCache = {};
-    }
+    if (!this.opLogCache) this.opLogCache = await this.loadOpLog();
     return this.opLogCache;
+  }
+
+  /**
+   * Load the op log from disk. A missing file is the normal empty log; any
+   * other failure (unreadable, invalid JSON, not an object) is logged and also
+   * yields an empty log rather than crashing the whole backend.
+   */
+  private async loadOpLog(): Promise<OpLog> {
+    let json: unknown;
+    try {
+      json = JSON.parse(await readFileNoFollow(this.opLogPath));
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        const why = e instanceof Error ? e.message : String(e);
+        console.error(`[stub] op_log unreadable (${why}); resetting`);
+      }
+      return new Map();
+    }
+    const parsed = parseOpLog(json);
+    if (!parsed) {
+      console.error("[stub] op_log failed schema validation; resetting");
+      return new Map();
+    }
+    if (parsed.skipped > 0) {
+      console.error(`[stub] op_log: skipped ${parsed.skipped} invalid op id(s)`);
+    }
+    return parsed.entries;
   }
 
   private async writeOpLog(log: OpLog): Promise<void> {
     this.opLogCache = log;
     await this.ensureDir(path.dirname(this.opLogPath));
-    await writeFileNoFollow(this.opLogPath, JSON.stringify(log, null, 2));
-  }
-
-  private async cachedWrite(
-    opId: OpId | undefined,
-    run: () => Promise<WriteResult>,
-  ): Promise<WriteResult> {
-    if (!opId) return run();
-    const log = await this.readOpLog();
-    if (log[opId]) return log[opId];
-    const result = await run();
-    log[opId] = result;
-    await this.writeOpLog(log);
-    return result;
-  }
-
-  private async loadDraftMeta(draftId: DraftId): Promise<DraftMeta> {
-    assertDraftId(draftId);
-    let raw: string;
-    try {
-      raw = await readFileNoFollow(this.absDraftMeta(draftId));
-    } catch {
-      throw err.draftNotFound(draftId);
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      throw err.draftNotFound(draftId);
-    }
-    const validated = draftMetaSchema.safeParse(parsed);
-    if (!validated.success) throw err.draftNotFound(draftId);
-    // Normalize legacy on-disk shapes: older files may carry `seed_prompt`
-    // or `note`; collapse both onto `intent` (first non-empty wins).
-    const data = validated.data;
-    const intent = data.intent ?? data.seed_prompt ?? data.note;
-    return {
-      draft_id: data.draft_id,
-      base_path: data.base_path,
-      intent,
-      author: data.author,
-      state: data.state,
-      created_at: data.created_at,
-      submitted_at: data.submitted_at,
-      name: data.name,
-      display_name: data.display_name,
-      touches: data.touches,
-      base_version: data.base_version,
-      parent_draft_id: data.parent_draft_id,
-    } satisfies DraftMeta;
-  }
-
-  private async saveDraftMeta(meta: DraftMeta): Promise<void> {
-    const p = this.absDraftMeta(meta.draft_id);
-    await this.ensureDir(path.dirname(p));
-    await writeFileNoFollow(p, JSON.stringify(meta, null, 2));
+    await writeFileNoFollow(
+      this.opLogPath,
+      JSON.stringify(Object.fromEntries(log), null, 2),
+    );
   }
 
   /**
-   * Phase H: append `paths` to the draft's `touches` list (deduped). Loads,
-   * mutates, and persists meta inside the caller's lock — every call site
-   * (`writeDoc`, `editDoc`, `addThread`) is already holding `withLock`.
-   * No-op when every path is already tracked.
+   * Run a write at most once per `opId`. A repeat of an op id already in the op
+   * log is a no-op — the write isn't re-run and no event fires. The id is only
+   * recorded after `run` succeeds, so a failed write can be retried. Without an
+   * `opId` the write always runs.
    */
-  private async addTouches(
-    draftId: DraftId,
-    paths: DocPath[],
+  private async applyOnce(
+    opId: OpId | undefined,
+    run: () => Promise<void>,
   ): Promise<void> {
-    const meta = await this.loadDraftMeta(draftId);
-    const current = meta.touches ?? [meta.base_path];
-    const set = new Set(current);
-    let changed = false;
-    for (const p of paths) {
-      if (!set.has(p)) {
-        set.add(p);
-        current.push(p);
-        changed = true;
-      }
-    }
-    if (!changed) return;
-    meta.touches = current;
-    await this.saveDraftMeta(meta);
+    if (!opId) return run();
+    const log = await this.readOpLog();
+    if (log.has(opId)) return;
+    await run();
+    log.set(opId, { applied_at: Date.now() });
+    await this.writeOpLog(log);
   }
 
   /**
    * Every visible markdown doc on main. `walk` already skips dot-prefixed
-   * entries (`.drafts/`, `.obsidian/`, …), so this is the whole vault minus
-   * infra. The single source of truth for discovery (`listDocs`, `listAllDocs`).
+   * entries (`.obsidian/`, …), so this is the whole vault minus infra. The
+   * single source of truth for discovery (`listDocs`, `glob`).
    */
   private async listMainDocs(): Promise<DocSummary[]> {
     const files = await walk(this.root);
@@ -648,74 +478,13 @@ export class StubBackend implements Backend {
     return prefix ? docs.filter((d) => d.path.startsWith(prefix)) : docs;
   }
 
-  async glob(pattern: string, ref: Ref = "main"): Promise<DocSummary[]> {
+  async glob(pattern: string): Promise<DocSummary[]> {
     const re = globToRegex(pattern);
-    const all = await this.listAllDocs(ref);
+    const all = await this.listMainDocs();
     return all.filter((d) => re.test(d.path));
   }
 
-  private async listAllDocs(ref: Ref): Promise<DocSummary[]> {
-    const main = await this.listMainDocs();
-    const plugin = await this.listPluginFiles();
-    if (ref === "main") return [...main, ...plugin];
-    const meta = await this.loadDraftMeta(ref);
-    const draftBase = path.join(this.root, ".drafts", meta.draft_id);
-    const draftFiles = await walk(draftBase);
-    const overridden = new Map<DocPath, DocSummary>();
-    for (const f of draftFiles) {
-      if (!f.endsWith(".md")) continue;
-      const raw = await this.readRawMaybe(f);
-      if (raw === null) continue;
-      let stat: import("node:fs").Stats;
-      try {
-        stat = await fs.lstat(f);
-      } catch {
-        continue;
-      }
-      const rel = path.relative(draftBase, f).replace(/\\/g, "/");
-      overridden.set(rel, {
-        path: rel,
-        title: titleFromMd(cleanProse(raw), path.basename(f, ".md")),
-        updated_at: stat.mtimeMs,
-      });
-    }
-    return [...main.map((d) => overridden.get(d.path) ?? d), ...plugin];
-  }
-
-  /**
-   * Walk the repo-root `.claude-plugin/` tree and return one entry per file.
-   * No extension filter — plugin bundles include `.md`, `.mjs`, `.json`, etc.
-   * Always served as `origin: main`; drafts never shadow these paths.
-   */
-  private async listPluginFiles(): Promise<DocSummary[]> {
-    const base = path.join(this.pluginRoot, PLUGIN_PATH_PREFIX);
-    let files: string[];
-    try {
-      files = await walk(base);
-    } catch {
-      return [];
-    }
-    const results: DocSummary[] = [];
-    for (const f of files) {
-      const rel = path.relative(this.pluginRoot, f).replace(/\\/g, "/");
-      if (!rel.startsWith(PLUGIN_PATH_PREFIX)) continue;
-      let stat: import("node:fs").Stats;
-      try {
-        stat = await fs.lstat(f);
-      } catch {
-        continue;
-      }
-      results.push({
-        path: rel,
-        title: path.basename(rel),
-        updated_at: stat.mtimeMs,
-      });
-    }
-    return results.sort((a, b) => a.path.localeCompare(b.path));
-  }
-
   async grep(opts: GrepOptions): Promise<GrepResult> {
-    const ref = opts.ref ?? "main";
     const re = new RegExp(
       opts.pattern,
       (opts.case_insensitive ? "i" : "") + (opts.multiline ? "s" : ""),
@@ -723,7 +492,7 @@ export class StubBackend implements Backend {
     // Pre-compile the global variant once for count mode; the previous code
     // rebuilt it on every iteration.
     const globalRe = new RegExp(re.source, re.flags + "g");
-    let candidates = await this.listAllDocs(ref);
+    let candidates = await this.listMainDocs();
     if (opts.path) candidates = candidates.filter((d) => d.path === opts.path);
     if (opts.glob) {
       const gre = globToRegex(opts.glob);
@@ -744,7 +513,7 @@ export class StubBackend implements Backend {
       const paths: DocPath[] = [];
       for (const d of candidates) {
         checkDeadline();
-        const { md } = await this.readDoc(d.path, ref);
+        const { md } = await this.readDoc(d.path);
         if (re.test(md)) paths.push(d.path);
         if (paths.length >= limit) break;
       }
@@ -754,7 +523,7 @@ export class StubBackend implements Backend {
       const counts: { path: DocPath; count: number }[] = [];
       for (const d of candidates) {
         checkDeadline();
-        const { md } = await this.readDoc(d.path, ref);
+        const { md } = await this.readDoc(d.path);
         globalRe.lastIndex = 0;
         const m = md.match(globalRe);
         if (m && m.length > 0)
@@ -766,7 +535,7 @@ export class StubBackend implements Backend {
     const matches: GrepMatch[] = [];
     for (const d of candidates) {
       checkDeadline();
-      const { md } = await this.readDoc(d.path, ref);
+      const { md } = await this.readDoc(d.path);
       const lines = md.split("\n");
       for (let i = 0; i < lines.length; i++) {
         if (i % 64 === 0) checkDeadline();
@@ -792,29 +561,9 @@ export class StubBackend implements Backend {
     return { mode: "content", matches };
   }
 
-  async readDoc(p: DocPath, ref: Ref = "main"): Promise<DocContent> {
-    assertReadablePath(p);
-    let abs: string;
-    let origin: "main" | "draft";
-    if (isPluginPath(p)) {
-      // Plugin tree is main-only: drafts never shadow it.
-      abs = safeJoin(this.pluginRoot, p);
-      origin = "main";
-    } else if (ref === "main") {
-      abs = this.absMain(p);
-      origin = "main";
-    } else {
-      await this.loadDraftMeta(ref);
-      const draftAbs = this.absDraft(ref, p);
-      try {
-        await fs.stat(draftAbs);
-        abs = draftAbs;
-        origin = "draft";
-      } catch {
-        abs = this.absMain(p);
-        origin = "main";
-      }
-    }
+  async readDoc(p: DocPath): Promise<DocContent> {
+    assertVaultPath(p);
+    const abs = this.absMain(p);
     let raw: string;
     try {
       raw = await readFileNoFollow(abs);
@@ -823,193 +572,36 @@ export class StubBackend implements Backend {
       throw err.docNotFound(p);
     }
     // The on-disk file carries inline review markup; readers see clean prose.
-    const md = cleanProse(raw);
-    // Initialize the counter the first time we surface a doc with prose. The
-    // counter is keyed off the workspace-relative path so drafts and main
-    // share the same counter (the doc's identity is the path, not the ref).
-    let version_counter = this.versionCounters.get(p);
-    if (version_counter === undefined && md.length > 0) {
-      version_counter = 1;
-      this.versionCounters.set(p, version_counter);
-    }
-    return {
-      md,
-      version_token: `v-${sha(md).slice(0, 12)}`,
-      version_counter: version_counter ?? 0,
-      origin,
-    };
-  }
-
-  renameDoc(from: DocPath, to: DocPath, origin: Origin = "ui"): Promise<ThreadId[]> {
-    return this.withLock(async () => {
-      assertVaultPath(from);
-      assertVaultPath(to);
-      if (from === to) return [];
-
-      // `from`/`to` may name a single doc or a whole folder — `remapRenamedPath`
-      // covers both, reconciling every descendant in one pass. The vault has
-      // already moved the visible bytes, and a doc's threads now travel inside
-      // its `.md` (no sidecars), so we only fix what the vault can't see: our
-      // hidden `.drafts/` overrides, the per-doc counters, and the target paths
-      // recorded inside each doc's review endmatter.
-
-      // 1. Repoint each draft's meta and move its override `.md` working copies
-      //    under `.drafts/` (the vault never touches that hidden tree). Do this
-      //    before the endmatter remap so overrides sit at their new paths.
-      for (const d of await this.listDrafts()) {
-        const meta = await this.loadDraftMeta(d.draft_id);
-        const touches = meta.touches ?? [meta.base_path];
-        let metaChanged = false;
-        for (const tp of touches) {
-          const np = remapRenamedPath(tp, from, to);
-          if (np === null) continue;
-          const src = this.absDraft(d.draft_id, tp);
-          try {
-            await fs.stat(src);
-            const dest = this.absDraft(d.draft_id, np);
-            await this.ensureDir(path.dirname(dest));
-            await copyFileNoFollow(src, dest);
-            await fs.rm(src, { force: true });
-          } catch {
-            // No override on disk for this path — meta repoint is enough.
-          }
-        }
-        const nbp = remapRenamedPath(meta.base_path, from, to);
-        if (nbp !== null) {
-          meta.base_path = nbp;
-          metaChanged = true;
-        }
-        if (meta.touches) {
-          const rewritten = meta.touches.map(
-            (p) => remapRenamedPath(p, from, to) ?? p,
-          );
-          if (rewritten.some((p, i) => p !== meta.touches![i])) {
-            meta.touches = rewritten;
-            metaChanged = true;
-          }
-        }
-        if (metaChanged) await this.saveDraftMeta(meta);
-      }
-
-      // 2. Rewrite the target paths stored in every doc's endmatter. The byte
-      //    move already carried each home doc (threads and all) to its new
-      //    path; only the paths recorded inside the records are stale.
-      const moved: { id: ThreadId; target_paths: DocPath[] }[] = [];
-      for (const file of await this.allReviewDocFiles()) {
-        // Fail loud on a non-ENOENT read error (oversized doc, EIO) instead of
-        // silently skipping: the vault already moved the bytes, so skipping
-        // would strand this doc's stored target paths at the old location.
-        // ENOENT (the file vanished) is the one benign case — skip it.
-        const raw = await this.readRawForRewrite(file.abs);
-        if (raw === null) continue;
-        const { prose, threads } = parseReviewDoc(raw, file.draftId);
-        let changed = false;
-        for (const t of threads) {
-          let tChanged = false;
-          t.targets = t.targets.map((tg) => {
-            const np = remapRenamedPath(tg.path, from, to);
-            if (np === null) return tg;
-            tChanged = true;
-            return { ...tg, path: np };
-          }) as Thread["targets"];
-          if (tChanged) {
-            changed = true;
-            moved.push({
-              id: t.id,
-              target_paths: t.targets.map((tg) => tg.path),
-            });
-          }
-        }
-        if (changed) {
-          await writeFileNoFollow(
-            file.abs,
-            serializeReviewDoc(prose, threads, file.homePath),
-          );
-        }
-      }
-
-      // 3. Carry per-doc version counters + history onto their new paths (the
-      //    doc's identity is its path). Don't clobber an existing destination.
-      this.remapMapKeys(this.versionCounters, from, to);
-      this.remapMapKeys(this.versionHistory, from, to);
-
-      // 4. Tell every consumer (UI panels + the connected agent) the threads
-      //    now live on their new paths so they re-resolve.
-      for (const m of moved) {
-        this.emit(
-          { kind: "thread_changed", thread_id: m.id, target_paths: m.target_paths },
-          origin,
-        );
-      }
-      return moved.map((m) => m.id);
-    });
-  }
-
-  /**
-   * Move every key of `map` that sits at or under `from` onto its remapped
-   * path, in place. Skips a destination that already has a value (a real
-   * collision shouldn't happen — the vault wouldn't allow two docs at one
-   * path — but we don't overwrite if it does).
-   */
-  private remapMapKeys<V>(
-    map: Map<DocPath, V>,
-    from: DocPath,
-    to: DocPath,
-  ): void {
-    for (const [p, v] of [...map]) {
-      const np = remapRenamedPath(p, from, to);
-      if (np === null) continue;
-      map.delete(p);
-      if (!map.has(np)) map.set(np, v);
-    }
+    return { md: cleanProse(raw) };
   }
 
   writeDoc(
     p: DocPath,
-    ref: Ref,
     content: string,
     opId?: OpId,
     origin: Origin = "ui",
-  ): Promise<WriteResult> {
+  ): Promise<void> {
     return this.withLock(() =>
-      this.cachedWrite(opId, async () => {
+      this.applyOnce(opId, async () => {
         assertVaultPath(p);
-        if (ref === "main") {
-          await this.persistDoc(this.absMain(p), content, p);
-          bumpCounter(this.versionCounters, p);
-          this.emit({ kind: "doc_changed", path: p }, origin);
-          return { version_token: `v-${sha(content).slice(0, 12)}` };
-        }
-        assertDraftRef(ref);
-        await this.loadDraftMeta(ref);
-        await this.persistDoc(this.absDraft(ref, p), content, p, ref);
-        await this.addTouches(ref, [p]);
-        const result: WriteResult = {
-          version_token: `v-${sha(content).slice(0, 12)}`,
-        };
-        this.emit({ kind: "draft_changed", draft_id: ref, path: p }, origin);
-        return result;
+        await this.persistDoc(this.absMain(p), content, p);
+        this.emit({ kind: "doc_changed", path: p }, origin);
       }),
     );
   }
 
   editDoc(
     p: DocPath,
-    ref: Ref,
     oldString: string,
     newString: string,
     replaceAll: boolean,
     opId?: OpId,
     origin: Origin = "ui",
-  ): Promise<WriteResult> {
+  ): Promise<void> {
     return this.withLock(() =>
-      this.cachedWrite(opId, async () => {
+      this.applyOnce(opId, async () => {
         assertVaultPath(p);
-        if (ref !== "main") {
-          assertDraftRef(ref);
-          await this.loadDraftMeta(ref);
-        }
-        const current = await this.readDoc(p, ref);
+        const current = await this.readDoc(p);
         let next: string;
         if (replaceAll) {
           if (!current.md.includes(oldString)) throw err.editNoMatch(p);
@@ -1032,406 +624,10 @@ export class StubBackend implements Backend {
             newString +
             current.md.slice(first + oldString.length);
         }
-        if (ref === "main") {
-          await this.persistDoc(this.absMain(p), next, p);
-          bumpCounter(this.versionCounters, p);
-          this.emit({ kind: "doc_changed", path: p }, origin);
-          return { version_token: `v-${sha(next).slice(0, 12)}` };
-        }
-        await this.persistDoc(this.absDraft(ref, p), next, p, ref);
-        await this.addTouches(ref, [p]);
-        const result: WriteResult = {
-          version_token: `v-${sha(next).slice(0, 12)}`,
-        };
-        this.emit({ kind: "draft_changed", draft_id: ref, path: p }, origin);
-        return result;
+        await this.persistDoc(this.absMain(p), next, p);
+        this.emit({ kind: "doc_changed", path: p }, origin);
       }),
     );
-  }
-
-  fork(
-    p: DocPath,
-    n: number,
-    intent?: string,
-    author = "agent",
-    parent?: DraftId,
-  ): Promise<DraftId[]> {
-    return this.withLock(async () => {
-      assertVaultPath(p);
-      let parentMeta: DraftMeta | undefined;
-      let seedContent: string | undefined;
-      if (parent !== undefined) {
-        assertDraftId(parent);
-        parentMeta = await this.loadDraftMeta(parent);
-        // Sub-drafts inherit the parent's doc identity. The plan calls out
-        // `base_path = parent.base_path`; the explicit `path` arg is kept
-        // for parity with the existing one-arg signature but must agree
-        // with the parent's base_path so we don't accidentally seed a
-        // sub-draft with content from a different doc.
-        if (parentMeta.base_path !== p) {
-          throw err.invalidPayload(
-            `fork(parent=${parent}) path mismatch: parent.base_path is ${parentMeta.base_path}, got ${p}`,
-          );
-        }
-        // Seed from the parent's current view of the doc (override if it
-        // exists, otherwise main). readDoc(p, parent) walks that fall-through
-        // for us so the sub-draft sees the parent's edits.
-        const parentView = await this.readDoc(p, parent);
-        seedContent = parentView.md;
-      } else {
-        await this.readDoc(p, "main");
-      }
-      const baseVersion =
-        parentMeta?.base_version ?? this.versionCounters.get(p) ?? 1;
-      const ids: DraftId[] = [];
-      for (let i = 0; i < n; i++) {
-        const draftId = `draft_${randomUUID()}`;
-        const meta: DraftMeta = {
-          draft_id: draftId,
-          base_path: p,
-          intent,
-          author,
-          state: "open",
-          created_at: Date.now(),
-          touches: [p],
-          base_version: baseVersion,
-          parent_draft_id: parent,
-        };
-        await this.saveDraftMeta(meta);
-        // Materialize the parent's current bytes into the sub-draft's
-        // override tree so its working ycrdt is independent of the parent.
-        // No write for top-level drafts (they fall through to main on read).
-        if (seedContent !== undefined) {
-          const abs = this.absDraft(draftId, p);
-          await this.ensureDir(path.dirname(abs));
-          await writeFileNoFollow(abs, seedContent);
-        }
-        this.emit({
-          kind: "draft_created",
-          draft_id: draftId,
-          base_path: p,
-        });
-        ids.push(draftId);
-      }
-      return ids;
-    });
-  }
-
-  /**
-   * Cascade-decline all sub-drafts of `parentDraftId` that aren't already
-   * accepted. Used by Phase I's `merge()` to tombstone unaccepted siblings
-   * when the parent draft is merged. Declined sub-draft refs persist in
-   * git history per the resolved-decision on rejected-alternatives storage.
-   *
-   * Exposed as a public method so Phase I can wire it into the merge flow
-   * without re-deriving the predicate. Intentionally not part of the
-   * `Backend` interface — this is a stub-internal helper.
-   */
-  async _cascadeDeclineSubDrafts(parentDraftId: DraftId): Promise<DraftId[]> {
-    assertDraftId(parentDraftId);
-    const all = await this.listDrafts();
-    const declined: DraftId[] = [];
-    for (const d of all) {
-      if (d.parent_draft_id !== parentDraftId) continue;
-      if (d.state === "accepted") continue;
-      if (d.state === "declined") continue;
-      await this.declineDraft(d.draft_id);
-      declined.push(d.draft_id);
-    }
-    return declined;
-  }
-
-  async forkAndAttachThreads(opts: {
-    base_path: DocPath;
-    base_version?: number;
-    name: string;
-    author?: string;
-    intent?: string;
-    initial_threads: {
-      targets: ThreadAnchor[];
-      message: string;
-      draft?: ThreadDraftBody;
-    }[];
-  }): Promise<{
-    draft_id: DraftId;
-    display_name: string;
-    base_version: number;
-  }> {
-    assertVaultPath(opts.base_path);
-    // Create the draft inside the lock so the meta is committed before any
-    // thread save races against listing.
-    const author = opts.author ?? "user";
-    const draftIdHolder: { id?: DraftId; baseVersion?: number; displayName?: string } = {};
-    await this.withLock(async () => {
-      await this.readDoc(opts.base_path, "main");
-      const counter = this.versionCounters.get(opts.base_path) ?? 1;
-      const baseVersion = opts.base_version ?? counter;
-      const draftId: DraftId = `draft_${randomUUID()}`;
-      const displayName = renderDisplayName(opts.name, draftId);
-      const meta: DraftMeta = {
-        draft_id: draftId,
-        base_path: opts.base_path,
-        intent: opts.intent,
-        author,
-        state: "open",
-        created_at: Date.now(),
-        name: opts.name,
-        display_name: displayName,
-        touches: [opts.base_path],
-        base_version: baseVersion,
-      };
-      await this.saveDraftMeta(meta);
-      this.emit({
-        kind: "draft_created",
-        draft_id: draftId,
-        base_path: opts.base_path,
-      });
-      draftIdHolder.id = draftId;
-      draftIdHolder.baseVersion = baseVersion;
-      draftIdHolder.displayName = displayName;
-    });
-    const draftId = draftIdHolder.id!;
-    // Each addThread call takes the lock itself, so we do them sequentially
-    // outside the outer lock — yielding inside withLock would deadlock.
-    for (const t of opts.initial_threads) {
-      await this.addThread({
-        targets: t.targets,
-        message: t.message,
-        draft: t.draft,
-        ref: draftId,
-        author,
-      });
-    }
-    return {
-      draft_id: draftId,
-      display_name: draftIdHolder.displayName!,
-      base_version: draftIdHolder.baseVersion!,
-    };
-  }
-
-  propose(
-    draftId: DraftId,
-    intent?: string,
-    name?: string,
-  ): Promise<{ diff_url: string }> {
-    return this.withLock(async () => {
-      const meta = await this.loadDraftMeta(draftId);
-      meta.state = "submitted";
-      meta.submitted_at = Date.now();
-      if (intent !== undefined) meta.intent = intent;
-      if (name !== undefined) meta.name = name;
-      await this.saveDraftMeta(meta);
-      this.emit({
-        kind: "draft_state",
-        draft_id: draftId,
-        state: "submitted",
-      });
-      return { diff_url: `/drafts/${draftId}` };
-    });
-  }
-
-  async merge(draftId: DraftId): Promise<{
-    commit: string;
-    versions: { path: DocPath; from: number; to: number }[];
-  }> {
-    assertDraftId(draftId);
-    const result = await this.withLock(async () => {
-      const meta = await this.loadDraftMeta(draftId);
-      // Merge must go through Propose first. Otherwise `Fork` + `Write` +
-      // `Merge` lands arbitrary content on main without passing any review
-      // gate. `accepted` is idempotent; anything else is a misuse.
-      if (meta.state !== "submitted" && meta.state !== "accepted") {
-        throw err.draftNotSubmitted(draftId, meta.state);
-      }
-      // Phase J: server-side Accept gating. The UI button is disabled while
-      // any thread on the draft is open, but agents (and direct API callers)
-      // can bypass that — refuse the merge unless every thread is terminal.
-      // `accepted` is idempotent above; skip the gate so re-accepts don't
-      // require re-resolving (the threads are already terminal anyway).
-      if (meta.state === "submitted") {
-        const threads = await this.listThreads({ ref: draftId });
-        const openCount = threads.filter((t) => t.status === "open").length;
-        if (openCount > 0) throw err.acceptBlocked(openCount);
-      }
-      const baseVersion = meta.base_version ?? 1;
-      const touches = meta.touches ?? [meta.base_path];
-      const draftRoot = path.join(this.root, ".drafts", draftId);
-
-      // Plan a copy for every touched path that has an override on disk.
-      // Collect plans first so a conflict on any path aborts the whole batch
-      // before any write to main.
-      const plans: { rel: DocPath; src: string; dest: string }[] = [];
-      const seen = new Set<DocPath>();
-      const considerPath = async (rel: DocPath): Promise<void> => {
-        if (seen.has(rel)) return;
-        seen.add(rel);
-        if (!rel.endsWith(".md")) return;
-        assertVaultPath(rel);
-        const src = this.absDraft(draftId, rel);
-        try {
-          const stat = await fs.lstat(src);
-          if (!stat.isFile()) return;
-        } catch {
-          return;
-        }
-        plans.push({ rel, src, dest: safeJoin(this.root, rel) });
-      };
-      for (const rel of touches) await considerPath(rel);
-      // Cover legacy drafts whose `touches` may be missing override files
-      // landed under the draft tree (defensive against drift).
-      const draftFiles = await walk(draftRoot);
-      for (const f of draftFiles) {
-        const rel = path.relative(draftRoot, f).replace(/\\/g, "/");
-        await considerPath(rel);
-      }
-
-      // Conflict check: any planned path whose main counter has advanced
-      // past the draft's base_version is treated as overlapping. Stub-grade
-      // heuristic per the plan; production will use real yjs op metadata.
-      const conflicts: MergeConflictDetail[] = [];
-      for (const plan of plans) {
-        const mainCounter = this.versionCounters.get(plan.rel);
-        if (mainCounter !== undefined && mainCounter > baseVersion) {
-          conflicts.push({
-            path: plan.rel,
-            base_version: baseVersion,
-            main_version: mainCounter,
-          });
-        }
-      }
-      if (conflicts.length > 0) throw err.mergeConflict(conflicts);
-
-      // No conflicts: stage every planned write, then bump counters.
-      const versions: { path: DocPath; from: number; to: number }[] = [];
-      const acceptedAt = Date.now();
-      for (const plan of plans) {
-        // Land the draft's clean prose on main (its review markup stays behind
-        // in the draft override); preserve any threads already homed on main.
-        // `plan.src` was lstat-confirmed as a file, so a non-ENOENT read
-        // failure (oversized, EIO) must abort rather than land empty prose on
-        // main and wipe it — `readRawForRewrite` rethrows those. A rare ENOENT
-        // race (the override vanished mid-merge) skips this path, never blanks.
-        const draftRaw = await this.readRawForRewrite(plan.src);
-        if (draftRaw === null) continue;
-        const draftProse = cleanProse(draftRaw);
-        await this.persistDoc(plan.dest, draftProse, plan.rel);
-        const from = this.versionCounters.get(plan.rel) ?? baseVersion;
-        const to = from + 1;
-        this.versionCounters.set(plan.rel, to);
-        versions.push({ path: plan.rel, from, to });
-        const history = this.versionHistory.get(plan.rel) ?? [];
-        history.push({ version: to, draft_id: draftId, accepted_at: acceptedAt });
-        this.versionHistory.set(plan.rel, history);
-      }
-
-      meta.state = "accepted";
-      await this.saveDraftMeta(meta);
-      this.emit({
-        kind: "draft_state",
-        draft_id: draftId,
-        state: "accepted",
-      });
-      // draft_merged is distinct from draft_state=accepted: Propose-accept
-      // flips state without touching main; merge() is the one that actually
-      // lands bytes. UI that cares about "main has changed" listens here.
-      this.emit({
-        kind: "draft_merged",
-        draft_id: draftId,
-        target_paths: versions.map((v) => v.path),
-        versions,
-      });
-      return {
-        commit: `c-${sha(`merge:${draftId}:${Date.now()}`).slice(0, 12)}`,
-        versions,
-      };
-    });
-    // Cascade-decline any unaccepted sub-drafts after releasing the merge
-    // lock — `_cascadeDeclineSubDrafts` calls `declineDraft` which itself
-    // takes the lock, so this must run outside `withLock` to avoid a
-    // self-chained deadlock (same pattern as `forkAndAttachThreads`).
-    await this._cascadeDeclineSubDrafts(draftId);
-    return result;
-  }
-
-  declineDraft(draftId: DraftId): Promise<void> {
-    assertDraftId(draftId);
-    return this.withLock(async () => {
-      const meta = await this.loadDraftMeta(draftId);
-      meta.state = "declined";
-      await this.saveDraftMeta(meta);
-      this.emit({
-        kind: "draft_state",
-        draft_id: draftId,
-        state: "declined",
-      });
-    });
-  }
-
-  async listVersionHistory(p: DocPath): Promise<VersionHistoryEntry[]> {
-    assertVaultPath(p);
-    const entries = this.versionHistory.get(p) ?? [];
-    return entries.slice();
-  }
-
-  async draftChanges(
-    draftId: DraftId,
-  ): Promise<{ path: DocPath; main_md: string; draft_md: string }[]> {
-    const meta = await this.loadDraftMeta(draftId);
-    const touches = meta.touches ?? [meta.base_path];
-    const draftRoot = path.join(this.root, ".drafts", draftId);
-    const out: { path: DocPath; main_md: string; draft_md: string }[] = [];
-    for (const rel of touches) {
-      if (!rel.endsWith(".md")) continue;
-      const mainRaw = await this.readRawMaybe(this.absMain(rel));
-      const main_md = mainRaw !== null ? cleanProse(mainRaw) : "";
-      const draftRaw = await this.readRawMaybe(safeJoin(draftRoot, rel));
-      // No override on disk — the path was added to touches by addThread
-      // without an edit landing yet. Show main prose on both sides.
-      const draft_md = draftRaw !== null ? cleanProse(draftRaw) : main_md;
-      out.push({ path: rel, main_md, draft_md });
-    }
-    return out.sort((a, b) => a.path.localeCompare(b.path));
-  }
-
-  async listDrafts(p?: DocPath): Promise<DraftSummary[]> {
-    const dir = path.join(this.root, ".drafts");
-    let entries: import("node:fs").Dirent[];
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
-      return [];
-    }
-    const out: DraftSummary[] = [];
-    for (const e of entries) {
-      if (!e.isDirectory()) continue;
-      if (!DRAFT_ID_RE.test(e.name)) continue;
-      try {
-        const meta = await this.loadDraftMeta(e.name);
-        if (p && meta.base_path !== p) continue;
-        const touches = meta.touches ?? [meta.base_path];
-        const baseVersion = meta.base_version ?? 1;
-        const mainCounter = this.versionCounters.get(meta.base_path) ?? baseVersion;
-        const versionsBehind = Math.max(0, mainCounter - baseVersion);
-        out.push({
-          draft_id: meta.draft_id,
-          base_path: meta.base_path,
-          intent: meta.intent,
-          author: meta.author,
-          state: meta.state,
-          created_at: meta.created_at,
-          submitted_at: meta.submitted_at,
-          name: meta.name,
-          display_name: meta.display_name,
-          touches,
-          base_version: baseVersion,
-          parent_draft_id: meta.parent_draft_id,
-          versions_behind: versionsBehind,
-        });
-      } catch {
-        continue;
-      }
-    }
-    return out.sort((a, b) => b.created_at - a.created_at);
   }
 
   private async loadThread(id: ThreadId): Promise<Thread> {
@@ -1439,7 +635,7 @@ export class StubBackend implements Backend {
     for (const file of await this.allReviewDocFiles()) {
       const raw = await this.readRawMaybe(file.abs);
       if (raw === null) continue;
-      const { threads } = parseReviewDoc(raw, file.draftId);
+      const { threads } = parseReviewDoc(raw);
       const found = threads.find((t) => t.id === id);
       if (found) return found;
     }
@@ -1447,9 +643,7 @@ export class StubBackend implements Backend {
   }
 
   /**
-   * Upsert a thread into its home doc's endmatter (home = `targets[0].path`, on
-   * `main` or the draft override). A not-yet-materialized draft override is
-   * seeded from the draft's current view so the thread has prose to anchor to.
+   * Upsert a thread into its home doc's endmatter (home = `targets[0].path`).
    */
   private async saveThread(t: Thread): Promise<void> {
     if (t.targets.length === 0) {
@@ -1458,15 +652,17 @@ export class StubBackend implements Backend {
     const homePath = t.targets[0].path;
     assertVaultPath(homePath);
     assertThreadId(t.id);
-    const abs = this.homeAbs(homePath, t.draft_id);
+    const abs = this.absMain(homePath);
     const raw = await this.readRawForRewrite(abs);
     let prose: string;
     let threads: Thread[];
     if (raw !== null) {
-      ({ prose, threads } = parseReviewDoc(raw, t.draft_id));
+      ({ prose, threads } = parseReviewDoc(raw));
     } else {
-      // A missing file is only legitimate for a not-yet-materialized override.
-      prose = (await this.readDoc(homePath, t.draft_id ?? "main")).md;
+      // A missing file is only legitimate for a doc that exists in prose but
+      // couldn't be read — seed from the current view so the thread has prose
+      // to anchor to.
+      prose = (await this.readDoc(homePath)).md;
       threads = [];
     }
     const next = [...threads.filter((x) => x.id !== t.id), t].sort(
@@ -1479,17 +675,12 @@ export class StubBackend implements Backend {
   async listThreads(opts: {
     path?: DocPath;
     thread_id?: ThreadId;
-    ref?: Ref;
   }): Promise<ThreadSummary[]> {
-    const wantDraftId =
-      opts.ref === undefined || opts.ref === "main" ? undefined : opts.ref;
     const out: ThreadSummary[] = [];
     for (const file of await this.allReviewDocFiles()) {
-      // The file's location is authoritative for a thread's draft scoping.
-      if (opts.ref !== undefined && file.draftId !== wantDraftId) continue;
       const raw = await this.readRawMaybe(file.abs);
       if (raw === null) continue;
-      const { threads } = parseReviewDoc(raw, file.draftId);
+      const { threads } = parseReviewDoc(raw);
       for (const t of threads) {
         if (opts.thread_id && t.id !== opts.thread_id) continue;
         const paths = t.targets.map((tg) => tg.path);
@@ -1499,7 +690,6 @@ export class StubBackend implements Backend {
           id: t.id,
           status: t.status,
           created: t.created,
-          draft_id: file.draftId,
           target_paths: paths,
           message_count: t.messages.length,
           last_message_preview: last ? last.body.slice(0, 120) : "",
@@ -1522,16 +712,12 @@ export class StubBackend implements Backend {
   async readThreads(opts: {
     path?: DocPath;
     thread_id?: ThreadId;
-    ref?: Ref;
   }): Promise<Thread[]> {
-    const wantDraftId =
-      opts.ref === undefined || opts.ref === "main" ? undefined : opts.ref;
     const out: Thread[] = [];
     for (const file of await this.allReviewDocFiles()) {
-      if (opts.ref !== undefined && file.draftId !== wantDraftId) continue;
       const raw = await this.readRawMaybe(file.abs);
       if (raw === null) continue;
-      const { threads } = parseReviewDoc(raw, file.draftId);
+      const { threads } = parseReviewDoc(raw);
       for (const t of threads) {
         if (opts.thread_id && t.id !== opts.thread_id) continue;
         if (opts.path && !t.targets.some((tg) => tg.path === opts.path)) {
@@ -1548,19 +734,11 @@ export class StubBackend implements Backend {
     message: string;
     author?: string;
     draft?: ThreadDraftBody;
-    ref?: Ref;
     origin?: Origin;
   }): Promise<ThreadId> {
     return this.withLock(async () => {
       if (opts.targets.length === 0) {
         throw new McpError("invalid_path", "at least one target is required");
-      }
-      const ref: Ref = opts.ref ?? "main";
-      let draftId: DraftId | undefined;
-      if (ref !== "main") {
-        assertDraftRef(ref);
-        await this.loadDraftMeta(ref);
-        draftId = ref;
       }
       const id: ThreadId = `thrd_${randomUUID()}`;
       const targets: Thread["targets"] = [];
@@ -1568,11 +746,11 @@ export class StubBackend implements Backend {
         if (t.scope === "doc") {
           // Doc-level: no anchor. Verify the doc exists so we don't store
           // threads pointing at nothing.
-          await this.readDoc(t.path, ref);
+          await this.readDoc(t.path);
           targets.push({ path: t.path, scope: "doc" });
           continue;
         }
-        const { md } = await this.readDoc(t.path, ref);
+        const { md } = await this.readDoc(t.path);
         const from = Math.max(0, Math.min(t.char_range.from, md.length));
         const to = Math.max(from, Math.min(t.char_range.to, md.length));
         const anchored = md.slice(from, to);
@@ -1598,7 +776,6 @@ export class StubBackend implements Backend {
         id,
         created: now,
         status: "open",
-        draft_id: draftId,
         targets,
         messages: [
           {
@@ -1610,12 +787,6 @@ export class StubBackend implements Backend {
         ],
       };
       await this.saveThread(thread);
-      if (draftId) {
-        await this.addTouches(
-          draftId,
-          thread.targets.map((t) => t.path),
-        );
-      }
       this.emit(
         {
           kind: "thread_changed",
@@ -1678,54 +849,16 @@ export class StubBackend implements Backend {
         );
       }
 
-      if (thread.draft_id) {
-        // Draft-mode "remix": the thread lives on a draft, so snapshot the
-        // current draft prose for the thread's primary target as a `current`
-        // leaf. Reviewers reopen to attach further options against that
-        // snapshot. v0 uses target[0] only; multi-target snapshots are deferred
-        // polish. Doc-level targets have no anchor; the snapshot is empty.
-        if (thread.status === "declined") {
-          throw err.invalidPayload(
-            `thread ${threadId} is declined; declined threads cannot be reopened`,
-          );
-        }
-        const target = thread.targets[0];
-        let currentMd =
-          target.scope === "range" ? target.anchor.anchored_text : "";
-        if (target.scope === "range") {
-          try {
-            const view = await this.readDoc(target.path, thread.draft_id);
-            const decoded = JSON.parse(
-              Buffer.from(target.anchor.rel_pos, "base64").toString("utf8"),
-            ) as { from: number; to: number };
-            const from = Math.max(0, Math.min(decoded.from, view.md.length));
-            const to = Math.max(from, Math.min(decoded.to, view.md.length));
-            currentMd = view.md.slice(from, to);
-          } catch {
-            // Fall back to the anchored text if rel_pos drifted; the leaf is
-            // still useful as the historical snapshot of what reviewers saw.
-          }
-        }
-        thread.status = "open";
-        thread.messages.push({
-          author: "system",
-          ts: Date.now(),
-          body: "reopened",
-          draft_options: [{ name: "current", new_md: currentMd }],
-        });
-      } else {
-        // Thread-on-doc "unresolve": no draft to snapshot. Resurrect the thread
-        // straight back to open so it re-enters the queue as an outstanding
-        // item — the escape hatch for an agent that resolved too eagerly. No
-        // payload leaf: a lone `current` option would misrender as a
-        // one-choice picker in the panel.
-        thread.status = "open";
-        thread.messages.push({
-          author: "system",
-          ts: Date.now(),
-          body: "reopened",
-        });
-      }
+      // Plain "unresolve": resurrect the thread straight back to open so it
+      // re-enters the queue as an outstanding item — the escape hatch for an
+      // agent that resolved too eagerly. No payload leaf: a lone option would
+      // misrender as a one-choice picker in the panel.
+      thread.status = "open";
+      thread.messages.push({
+        author: "system",
+        ts: Date.now(),
+        body: "reopened",
+      });
 
       await this.saveThread(thread);
       this.emit(
@@ -1786,102 +919,4 @@ export class StubBackend implements Backend {
       );
     });
   }
-
-  // --- Style / voice matching -------------------------------------------
-
-  /**
-   * Every visible `*.md` doc with mtime + size, no content read. `walk` skips
-   * dot-dirs, so `.sheaf/` and `.drafts/` are excluded automatically. This is
-   * the cheap primitive `style/corpus.ts` fingerprints the corpus from.
-   */
-  async statCorpus(): Promise<CorpusFile[]> {
-    const files = await walk(this.root);
-    const out: CorpusFile[] = [];
-    for (const f of files) {
-      if (!f.endsWith(".md")) continue;
-      try {
-        const st = await fs.lstat(f);
-        if (!st.isFile()) continue;
-        out.push({
-          path: path.relative(this.root, f).replace(/\\/g, "/"),
-          mtime_ms: st.mtimeMs,
-          size: st.size,
-        });
-      } catch {
-        continue;
-      }
-    }
-    return out.sort((a, b) => a.path.localeCompare(b.path));
-  }
-
-  async readStyleConfig(): Promise<StyleConfig> {
-    let raw: string;
-    try {
-      raw = await readFileNoFollow(this.styleConfigPath);
-    } catch {
-      return defaultStyleConfig();
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      return defaultStyleConfig();
-    }
-    const validated = styleConfigSchema.safeParse(parsed);
-    if (!validated.success) {
-      console.error("[stub] style config failed schema validation; using defaults");
-      return defaultStyleConfig();
-    }
-    return validated.data as StyleConfig;
-  }
-
-  writeStyleConfig(config: StyleConfig): Promise<void> {
-    return this.withLock(async () => {
-      const validated = styleConfigSchema.parse(config);
-      await this.ensureDir(path.dirname(this.styleConfigPath));
-      await writeFileNoFollow(
-        this.styleConfigPath,
-        JSON.stringify(validated, null, 2),
-      );
-    });
-  }
-
-  async readStyleProfile(): Promise<StyleProfile | null> {
-    let raw: string;
-    try {
-      raw = await readFileNoFollow(this.styleProfilePath);
-    } catch {
-      return null;
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      return null;
-    }
-    const validated = styleProfileSchema.safeParse(parsed);
-    if (!validated.success) {
-      console.error("[stub] style profile failed schema validation; ignoring");
-      return null;
-    }
-    return validated.data as StyleProfile;
-  }
-
-  writeStyleProfile(profile: StyleProfile): Promise<void> {
-    return this.withLock(async () => {
-      const validated = styleProfileSchema.parse(profile);
-      await this.ensureDir(path.dirname(this.styleProfilePath));
-      await writeFileNoFollow(
-        this.styleProfilePath,
-        JSON.stringify(validated, null, 2),
-      );
-    });
-  }
 }
-
-/**
- * Deprecated re-export. The factory lives in `./factory.ts` — new consumers
- * should import from there. This shim keeps existing app/api callers
- * compiling while migration rolls through.
- */
-export { getBackend } from "./factory";

@@ -2,9 +2,7 @@
  * Thread <-> RFM codec for the filesystem backend (`backend/stub.ts` owns the
  * files). A doc's YAML endmatter authoritatively stores the full record for
  * every thread *homed* in the doc (home = `targets[0].path`); the inline
- * CriticMarkup spans are a regenerated projection. A thread's `draft_id` is
- * derived from the doc's storage location (main vs a `.drafts/<id>/` override),
- * not stored — callers pass it in on parse.
+ * CriticMarkup spans are a regenerated projection.
  */
 
 import {
@@ -18,7 +16,7 @@ import {
   type MarkerPlacement,
 } from "../rfm/index";
 import { threadOnDiskSchema } from "../persistence-schemas";
-import type { DocPath, DraftId, Thread, ThreadDraftBody } from "./index";
+import type { DocPath, Thread, ThreadDraftBody } from "./index";
 
 /**
  * Clean canonical prose. `stripReviewMarkup` returns a plain doc untouched but
@@ -29,37 +27,33 @@ export function cleanProse(rawMd: string): string {
   return stripReviewMarkup(rawMd);
 }
 
-export function parseReviewDoc(
-  rawMd: string,
-  draftId?: DraftId,
-): { prose: string; threads: Thread[] } {
+export function parseReviewDoc(rawMd: string): {
+  prose: string;
+  threads: Thread[];
+} {
   return {
     prose: stripReviewMarkup(rawMd),
-    threads: endmatterThreads(splitEndmatter(rawMd).endmatter, draftId),
+    threads: endmatterThreads(splitEndmatter(rawMd).endmatter),
   };
 }
 
-function endmatterThreads(
-  endmatter: Endmatter | null,
-  draftId?: DraftId,
-): Thread[] {
+function endmatterThreads(endmatter: Endmatter | null): Thread[] {
   if (!endmatter) return [];
   const out: Thread[] = [];
   for (const bucket of ["comments", "suggestions"] as const) {
     const map = endmatter[bucket];
     if (!map || typeof map !== "object" || Array.isArray(map)) continue;
     for (const [id, value] of Object.entries(map as Record<string, unknown>)) {
-      // Location (not any stored value) is authoritative for draft scoping, so
-      // drop a stored draft_id and re-derive it; letting Zod re-emit in schema
-      // order keeps the Thread JSON byte-identical to the pre-migration shape.
+      // Drop any stored `draft_id` from a legacy file; it's no longer part of
+      // the thread shape. Letting Zod re-emit in schema order keeps the Thread
+      // JSON byte-identical to the stored shape.
       let candidate: unknown = value;
       if (value && typeof value === "object" && !Array.isArray(value)) {
         const rest: Record<string, unknown> = {
           ...(value as Record<string, unknown>),
         };
         delete rest.draft_id;
-        candidate =
-          draftId !== undefined ? { ...rest, id, draft_id: draftId } : { ...rest, id };
+        candidate = { ...rest, id };
       }
       const parsed = threadOnDiskSchema.safeParse(candidate);
       if (!parsed.success) continue; // skip drifted/corrupt record
@@ -142,8 +136,8 @@ function encodeRelPos(from: number, to: number): string {
 }
 
 /**
- * `id` (the map key) and `draft_id` (location-derived) are omitted; `by`/`at`
- * mirror the root message for roughdraft interop and are ignored on read.
+ * `id` (the map key) is omitted; `by`/`at` mirror the root message for
+ * roughdraft interop and are ignored on read.
  *
  * When `placement` is set, it rewrites the `rel_pos` of the *one* target the
  * inline span was rendered from — the first home-path range target, matching

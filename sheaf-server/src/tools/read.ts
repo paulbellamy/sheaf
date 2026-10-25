@@ -2,22 +2,20 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { Backend } from "../backend/index";
-import { pathArg, refOptionalArg } from "../schemas";
+import { pathArg } from "../schemas";
 import { toToolError } from "../errors";
 
 /**
  * Read — mirrors Claude Code's Read for sheaf docs.
  *
- * `ref` selects main or a draft. Threads are not exposed through Read;
- * use ListThreads / ReadThread.
+ * Threads are not exposed through Read; use ListThreads / ReadThread.
  */
 export function registerRead(server: McpServer, backend: Backend): void {
   server.registerTool(
     "Read",
     {
       title: "Read",
-      description:
-        "Read a sheaf doc's markdown. Pass ref to read from a draft; omit for main.",
+      description: "Read a sheaf doc's markdown.",
       inputSchema: {
         file_path: pathArg,
         offset: z
@@ -32,22 +30,14 @@ export function registerRead(server: McpServer, backend: Backend): void {
           .min(1)
           .optional()
           .describe("Max lines to return."),
-        ref: refOptionalArg,
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ file_path, offset, limit, ref }) => {
+    async ({ file_path, offset, limit }) => {
       try {
-        const { md, version_token, version_counter, origin } =
-          await backend.readDoc(file_path, ref);
+        const { md } = await backend.readDoc(file_path);
         return {
-          content: [
-            { type: "text", text: sliceText(md, offset, limit) },
-            {
-              type: "text",
-              text: `\n--\nref: ${ref ?? "main"}  v: ${version_counter}  version_token: ${version_token}  origin: ${origin}`,
-            },
-          ],
+          content: [{ type: "text", text: sliceText(md, offset, limit) }],
         };
       } catch (e) {
         return toToolError(e);

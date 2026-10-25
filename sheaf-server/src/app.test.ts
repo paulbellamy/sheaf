@@ -11,9 +11,9 @@ import { StubBackend } from "./backend/stub";
 import { buildSheafApp } from "./app";
 
 /**
- * End-to-end smoke tests against a *real* listening socket — the path the
- * Obsidian plugin takes (`app.listen()`), which `inject()`-based tests don't
- * cover: the MCP node transport wired to `reply.raw`, and live SSE streaming.
+ * End-to-end smoke tests against a *real* listening socket — the path `sheaf
+ * serve` takes (`app.listen()`), which `inject()`-based tests don't cover: the
+ * MCP node transport wired to `reply.raw`, and live SSE streaming.
  */
 describe("buildSheafApp over a real socket", () => {
   let root: string;
@@ -75,12 +75,12 @@ describe("buildSheafApp over a real socket", () => {
   });
 
   it("ReadMe serves an immediate (non-debounced) event-watch command", async () => {
-    // Regression: the Monitor one-liner must stream each SSE event as it
-    // arrives. A `read -t N` quiet-window debounce (once shipped here) held a
-    // posted comment's `thread_changed` until the stream idled — and because
-    // the quiet timer reset on every event, a user who kept working starved
-    // delivery indefinitely, so the connected agent never woke. Guard against
-    // a reprise of that debounce in the served guide.
+    // Regression: the Monitor command must stream each event as it arrives. A
+    // `read -t N` quiet-window debounce (once shipped here) held a posted
+    // comment's `thread_changed` until the stream idled — and because the quiet
+    // timer reset on every event, a user who kept working starved delivery
+    // indefinitely, so the connected agent never woke. Guard against a reprise
+    // of that debounce in the served guide.
     const transport = new StreamableHTTPClientTransport(
       new URL(`${base}/api/mcp`),
     );
@@ -92,7 +92,10 @@ describe("buildSheafApp over a real socket", () => {
         arguments: {},
       })) as { content: { type: string; text: string }[] };
       const text = res.content.map((c) => c.text).join("\n");
-      // Streams each `data:` line the instant it arrives, then reconnects.
+      // Leads with the CLI tail, which emits one event per line and reconnects
+      // on its own (step 4 replaced the hard-coded-port curl one-liner).
+      expect(text).toContain("sheaf events follow --role agent");
+      // The curl fallback still streams each `data:` line the instant it lands.
       expect(text).toContain('sed -n -u "s/^data: //p"; sleep 1; done');
       // Must not reintroduce the starving quiet-window buffer.
       expect(text).not.toContain("read -r -t");
@@ -104,7 +107,7 @@ describe("buildSheafApp over a real socket", () => {
 
   it("streams SSE events with a primed connection frame", async () => {
     const ctrl = new AbortController();
-    const res = await fetch(`${base}/api/ui/drafts/stream?role=ui`, {
+    const res = await fetch(`${base}/api/ui/events?role=ui`, {
       headers: { accept: "text/event-stream" },
       signal: ctrl.signal,
     });
@@ -122,7 +125,7 @@ describe("buildSheafApp over a real socket", () => {
 
   it("resumes a reconnect from Last-Event-ID without a gap", async () => {
     // First connection: catch the id of a thread_changed frame.
-    const res1 = await fetch(`${base}/api/ui/drafts/stream?role=agent`, {
+    const res1 = await fetch(`${base}/api/ui/events?role=agent`, {
       headers: { accept: "text/event-stream" },
     });
     const reader1 = res1.body!.getReader();
@@ -154,7 +157,7 @@ describe("buildSheafApp over a real socket", () => {
     await post("second — missed");
 
     // Reconnect with Last-Event-ID: the missed event is replayed, no reset.
-    const res2 = await fetch(`${base}/api/ui/drafts/stream?role=agent`, {
+    const res2 = await fetch(`${base}/api/ui/events?role=agent`, {
       headers: {
         accept: "text/event-stream",
         "last-event-id": lastId!,
@@ -175,7 +178,7 @@ describe("buildSheafApp over a real socket", () => {
   it("sends stream_reset when the resume position can't be honored", async () => {
     // An id minted by "another instance" (unknown epoch) → explicit reset,
     // so a restart gap is never silent.
-    const res = await fetch(`${base}/api/ui/drafts/stream?role=agent`, {
+    const res = await fetch(`${base}/api/ui/events?role=agent`, {
       headers: {
         accept: "text/event-stream",
         "last-event-id": "deadbeef.42",
@@ -195,12 +198,12 @@ describe("buildSheafApp over a real socket", () => {
 
   it("close() ends live SSE streams instead of hanging on them", async () => {
     // Regression: hijacked SSE replies are invisible to Fastify's shutdown,
-    // so `close()` used to wait forever on a connected stream. The Obsidian
-    // host's stop→start restart then left the old app alive with the agent's
+    // so `close()` used to wait forever on a connected stream. A daemon
+    // stop→start restart then left the old app alive with the agent's
     // Monitor still subscribed to the *old* backend — kept open by the
     // keep-alive ping, never reconnecting, silently missing every event
     // emitted on the restarted instance (user replies included).
-    const res = await fetch(`${base}/api/ui/drafts/stream?role=agent`, {
+    const res = await fetch(`${base}/api/ui/events?role=agent`, {
       headers: { accept: "text/event-stream" },
     });
     expect(res.status).toBe(200);
@@ -234,7 +237,11 @@ describe("buildSheafApp request hardening", () => {
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-cors-"));
-    app = buildSheafApp(new StubBackend(root));
+    // There is no default allowlist anymore, so opt an origin in explicitly to
+    // exercise the reflection path (`sheaf serve --allow-origin` does the same).
+    app = buildSheafApp(new StubBackend(root), {
+      allowedOrigins: ["app://obsidian.md"],
+    });
     await app.ready();
   });
 
@@ -261,7 +268,7 @@ describe("buildSheafApp request hardening", () => {
     expect(res.statusCode).toBe(200);
   });
 
-  it("reflects an allowed Origin but omits CORS for others", async () => {
+  it("reflects an explicitly allowed Origin but omits CORS for others", async () => {
     const ok = await app.inject({
       method: "GET",
       url: "/api/ui/docs",
@@ -275,6 +282,75 @@ describe("buildSheafApp request hardening", () => {
       headers: { host: "localhost:31415", origin: "https://evil.example" },
     });
     expect(evil.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+
+  it("reflects no Origin by default (empty allowlist)", async () => {
+    // With no `allowedOrigins` option, nothing is trusted cross-origin — even
+    // the origin the reflection test opts in above gets no CORS header.
+    const noCors = buildSheafApp(new StubBackend(root));
+    await noCors.ready();
+    try {
+      const res = await noCors.inject({
+        method: "GET",
+        url: "/api/ui/docs",
+        headers: { host: "localhost:31415", origin: "app://obsidian.md" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.headers["access-control-allow-origin"]).toBeUndefined();
+    } finally {
+      await noCors.close();
+    }
+  });
+});
+
+describe("health + MCP method handling", () => {
+  let root: string;
+  let app: ReturnType<typeof buildSheafApp>;
+
+  beforeEach(async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-health-"));
+    app = buildSheafApp(new StubBackend(root), {
+      health: { vault: root, startedAt: 1234, version: "9.9.9" },
+    });
+    await app.ready();
+  });
+
+  afterEach(async () => {
+    await app.close();
+    await fs.rm(root, { recursive: true, force: true });
+  });
+
+  it("GET /api/health reports the daemon identity", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/health",
+      headers: { host: "127.0.0.1:31415" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as {
+      vault: string;
+      pid: number;
+      startedAt: number;
+      version: string;
+    };
+    expect(body.vault).toBe(root);
+    expect(body.pid).toBe(process.pid);
+    expect(body.startedAt).toBe(1234);
+    expect(body.version).toBe("9.9.9");
+  });
+
+  it("GET /api/mcp is 405 with an Allow header (POST/DELETE only)", async () => {
+    const res = await app.inject({
+      method: "GET",
+      url: "/api/mcp",
+      headers: { host: "127.0.0.1:31415" },
+    });
+    expect(res.statusCode).toBe(405);
+    expect(res.headers["allow"]).toContain("POST");
+    expect(res.json()).toEqual({
+      error: "method not allowed",
+      code: "method_not_allowed",
+    });
   });
 });
 
@@ -339,7 +415,7 @@ describe("MCP doc-scoping over HTTP", () => {
     try {
       const res = (await client.callTool({
         name: "ListThreads",
-        arguments: { ref: "main" },
+        arguments: {},
       })) as { structuredContent?: { threads: { id: string }[] } };
       return (res.structuredContent?.threads ?? []).map((t) => t.id).sort();
     } finally {

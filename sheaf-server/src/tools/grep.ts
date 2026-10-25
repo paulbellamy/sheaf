@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 import type { Backend } from "../backend/index";
-import { LIMITS, pathArg, refOptionalArg } from "../schemas";
+import { LIMITS, pathArg } from "../schemas";
 import { toToolError } from "../errors";
 
 /**
@@ -59,7 +59,6 @@ export function registerGrep(server: McpServer, backend: Backend): void {
           .describe("Alias for -A and -B."),
         multiline: z.boolean().optional(),
         head_limit: z.number().int().min(1).optional(),
-        ref: refOptionalArg,
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -76,7 +75,6 @@ export function registerGrep(server: McpServer, backend: Backend): void {
           after_context: args["-A"] ?? context,
           multiline: args.multiline,
           head_limit: args.head_limit,
-          ref: args.ref,
         });
         return {
           content: [{ type: "text", text: formatGrep(result, !!args["-n"]) }],

@@ -7,7 +7,6 @@ import {
   authorArg,
   messageArg,
   pathArg,
-  refOptionalArg,
   threadDraftOptionSchema,
   threadDraftSchema,
   threadIdArg,
@@ -56,18 +55,16 @@ export function registerThreadTools(
       inputSchema: {
         path: pathArg.optional(),
         thread_id: threadIdArg.optional(),
-        ref: refOptionalArg,
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ path: p, thread_id, ref }) => {
+    async ({ path: p, thread_id }) => {
       try {
         const threads = await backend.listThreads({
           // Scoped connections are clamped to their doc — a wider `path` from
           // the agent is ignored so the queue can't leak other docs' threads.
           path: docScope ?? p,
           thread_id,
-          ref,
         });
         const text = threads
           .map(
@@ -125,16 +122,14 @@ export function registerThreadTools(
         "Read the full content (messages, targets, anchors, attached drafts) of every thread on a doc in one call — the batch form of ReadThread. Prefer this over ListThreads followed by a ReadThread per id when you want a doc's whole queue.",
       inputSchema: {
         path: pathArg.optional(),
-        ref: refOptionalArg,
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ path: p, ref }) => {
+    async ({ path: p }) => {
       try {
         const threads = await backend.readThreads({
           // Scoped connections are clamped to their doc (see ListThreads).
           path: docScope ?? p,
-          ref,
         });
         return {
           content: [
@@ -168,11 +163,10 @@ export function registerThreadTools(
         message: messageArg.describe("First message in the thread."),
         author: authorArg,
         draft: threadDraftSchema.optional(),
-        ref: refOptionalArg,
       },
       annotations: { readOnlyHint: false, openWorldHint: false },
     },
-    async ({ targets, message, author, draft, ref }) => {
+    async ({ targets, message, author, draft }) => {
       try {
         if (docScope) {
           const outside = [
@@ -189,7 +183,6 @@ export function registerThreadTools(
           message,
           author,
           draft,
-          ref,
           origin: "agent",
         });
         return {
@@ -239,7 +232,7 @@ export function registerThreadTools(
     {
       title: "AttachDraftPayload",
       description:
-        "Attach one or more proposed leaves (α-style payload) to an existing thread. Pass `draft` for a single leaf, `draft_options` for two or more. The thread message becomes a redline (single) or a leaf selector (multi).",
+        "Attach one or more proposed options to an existing thread. Pass `draft` for a single leaf, `draft_options` for two or more. The thread message becomes a redline (single) or a leaf selector (multi).",
       inputSchema: {
         thread_id: threadIdArg,
         message: messageArg.optional(),

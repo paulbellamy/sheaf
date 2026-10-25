@@ -1,0 +1,5 @@
+node_modules/
+
+# esbuild bundle — built from src/, not committed (mirrors obsidian-plugin/main.js).
+bin/sheaf.js
+bin/sheaf.js.map

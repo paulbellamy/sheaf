@@ -20,28 +20,6 @@ import { z } from "zod";
  *  legitimate content (clipping would drop the whole record on the next write). */
 const MAX_FIELD_CHARS = 16 * 1024 * 1024;
 
-export const draftMetaSchema = z.object({
-  draft_id: z.string().regex(/^draft_[A-Za-z0-9]{6,64}(?:-[A-Za-z0-9]{1,64}){0,8}$/),
-  base_path: z.string().min(1).max(512),
-  intent: z.string().max(2048).optional(),
-  author: z.string().max(64),
-  state: z.enum(["open", "submitted", "accepted", "declined"]),
-  created_at: z.number().int(),
-  submitted_at: z.number().int().optional(),
-  name: z.string().max(256).optional(),
-  display_name: z.string().max(264).optional(),
-  touches: z.array(z.string().min(1).max(512)).max(64).optional(),
-  base_version: z.number().int().nonnegative().optional(),
-  parent_draft_id: z
-    .string()
-    .regex(/^draft_[A-Za-z0-9]{6,64}(?:-[A-Za-z0-9]{1,64}){0,8}$/)
-    .optional(),
-  // seed_prompt / note kept for backward compatibility with on-disk files
-  // written before the intent rename.
-  seed_prompt: z.string().max(2048).optional(),
-  note: z.string().max(2048).optional(),
-});
-
 /**
  * Stored thread target. Discriminated by `scope`:
  *   - `range` carries an anchor (rel_pos + anchored_text).
@@ -117,7 +95,6 @@ export const threadOnDiskSchema = z.preprocess(
     id: z.string().regex(/^thrd_[A-Za-z0-9]{6,64}(?:-[A-Za-z0-9]{1,64}){0,8}$/),
     created: z.number().int(),
     status: z.enum(["open", "accepted", "declined", "archived"]),
-    draft_id: z.string().optional(),
     targets: z.array(threadAnchorSchema).min(1).max(64),
     // A long-lived thread accretes replies; the file cap is the real bound, so
     // keep this generous rather than dropping a busy thread wholesale.
@@ -125,13 +102,47 @@ export const threadOnDiskSchema = z.preprocess(
   }),
 );
 
+/** One op-log entry: when the write carrying that `op_id` was applied (unix ms). */
+export type OpLogEntry = { applied_at: number };
+
+const opLogEntrySchema = z.object({ applied_at: z.number() });
+
 /**
- * Op log is a map of op_id to WriteResult. Shape is open-ended (backend may
- * evolve WriteResult), so we only assert the outer container.
+ * Parse a JSON-decoded `.op_log.json`: the set of write `op_id`s already
+ * applied, as `op_id → { applied_at }`. Returns `null` when the top level isn't
+ * a plain object (a corrupt log).
+ *
+ * Only key presence is load-bearing — a present key means "applied; a repeat
+ * is a no-op" — so the parse is lenient per entry rather than all-or-nothing
+ * (failing the whole log would forget every applied op and let each retry
+ * re-apply its write):
+ * - A value in any shape but `{ applied_at: number }` (e.g. the earlier
+ *   `{ version_token }` record) still counts as applied, normalized to
+ *   `applied_at: 0` ("unknown").
+ * - An invalid key (empty — no write records one) is skipped and counted in
+ *   `skipped`, not fatal. Length isn't capped here; the tool input schema
+ *   already bounds `op_id`.
+ *
+ * Keys are walked by hand, not through `z.record`: zod's record parse drops a
+ * `__proto__` key, which would forget an applied `__proto__` op on reload.
+ * `JSON.parse` makes `__proto__` an own property and `Object.entries` returns
+ * it, so every key survives.
  */
-export const opLogSchema = z.record(
-  z.string().max(128),
-  z.object({
-    version_token: z.string().max(128),
-  }),
-);
+export function parseOpLog(
+  json: unknown,
+): { entries: Map<string, OpLogEntry>; skipped: number } | null {
+  if (typeof json !== "object" || json === null || Array.isArray(json)) {
+    return null;
+  }
+  const entries = new Map<string, OpLogEntry>();
+  let skipped = 0;
+  for (const [key, value] of Object.entries(json)) {
+    if (key === "") {
+      skipped += 1;
+      continue;
+    }
+    const entry = opLogEntrySchema.safeParse(value);
+    entries.set(key, entry.success ? entry.data : { applied_at: 0 });
+  }
+  return { entries, skipped };
+}

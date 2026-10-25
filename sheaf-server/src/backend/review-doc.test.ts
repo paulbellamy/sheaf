@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { composeDoc } from "../rfm/index";
 import { parseReviewDoc, serializeReviewDoc } from "./review-doc";
 import type { Thread } from "./index";
 
@@ -122,5 +123,110 @@ describe("serializeReviewDoc anchor rebasing", () => {
     if (t0.scope !== "range" || t1.scope !== "range") throw new Error("shape");
     expect(decodeRelPos(t0.anchor.rel_pos)).toEqual({ from: 5, to: 8 }); // foo, rebased (no drift)
     expect(decodeRelPos(t1.anchor.rel_pos)).toEqual({ from: 13, to: 16 }); // bar, untouched
+  });
+});
+
+describe("legacy on-disk read (phase-2 draft/ref excision)", () => {
+  // Existing vaults were written with the old thread format: a `draft_id` on
+  // the record and, in the oldest files, scope-less targets. The back-compat
+  // guard in `endmatterThreads` (strip `draft_id`) + the `threadOnDiskSchema`
+  // scope migration are the ONLY thing protecting those files, so pin them.
+  //
+  // The fixture is composed with the RFM codec (so it's a real on-disk shape),
+  // mirroring the three legacy record shapes a reviewer probed.
+  const legacyEndmatter = {
+    comments: {
+      // (a) string draft_id + OLD-format target: no `scope`, just an anchor.
+      thrd_legacy1: {
+        draft_id: "draft_0123abcd",
+        by: "user",
+        at: "2020-01-01T00:00:00.000Z",
+        status: "open",
+        created: 1,
+        targets: [
+          {
+            path: "d.md",
+            anchor: {
+              rel_pos: encodeRelPos(0, 3),
+              content_hash: "h",
+              anchored_text: "the",
+              context_before: "",
+              context_after: "",
+            },
+          },
+        ],
+        messages: [{ author: "user", ts: 1, body: "legacy range" }],
+      },
+      // (b) object-valued draft_id + a scope-less doc target (no anchor).
+      thrd_legacy2: {
+        draft_id: { nested: "object", from_a_buggy_writer: true },
+        status: "open",
+        created: 2,
+        targets: [{ path: "d.md" }],
+        messages: [{ author: "user", ts: 2, body: "legacy doc" }],
+      },
+    },
+    suggestions: {
+      // (c) draft_id + a message carrying draft_options.
+      thrd_legacy3: {
+        draft_id: "draft_beef9999",
+        status: "open",
+        created: 3,
+        targets: [{ path: "d.md", scope: "doc" }],
+        messages: [
+          {
+            author: "agent",
+            ts: 3,
+            body: "two takes",
+            draft_options: [
+              { name: "a", new_md: "Alpha" },
+              { name: "b", new_md: "Bravo" },
+            ],
+          },
+        ],
+      },
+    },
+  };
+
+  it("parses all legacy records, drops draft_id, migrates scopes", () => {
+    const raw = composeDoc("the body text\n", legacyEndmatter);
+    const { threads } = parseReviewDoc(raw);
+
+    // All three legacy threads survive the read.
+    expect(threads.map((t) => t.id).sort()).toEqual([
+      "thrd_legacy1",
+      "thrd_legacy2",
+      "thrd_legacy3",
+    ]);
+
+    // None carries a `draft_id` key any more (stripped on read).
+    for (const t of threads) {
+      expect("draft_id" in t).toBe(false);
+      expect((t as { draft_id?: unknown }).draft_id).toBeUndefined();
+    }
+
+    const byId = (id: string) => threads.find((t) => t.id === id)!;
+    // (a) scope-less + anchor migrated to range.
+    expect(byId("thrd_legacy1").targets[0].scope).toBe("range");
+    // (b) scope-less + no anchor migrated to doc.
+    expect(byId("thrd_legacy2").targets[0].scope).toBe("doc");
+    // (c) explicit doc scope preserved; draft_options round-trip.
+    expect(byId("thrd_legacy3").targets[0].scope).toBe("doc");
+    expect(
+      byId("thrd_legacy3").messages[0].draft_options?.map((o) => o.name),
+    ).toEqual(["a", "b"]);
+  });
+
+  it("re-serializes the migrated threads with no draft_id on disk", () => {
+    const raw = composeDoc("the body text\n", legacyEndmatter);
+    const { prose, threads } = parseReviewDoc(raw);
+    const reserialized = serializeReviewDoc(prose, threads, "d.md");
+    expect(reserialized).not.toContain("draft_id");
+    // Still parses back to the same three threads (round-trip stable).
+    expect(parseReviewDoc(reserialized).threads.map((t) => t.id).sort()).toEqual([
+      "thrd_legacy1",
+      "thrd_legacy2",
+      "thrd_legacy3",
+    ]);
   });
 });

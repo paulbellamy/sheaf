@@ -17,7 +17,7 @@ describe("inline RFM thread storage", () => {
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "sheaf-rfm-"));
     backend = new StubBackend(root);
-    await backend.writeDoc("doc.md", "main", "The quick brown fox.\n");
+    await backend.writeDoc("doc.md", "The quick brown fox.\n");
   });
 
   afterEach(async () => {
@@ -28,7 +28,6 @@ describe("inline RFM thread storage", () => {
 
   it("stores an anchored comment inline and reads back clean prose", async () => {
     const id = await backend.addThread({
-      ref: "main",
       author: "user",
       message: "needs a citation",
       targets: [{ path: "doc.md", scope: "range", char_range: { from: 4, to: 9 } }],
@@ -40,9 +39,7 @@ describe("inline RFM thread storage", () => {
     expect(onDisk).toContain("\n---\ncomments:");
 
     // No prose drift: the canonical text is exactly what was written.
-    expect((await backend.readDoc("doc.md", "main")).md).toBe(
-      "The quick brown fox.\n",
-    );
+    expect((await backend.readDoc("doc.md")).md).toBe("The quick brown fox.\n");
 
     const thread = await backend.readThread(id);
     expect(thread.status).toBe("open");
@@ -55,7 +52,6 @@ describe("inline RFM thread storage", () => {
 
   it("renders a single-draft thread as an inline substitution", async () => {
     await backend.addThread({
-      ref: "main",
       author: "user",
       message: "tighten",
       draft: { new_md: "swift" },
@@ -66,32 +62,26 @@ describe("inline RFM thread storage", () => {
     expect(onDisk).toContain("{~~quick~>swift~~}");
     expect(onDisk).toContain("\n---\nsuggestions:");
     // The as-is projection keeps the old word — the change isn't applied yet.
-    expect((await backend.readDoc("doc.md", "main")).md).toBe(
-      "The quick brown fox.\n",
-    );
+    expect((await backend.readDoc("doc.md")).md).toBe("The quick brown fox.\n");
   });
 
   it("preserves a thread across a prose edit and relocates its anchor", async () => {
     const id = await backend.addThread({
-      ref: "main",
       author: "user",
       message: "note",
       targets: [{ path: "doc.md", scope: "range", char_range: { from: 4, to: 9 } }],
     });
 
-    await backend.editDoc("doc.md", "main", "brown", "red", false);
+    await backend.editDoc("doc.md", "brown", "red", false);
 
-    expect((await backend.readDoc("doc.md", "main")).md).toBe(
-      "The quick red fox.\n",
-    );
-    const threads = await backend.listThreads({ path: "doc.md", ref: "main" });
+    expect((await backend.readDoc("doc.md")).md).toBe("The quick red fox.\n");
+    const threads = await backend.listThreads({ path: "doc.md" });
     expect(threads.map((t) => t.id)).toEqual([id]);
     expect(await raw()).toContain("{==quick==}");
   });
 
   it("appends replies into the endmatter", async () => {
     const id = await backend.addThread({
-      ref: "main",
       author: "user",
       message: "first",
       targets: [{ path: "doc.md", scope: "doc" }],
@@ -105,7 +95,6 @@ describe("inline RFM thread storage", () => {
 
   it("round-trips draft_options and resolved status", async () => {
     const id = await backend.addThread({
-      ref: "main",
       author: "user",
       message: "options?",
       targets: [{ path: "doc.md", scope: "doc" }],
@@ -129,7 +118,6 @@ describe("inline RFM thread storage", () => {
 
   it("keeps review markup out of grep results", async () => {
     await backend.addThread({
-      ref: "main",
       author: "user",
       message: "ZZSECRETZZ marker only in the comment",
       targets: [{ path: "doc.md", scope: "range", char_range: { from: 4, to: 9 } }],
@@ -152,10 +140,9 @@ describe("inline RFM thread storage", () => {
 
   it("does not leak markup when a thread anchors inside a code fence", async () => {
     const doc = "Example:\n```\nconst x = 1;\n```\nDone.\n";
-    await backend.writeDoc("code.md", "main", doc);
+    await backend.writeDoc("code.md", doc);
     const from = doc.indexOf("const x = 1;");
     const id = await backend.addThread({
-      ref: "main",
       author: "user",
       message: "explain this",
       targets: [
@@ -164,30 +151,29 @@ describe("inline RFM thread storage", () => {
     });
     // The inline marker is skipped inside the fence (strip honors fences), so
     // the clean prose is unchanged; the thread lives in the endmatter.
-    expect((await backend.readDoc("code.md", "main")).md).toBe(doc);
+    expect((await backend.readDoc("code.md")).md).toBe(doc);
     expect(
-      (await backend.listThreads({ path: "code.md", ref: "main" })).map((t) => t.id),
+      (await backend.listThreads({ path: "code.md" })).map((t) => t.id),
     ).toContain(id);
   });
 
   it("preserves literal CriticMarkup in a doc that has no threads", async () => {
     const lit = "Use {==this==} and {~~a~>b~~} literally.\n";
-    await backend.writeDoc("lit.md", "main", lit);
-    expect((await backend.readDoc("lit.md", "main")).md).toBe(lit);
-    await backend.editDoc("lit.md", "main", "literally", "verbatim", false);
-    expect((await backend.readDoc("lit.md", "main")).md).toBe(
+    await backend.writeDoc("lit.md", lit);
+    expect((await backend.readDoc("lit.md")).md).toBe(lit);
+    await backend.editDoc("lit.md", "literally", "verbatim", false);
+    expect((await backend.readDoc("lit.md")).md).toBe(
       "Use {==this==} and {~~a~>b~~} verbatim.\n",
     );
   });
 
   it("preserves hand-typed CriticMarkup even after a thread is added", async () => {
     const doc = "The {==highlight==} syntax marks a span here.\n";
-    await backend.writeDoc("about.md", "main", doc);
+    await backend.writeDoc("about.md", doc);
     // No endmatter yet, so the literal markup reads back verbatim.
-    expect((await backend.readDoc("about.md", "main")).md).toBe(doc);
+    expect((await backend.readDoc("about.md")).md).toBe(doc);
     const from = doc.indexOf("span");
     await backend.addThread({
-      ref: "main",
       author: "user",
       message: "explain",
       targets: [
@@ -196,74 +182,31 @@ describe("inline RFM thread storage", () => {
     });
     // The thread renders an id-terminated marker on "span"; the hand-typed
     // {==highlight==} has no id, so it survives the clean read intact.
-    expect((await backend.readDoc("about.md", "main")).md).toBe(doc);
+    expect((await backend.readDoc("about.md")).md).toBe(doc);
   });
 
-  it("keeps draft_id in canonical JSON key order", async () => {
-    const mainId = await backend.addThread({
-      ref: "main",
+  it("stores a thread with no draft_id field (canonical JSON key order)", async () => {
+    const id = await backend.addThread({
       author: "user",
       message: "on main",
       targets: [{ path: "doc.md", scope: "doc" }],
     });
-    expect(Object.keys(await backend.readThread(mainId))).toEqual([
+    // The on-disk thread format no longer carries draft_id.
+    expect(Object.keys(await backend.readThread(id))).toEqual([
       "id",
       "created",
       "status",
       "targets",
       "messages",
     ]);
-
-    const [draftId] = await backend.fork("doc.md", 1);
-    const draftThreadId = await backend.addThread({
-      ref: draftId,
-      author: "user",
-      message: "on draft",
-      targets: [{ path: "doc.md", scope: "doc" }],
-    });
-    const draftThread = await backend.readThread(draftThreadId);
-    expect(Object.keys(draftThread)).toEqual([
-      "id",
-      "created",
-      "status",
-      "draft_id",
-      "targets",
-      "messages",
-    ]);
-    expect(draftThread.draft_id).toBe(draftId);
-  });
-
-  it("lands a draft's clean prose on main without its review markup", async () => {
-    const [draftId] = await backend.fork("doc.md", 1);
-    await backend.writeDoc("doc.md", draftId, "The swift brown fox.\n");
-    const threadId = await backend.addThread({
-      ref: draftId,
-      author: "user",
-      message: "on the draft",
-      targets: [{ path: "doc.md", scope: "doc" }],
-    });
-    await backend.resolveThread(threadId); // clear the accept gate
-    await backend.propose(draftId);
-    await backend.merge(draftId);
-
-    expect((await backend.readDoc("doc.md", "main")).md).toBe(
-      "The swift brown fox.\n",
-    );
-    const mainRaw = await raw();
-    expect(mainRaw).not.toContain(threadId);
-    expect(mainRaw).not.toContain("---\ncomments:");
-    expect(mainRaw).not.toContain("---\nsuggestions:");
-    // The draft still owns its thread.
-    expect(
-      (await backend.listThreads({ ref: draftId })).map((t) => t.id),
-    ).toContain(threadId);
+    const onDisk = await raw();
+    expect(onDisk).not.toContain("draft_id");
   });
 
   it("round-trips a comment on a selection larger than the old 10k cap (F4)", async () => {
     const big = "x".repeat(12_000);
-    await backend.writeDoc("big.md", "main", big + "\nEND\n");
+    await backend.writeDoc("big.md", big + "\nEND\n");
     const id = await backend.addThread({
-      ref: "main",
       author: "user",
       message: "huge selection",
       targets: [
@@ -280,24 +223,9 @@ describe("inline RFM thread storage", () => {
     }
 
     // An unrelated later edit must not erase the drifted-cap thread.
-    await backend.editDoc("big.md", "main", "END", "DONE", false);
+    await backend.editDoc("big.md", "END", "DONE", false);
     expect(
-      (await backend.listThreads({ path: "big.md", ref: "main" })).map((t) => t.id),
+      (await backend.listThreads({ path: "big.md" })).map((t) => t.id),
     ).toEqual([id]);
-  });
-
-  it("aborts a merge instead of blanking main when a draft override is unreadable (F20)", async () => {
-    const [draftId] = await backend.fork("doc.md", 1);
-    // An override larger than the read cap (16MB): merge must abort, never land
-    // empty prose on main.
-    const huge = "a".repeat(17 * 1024 * 1024);
-    await backend.writeDoc("doc.md", draftId, huge);
-    await backend.propose(draftId);
-
-    await expect(backend.merge(draftId)).rejects.toThrow();
-
-    expect((await backend.readDoc("doc.md", "main")).md).toBe(
-      "The quick brown fox.\n",
-    );
   });
 });

@@ -112,7 +112,7 @@ describe("thread tools doc-scoping", () => {
   it("unscoped ListThreads sees every doc's threads (back-compat)", async () => {
     const { idA, idB } = await seed();
     const c = await connect();
-    const ids = listedIds(await call(c, "ListThreads", { ref: "main" }));
+    const ids = listedIds(await call(c, "ListThreads", {}));
     expect(ids).toEqual(expect.arrayContaining([idA, idB]));
   });
 
@@ -120,12 +120,12 @@ describe("thread tools doc-scoping", () => {
     const { idA, idB } = await seed();
     const c = await connect(A);
 
-    const noPath = listedIds(await call(c, "ListThreads", { ref: "main" }));
+    const noPath = listedIds(await call(c, "ListThreads", {}));
     expect(noPath).toEqual([idA]);
 
     // A wider/foreign path is ignored, not honored.
     const widerPath = listedIds(
-      await call(c, "ListThreads", { path: B, ref: "main" }),
+      await call(c, "ListThreads", { path: B }),
     );
     expect(widerPath).toEqual([idA]);
     expect(noPath).not.toContain(idB);
@@ -146,7 +146,7 @@ describe("thread tools doc-scoping", () => {
   it("ReadThreads returns full detail for every thread on a doc in one call", async () => {
     const { idA } = await seed();
     const c = await connect();
-    const res = await call(c, "ReadThreads", { path: A, ref: "main" });
+    const res = await call(c, "ReadThreads", { path: A });
     const threads = (
       res.structuredContent as {
         threads: Array<{
@@ -165,12 +165,12 @@ describe("thread tools doc-scoping", () => {
   it("scoped ReadThreads returns only its doc — even when asked for another", async () => {
     const { idA, idB } = await seed();
     const c = await connect(A);
-    expect(listedIds(await call(c, "ReadThreads", { ref: "main" }))).toEqual([
+    expect(listedIds(await call(c, "ReadThreads", {}))).toEqual([
       idA,
     ]);
     // A foreign path is ignored, not honored.
     expect(
-      listedIds(await call(c, "ReadThreads", { path: B, ref: "main" })),
+      listedIds(await call(c, "ReadThreads", { path: B })),
     ).toEqual([idA]);
   });
 
@@ -219,7 +219,7 @@ describe("thread tools doc-scoping", () => {
     const idAB = threadId(await addThreadOn(u, [A, B]));
 
     const sa = await connect(A);
-    expect(listedIds(await call(sa, "ListThreads", { ref: "main" }))).toContain(idAB);
+    expect(listedIds(await call(sa, "ListThreads", {}))).toContain(idAB);
     expect((await call(sa, "ReadThread", { thread_id: idAB })).isError).toBeFalsy();
     expect(
       (await call(sa, "ReplyThread", { thread_id: idAB, message: "ok" })).isError,
@@ -227,7 +227,7 @@ describe("thread tools doc-scoping", () => {
 
     // Visible under the OTHER target's scope too, and resolvable there.
     const sb = await connect(B);
-    expect(listedIds(await call(sb, "ListThreads", { ref: "main" }))).toContain(idAB);
+    expect(listedIds(await call(sb, "ListThreads", {}))).toContain(idAB);
     expect((await call(sb, "ResolveThread", { thread_id: idAB })).isError).toBeFalsy();
   });
 
